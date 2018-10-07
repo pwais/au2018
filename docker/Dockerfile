@@ -8,6 +8,8 @@ RUN \
   ldconfig && \
   python -c 'from tensorflow.python.client import device_lib; device_lib.list_local_devices()' 
 
+COPY docker/sources.list /etc/apt/sources.list
+
 ## Dev tools
 RUN \
   apt-get update && \
