@@ -44,7 +44,7 @@ class DockerEnv(object):
   def shell(cls):
     CMD = """
       docker run
-        --name au1
+        --name au2
         -d -it -P
         --net=host
         -v `pwd`:/opt/au
@@ -56,8 +56,8 @@ class DockerEnv(object):
     run_cmd(CMD)
     
     # https://github.com/moby/moby/issues/33794#issuecomment-323003975
-    EXEC_CMD = 'docker exec -t au1 /bin/bash -c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
-    os.execvp("docker", EXEC_CMD.split(" "))
+    EXEC_CMD = 'docker exec -it au2 bash'#-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
+    os.execvp("docker", EXEC_CMD.split(' '))
 
 ## Services
 
