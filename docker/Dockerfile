@@ -13,6 +13,7 @@ RUN \
   apt-get update && \
   apt-get install -y \
     curl \
+    git \
     screen \
     sudo \
     vim \
@@ -42,3 +43,14 @@ RUN \
   rm /tmp/alluxio-1.8.1-hadoop-2.9-bin.tar.gz
 
 COPY docker/alluxio-site.properties /opt/alluxio/conf/alluxio-site.properties
+
+## TF Models
+ENV PYTHONPATH $PYTHONPATH:/opt/au/external/tensorflow_models/research:/opt/au/external/tensorflow_models/research/slim
+RUN \
+  apt-get install -y protobuf-compiler python-pil python-lxml python-tk && \
+  pip install Cython contextlib2 matplotlib && \
+  cd /tmp && \
+  git clone https://github.com/cocodataset/cocoapi.git && \
+  cd cocoapi/PythonAPI && \
+  python setup.py install
+  

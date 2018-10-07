@@ -59,9 +59,33 @@ class DockerEnv(object):
     EXEC_CMD = 'docker exec -it au2 bash'#-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
     os.execvp("docker", EXEC_CMD.split(' '))
 
+
+## External Projects
+
+def setup_tf_models():
+  # Do https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/installation.md#manual-protobuf-compiler-installation-and-usage
+  CMD = """
+    ls -lhat /opt/au/external/tensorflow_models/research/object_detection/protos/train_pb2.py ||
+      ( mkdir -p /opt/protobuf3 ;
+        cd /opt/protobuf3 &&
+        wget -O protobuf.zip https://github.com/google/protobuf/releases/download/v3.0.0/protoc-3.0.0-linux-x86_64.zip &&
+        unzip protobuf.zip &&
+        cd - &&
+        cd /opt/au/external/tensorflow_models/research &&
+        /opt/protobuf3/bin/protoc object_detection/protos/*.proto --python_out=. &&
+        python object_detection/builders/model_builder_test.py )
+  """
+
 ## Services
 
 def alluxio_start_master():
+  RAM_CMD = """
+    mkdir /mnt/ramdisk &&
+    mount -t ramfs -o size=1G ramfs /mnt/ramdisk &&
+    chmod a+w /mnt/ramdisk
+  """
+  run_cmd(RAM_CMD)
+  
   log.info("ALLUXIO_MASTER_HOSTNAME: %s" % os.environ.get('ALLUXIO_MASTER_HOSTNAME'))
   
   MASTER_CMD = '/opt/alluxio/integration/docker/bin/alluxio-master.sh >> /var/log/alluxio-master &'
@@ -80,12 +104,12 @@ def alluxio_start_master():
   run_cmd(MOUNT_CMD)
 
 def alluxio_start_worker():
-  CMD = """
+  RAM_CMD = """
     mkdir /mnt/ramdisk &&
     mount -t ramfs -o size=1G ramfs /mnt/ramdisk &&
     chmod a+w /mnt/ramdisk
   """
-  run_cmd(CMD)
+  run_cmd(RAM_CMD)
   
   CMD = '/opt/alluxio/integration/docker/bin/alluxio-worker.sh >> /var/log/alluxio-worker &'
   run_cmd(CMD)
@@ -102,6 +126,9 @@ def create_arg_parser():
   parser.add_argument(
     '--build-env', default=False, action='store_true',
     help='Build the dockerized dev env image %s' % DOCKER_IMAGE)
+  parser.add_argument(
+    '--alluxio-master', default=False, action='store_true',
+    help='Start Alluxio master node')
   
   return parser
 
