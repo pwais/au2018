@@ -1,3 +1,9 @@
 [submodule "external/tensorflow_models"]
 	path = external/tensorflow_models
 	url = https://github.com/tensorflow/models
+[submodule "external/kubespray"]
+	path = external/kubespray
+	url = https://github.com/kubernetes-incubator/kubespray
+[submodule "external/tf_cnnvis"]
+	path = external/tf_cnnvis
+	url = https://github.com/pwais/tf_cnnvis

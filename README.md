@@ -5,12 +5,27 @@ training data and accuracy for convolutional neural networks.
 
 Named after Aurie Ginsberg
 
+
+
+build a bridge.
+ * try to repro the GAN paper thing wher we can sample from mnist layer and
+    generate grad image via guided backprop
+ * 
+
+
 ```
 curl https://sdk.cloud.google.com | bash
 ```
 
 ```
+gcloud auth login
+gcloud config set project avian-augury-217704
+gcloud components install docker-credential-gcr
 gcloud auth configure-docker
+
+--OR--
+gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://gcr.io
+
 ```
 
 
@@ -18,6 +33,35 @@ gcloud auth configure-docker
 nvidia-docker run -d -it --name au1 -v `pwd`:/opt/au -v /:/outer_root --net=host -P --privileged tensorflow/tensorflow:1.10.1-gpu sleep infinity
 docker exec -it -w /opt/au -e COLUMNS="`tput cols`" -e LINES="`tput lines`" au1 bash
 ```
+
+
+
+```
+gcloud ubuntu-minimal-1604-xenial-v20180814
+cd external/kubespray
+ansible-playbook -v --become -i kubespray/inventory/default/hosts.ini external/kubespray/cluster.yml
+
+
+```
+
+
+
+
+ * mnist, cifar 10?  bdd100k some vids, mscoco
+ 
+ * mnist simple net
+ * alexnet cifar 10
+ * inception / maskrcnn on bdd100k, mscoco
+ 
+ 
+ * write a tool to record activations.  take an activation and deconv to input image.
+    what happens when we perturb activations a bit?
+ 
+ * write a spark tool to take a model and collect all activations at scale
+ * 
+
+
+
 
 # TODO
  * docker image to serve as dev env.  try to set up GCR?

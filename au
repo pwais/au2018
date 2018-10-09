@@ -51,7 +51,7 @@ class DockerEnv(object):
         -v /:/outer_root
         -w /opt/au
         --env my.env
-        --privileged %s sleep infinity || true
+        --privileged %s sleep infinity || docker start au2 || true
     """ % DOCKER_IMAGE
     run_cmd(CMD)
     
@@ -64,7 +64,7 @@ class DockerEnv(object):
 
 def setup_tf_models():
   # Do https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/installation.md#manual-protobuf-compiler-installation-and-usage
-  CMD = """
+  run_cmd("""
     ls -lhat /opt/au/external/tensorflow_models/research/object_detection/protos/train_pb2.py ||
       ( mkdir -p /opt/protobuf3 ;
         cd /opt/protobuf3 &&
@@ -74,17 +74,21 @@ def setup_tf_models():
         cd /opt/au/external/tensorflow_models/research &&
         /opt/protobuf3/bin/protoc object_detection/protos/*.proto --python_out=. &&
         python object_detection/builders/model_builder_test.py )
-  """
+    """)
+  
+  run_cmd("""
+    ls -lhat /tmp/raw-data &&
+    bash object_detection/dataset_tools/download_and_preprocess_mscoco.sh /tmp
+  """)
 
 ## Services
 
 def alluxio_start_master():
-  RAM_CMD = """
+  run_cmd("""
     mkdir /mnt/ramdisk &&
     mount -t ramfs -o size=1G ramfs /mnt/ramdisk &&
     chmod a+w /mnt/ramdisk
-  """
-  run_cmd(RAM_CMD)
+  """)
   
   log.info("ALLUXIO_MASTER_HOSTNAME: %s" % os.environ.get('ALLUXIO_MASTER_HOSTNAME'))
   
@@ -94,25 +98,27 @@ def alluxio_start_master():
   GCS_ACCESS_KEY_ID = os.environ.get('GCS_ACCESS_KEY_ID')
   GCS_SECRET_ACCESS_KEY = os.environ.get('GCS_SECRET_ACCESS_KEY')
   assert GCS_ACCESS_KEY_ID
-  MOUNT_CMD = """
+  run_cmd("""
     /opt/alluxio/bin/alluxio fs mount
       --option fs.gcs.accessKeyId=%s
       --option fs.gcs.secretAccessKey=%s
       /gcs
       gs://au2018gs/au2018
-  """ % (GCS_ACCESS_KEY_ID, GCS_SECRET_ACCESS_KEY)
-  run_cmd(MOUNT_CMD)
+  """ % (GCS_ACCESS_KEY_ID, GCS_SECRET_ACCESS_KEY))
 
 def alluxio_start_worker():
-  RAM_CMD = """
+  run_cmd("""
     mkdir /mnt/ramdisk &&
     mount -t ramfs -o size=1G ramfs /mnt/ramdisk &&
     chmod a+w /mnt/ramdisk
-  """
-  run_cmd(RAM_CMD)
+  """)
   
-  CMD = '/opt/alluxio/integration/docker/bin/alluxio-worker.sh >> /var/log/alluxio-worker &'
-  run_cmd(CMD)
+  run_cmd("""
+    mkdir -p /opt/alluxio-fuse &&
+    /opt/alluxio/integration/fuse/bin/alluxio-fuse mount /opt/alluxio-fuse
+  """)
+  
+  run_cmd('/opt/alluxio/integration/docker/bin/alluxio-worker.sh >> /var/log/alluxio-worker &')
 
 ## CLI
 
