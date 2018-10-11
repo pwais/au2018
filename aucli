@@ -81,7 +81,30 @@ def setup_tf_models():
     bash object_detection/dataset_tools/download_and_preprocess_mscoco.sh /tmp
   """)
 
+
+
 ## Services
+
+def test_spark():
+  import findspark
+  findspark.init()
+  import pyspark
+  import random
+  conf = pyspark.SparkConf()
+  conf.setAppName('pi_test')
+  conf.setMaster('local[4]')
+  conf.set('spark.driver.bindAddress', '127.0.0.1')
+  sc = pyspark.SparkContext(conf=conf)
+  num_samples = 1000000
+  def inside(p):     
+    x, y = random.random(), random.random()
+    return x*x + y*y < 1
+  count = sc.parallelize(range(0, num_samples)).filter(inside).count()
+  sc.stop()
+  pi = 4 * float(count) / num_samples
+  print("Pi estimate: %s" % pi)
+  assert abs(pi - 3.14) < 0.1
+  
 
 def alluxio_start_master():
   run_cmd("""

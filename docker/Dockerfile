@@ -37,16 +37,54 @@ RUN \
 COPY docker/.vimrc /root/.vimrc
 COPY docker/.screenrc /root/.screenrc
 
-
+## Bazel
+RUN \
+  apt-get install -y bash-completion && \
+  wget https://github.com/bazelbuild/bazel/releases/download/0.16.1/bazel_0.16.1-linux-x86_64.deb && \
+  dpkg -i bazel_0.16.1-linux-x86_64.deb 
+  
 
 # Python
 #RUN pip install
 
 
+export HADOOP_VERSION=2.9.1
+export HADOOP_HOME=/opt/hadoop
+export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+export PATH=$PATH:$HADOOP_HOME/bin
+export LD_LIBRARY_PATH="$HADOOP_HOME/lib/native/:$LD_LIBRARY_PATH"
+
+export SPARK_VERSION=2.3.2
+export SPARK_PACKAGE=spark-${SPARK_VERSION}-bin-without-hadoop
+export SPARK_HOME=/opt/spark
+export SPARK_DIST_CLASSPATH="$HADOOP_HOME/etc/hadoop/*:$HADOOP_HOME/share/hadoop/common/lib/*:$HADOOP_HOME/share/hadoop/common/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/hdfs/lib/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/yarn/lib/*:$HADOOP_HOME/share/hadoop/yarn/*:$HADOOP_HOME/share/hadoop/mapreduce/lib/*:$HADOOP_HOME/share/hadoop/mapreduce/*:$HADOOP_HOME/share/hadoop/tools/lib/*"
+export PATH=$PATH:${SPARK_HOME}/bin
+
 
 ## Spark
-#RUN \
-#  wget 
+ENV HADOOP_VERSION 2.9.1
+ENV HADOOP_HOME /opt/hadoop
+ENV HADOOP_CONF_DIR $HADOOP_HOME/etc/hadoop
+ENV PATH $PATH:$HADOOP_HOME/bin
+ENV LD_LIBRARY_PATH "$HADOOP_HOME/lib/native/:$LD_LIBRARY_PATH"
+RUN curl -L --retry 3 \
+  "http://archive.apache.org/dist/hadoop/common/hadoop-$HADOOP_VERSION/hadoop-$HADOOP_VERSION.tar.gz" \
+  | gunzip \
+  | tar -x -C /opt/ \
+ && mv /opt/hadoop-$HADOOP_VERSION $HADOOP_HOME \
+ && rm -rf $HADOOP_HOME/share/doc
+
+ENV SPARK_VERSION 2.3.2
+ENV SPARK_PACKAGE spark-${SPARK_VERSION}-bin-without-hadoop
+ENV SPARK_HOME /opt/spark
+ENV SPARK_DIST_CLASSPATH "$HADOOP_HOME/etc/hadoop/*:$HADOOP_HOME/share/hadoop/common/lib/*:$HADOOP_HOME/share/hadoop/common/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/hdfs/lib/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/yarn/lib/*:$HADOOP_HOME/share/hadoop/yarn/*:$HADOOP_HOME/share/hadoop/mapreduce/lib/*:$HADOOP_HOME/share/hadoop/mapreduce/*:$HADOOP_HOME/share/hadoop/tools/lib/*"
+ENV PATH $PATH:${SPARK_HOME}/bin
+RUN curl -L --retry 3 \
+  "https://www.apache.org/dyn/mirrors/mirrors.cgi?action=download&filename=spark/spark-${SPARK_VERSION}/${SPARK_PACKAGE}.tgz" \
+  | gunzip \
+  | tar x -C /opt/ \
+ && mv /opt/$SPARK_PACKAGE $SPARK_HOME \
+ && pip install findspark
 
 ## Alluxio
 RUN \

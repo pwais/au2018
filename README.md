@@ -74,6 +74,65 @@ ansible-playbook -v --become -i kubespray/inventory/default/hosts.ini external/k
 
 
 
+parzen window estimation of sample:
+ * https://www.mit.edu/~andoni/LSH/  euclidean LSH
+     * http://mlwiki.org/index.php/Euclidean_LSH
+ * this will get you standard parzen window prob !
+ * can can get Confidence bands.. tho these look bad in figure 4 of 4.6 Confidence Bands and the CLT
+    * http://www.stat.cmu.edu/~larry/=sml/densityestimation.pdf
+
+
+experiments:
+ 1) tool for measuring approx of full joint of network
+      using (at first random) partitions.  so for
+      each partition we measure the full joint (or some approx of it)
+      and then assume partitions are independent.  can combine multiple
+      partitionings to get a better estimate methinks? ideally 
+        * these partitions cover neurons that fire together or are related via
+             pool and conv ops, since those definitely dependent
+        * ideally if we span layers, then careful about dependence /
+             independence of upper layers on lower layers
+     
+   ** tool:
+      * compute probability of an input image given activations
+      * find partitions that are in a low-prob state and backtrace to
+          image... wanna highlight them.  try to do this via
+          saliency or filter gradient or something.
+          
+ 2) parzen window accelerated using LSH.  we will use this to estimate large
+      joint distributions between neurons using recordings of activations.  so:
+   * record all activations for test set
+   * for each new example, compute acivation, then compute p(act) using
+       parzen windows on referenece set, accelerated using LSH
+   * that gives you a point estimate of the relevant joint
+   * should be able to use this for big 'blobs' of a layer, like 
+       object-size chunks of the lower conv layers
+   * we can get z-score using some complicated bootstrapping thing
+
+ 3) train a deconv network that goes from probability descriptor
+      to image?  then can sample from descriptor to generate
+      input images  http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
+      AND should be able to bias sampling in ways that sample from low-prob
+      regions.  this is mainly for debugging versus the GAN-near-edges thing?
+      we could potentially use a GAN for this part using our activation
+      sample as a prior   https://arxiv.org/pdf/1411.1784.pdf or pix2pix
+      
+  
+
+
+pgao paper
+http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
+
+
+** parzen windows for high dim.  page 17 http://www.stat.cmu.edu/~larry/=sml/densityestimation.pdf
+
+faster tsne:
+herm https://github.com/DmitryUlyanov/Multicore-TSNE
+https://github.com/saurfang/spark-tsne/tree/master/spark-tsne-core/src/main/scala/com/github/saurfang/spark/tsne/tree
+
+mean shift?
+http://dimacs.rutgers.edu/archive/Workshops/Depth/meer.pdf
+
 
 http://ai-benchmark.com/ranking.html
 https://github.com/PAIR-code/saliency
