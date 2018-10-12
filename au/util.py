@@ -1,3 +1,4 @@
+import shutil
 import sys
 
 
@@ -9,8 +10,11 @@ except ImportError:
   import pathlib2 as pathlib
 
 def mkdir(path):
-  pathlib.Path(path).mkdir(exist_ok=True)
-  
+  pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+
+def rm_rf(path):
+  shutil.rmtree(path)
+
 ## Logging
 _LOGS = {}
 def create_log(name='au'):

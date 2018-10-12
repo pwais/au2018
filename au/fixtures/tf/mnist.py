@@ -136,6 +136,7 @@ class MNistEager(nnmodel.INNModel):
 
   class Params(nnmodel.INNModel.ParamsBase):
     def __init__(self):
+      super(MNistEager.Params, self).__init__()
       self.BATCH_SIZE = 100
       self.LEARNING_RATE = 0.01
       self.MOMENTUM = 0.5
@@ -151,7 +152,7 @@ class MNistEager(nnmodel.INNModel):
     from official.mnist import dataset as mnist_dataset
     from official.mnist import mnist
 
-    tf.enable_eager_execution()
+    # tf.enable_eager_execution()
     log = util.create_log()
 
     # Automatically determine device and data_format
@@ -197,20 +198,20 @@ class MNistEager(nnmodel.INNModel):
 
     # Train and evaluate for a set number of epochs.
     log.info("Training!")
-    with tf.device(device):
-      for _ in range(params.TRAIN_EPOCHS):
-        start = time.time()
-        with summary_writer.as_default():
-          train(model, optimizer, train_ds, step_counter, 10)
-        end = time.time()
-        log.info('\nTrain time for epoch #%d (%d total steps): %f' %
-              (checkpoint.save_counter.numpy() + 1,
-               step_counter.numpy(),
-               end - start))
-        with test_summary_writer.as_default():
-          test(model, test_ds)
-        checkpoint.save(checkpoint_prefix)
-    tf.train.write_graph(sess.graph_def, '/tmp/my-model', 'train.pbtxt')
+    # with tf.device(device):
+    for _ in range(params.TRAIN_EPOCHS):
+      start = time.time()
+      with summary_writer.as_default():
+        train(model, optimizer, train_ds, step_counter, 10)
+      end = time.time()
+      log.info('\nTrain time for epoch #%d (%d total steps): %f' %
+            (checkpoint.save_counter.numpy() + 1,
+             step_counter.numpy(),
+             end - start))
+      with test_summary_writer.as_default():
+        test(model, test_ds)
+      checkpoint.save(checkpoint_prefix)
+    # tf.train.write_graph(sess.graph_def, '/tmp/my-model', 'train.pbtxt')
     log.info("Done training!")
 
   @classmethod
@@ -219,13 +220,15 @@ class MNistEager(nnmodel.INNModel):
     params = params or MNistEager.Params()
     model.params = params
 
+    tf.enable_eager_execution()
+
     if not os.path.exists(params.MODEL_BASEDIR):
       ## Train a model!
       MNistEager._train(params)
       tf.reset_default_graph()
     
     # Load saved model
-    tf.enable_eager_execution()
+    # 
     # sess = tf.get_default_session() or tf.Session()
     model.tf_model = create_model()
     # saver = tf.train.Saver()

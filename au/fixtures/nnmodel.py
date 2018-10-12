@@ -8,12 +8,12 @@ from au import util
 class INNModel(object):
   
   class ParamsBase(object):
-    
-    # Canonical places to save files
-    MODEL_NAME = 'INNModel'
-    MODEL_BASEDIR = os.path.join(conf.AU_MODEL_CACHE, MODEL_NAME)
-    DATA_BASEDIR = os.path.join(conf.AU_DATA_CACHE, MODEL_NAME)
-    TENSORBOARD_BASEDIR = os.path.join(conf.AU_TENSORBOARD_DIR, MODEL_NAME)
+    def __init__(self):
+      # Canonical places to save files
+      self.MODEL_NAME = 'INNModel'
+      self.MODEL_BASEDIR = os.path.join(conf.AU_MODEL_CACHE, self.MODEL_NAME)
+      self.DATA_BASEDIR = os.path.join(conf.AU_DATA_CACHE, self.MODEL_NAME)
+      self.TENSORBOARD_BASEDIR = os.path.join(conf.AU_TENSORBOARD_DIR, self.MODEL_NAME)
   
   def __init__(self):
     self.params = ParamsBase()
