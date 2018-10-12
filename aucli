@@ -42,8 +42,15 @@ class DockerEnv(object):
 
   @classmethod
   def shell(cls):
+    have_nvidia_docker = False
+    try:
+      run_cmd('nvidia-docker --help')
+    except Exception:
+      log.info("Not using nvidia-docker")
+    
+    docker = 'nvidia-docker' if have_nvidia_docker else 'docker'
     CMD = """
-      docker run
+      %s run
         --name au2
         -d -it -P
         --net=host
@@ -52,7 +59,7 @@ class DockerEnv(object):
         -w /opt/au
         --env my.env
         --privileged %s sleep infinity || docker start au2 || true
-    """ % DOCKER_IMAGE
+    """ % (docker, DOCKER_IMAGE)
     run_cmd(CMD)
     
     # https://github.com/moby/moby/issues/33794#issuecomment-323003975

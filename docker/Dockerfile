@@ -11,7 +11,7 @@ ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
 
 ## Tensorflow
 # Fix nvidia stubs and test tensorflow
-ENV LD_LIBRARY_PATH $LD_LIBRARY_PATH:/usr/local/cuda/lib64/stubs
+ENV LD_LIBRARY_PATH $LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64/stubs
 RUN \
   ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 && \
   ldconfig && \
@@ -44,8 +44,9 @@ RUN \
   dpkg -i bazel_0.16.1-linux-x86_64.deb 
   
 
-# Python
-#RUN pip install
+## Python
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
 
 
 export HADOOP_VERSION=2.9.1
@@ -101,7 +102,7 @@ COPY docker/alluxio-site.properties /opt/alluxio/conf/alluxio-site.properties
 
 
 ## TF Models
-ENV PYTHONPATH $PYTHONPATH:/opt/au/external/tensorflow_models/research:/opt/au/external/tensorflow_models/research/slim
+ENV PYTHONPATH $PYTHONPATH:/opt/au/external/tensorflow_models/research:/opt/au/external/tensorflow_models/research/slim:/opt/au/external/tensorflow_models/official:/opt/au/external/tensorflow_models/
 RUN \
   apt-get install -y protobuf-compiler python-pil python-lxml python-tk && \
   pip install Cython contextlib2 matplotlib && \
