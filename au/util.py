@@ -1,3 +1,4 @@
+import os
 import shutil
 import sys
 
@@ -29,3 +30,80 @@ def create_log(name='au'):
     _LOGS[name] = log
   return _LOGS[name]
 log = create_log()
+
+def tf_create_session(config=None):
+  import tensorflow as tf
+  if config is None:
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    config.allow_soft_placement = True
+    config.log_device_placement = True
+  sess = tf.Session(config=config)
+  return sess
+
+def download(uri, dest):
+  """Fetch `uri`, which is a file or archive, and put in `dest`, which
+  is either a destination file path or destination directory."""
+  
+  # Import urllib
+  try:
+    import urllib.error as urlliberror
+    import urllib.request as urllib
+    HTTPError = urlliberror.HTTPError
+    URLError = urlliberror.URLError
+  except ImportError:
+    import urllib2 as urllib
+    HTTPError = urllib.HTTPError
+    URLError = urllib.URLError
+  
+  import tempfile
+  
+  import patoolib
+ 
+  if os.path.exists(dest):
+    return
+  
+  def show_progress(percentage):
+    COLS = 70
+    full = int(COLS * percentage / 100)
+    bar = full * "#" + (COLS - full) * " "
+    sys.stdout.write(u"\u001b[1000D[" + bar + "] " + str(percentage) + "%")
+    sys.stdout.flush()
+  
+  fname = os.path.split(uri)[-1]
+  tempdest = tempfile.NamedTemporaryFile(suffix='_' + fname)
+  try:
+    log.info("Fetching %s ..." % uri)
+    response = urllib.urlopen(uri)
+    size = int(response.info().get('Content-Length').strip())
+    log.info("... downloading %s MB ..." % (float(size) * 1e-6))
+    chunk = min(size, 8192)
+    downloaded = 0
+    while True:
+      data = response.read(chunk)
+      if not data:
+        break
+      tempdest.write(data)
+      downloaded += len(data)
+      show_progress(100 * downloaded / size)
+    sys.stdout.write("")
+    sys.stdout.flush()
+    log.info("... fetched!")
+  except HTTPError as e:
+    raise Exception("[HTTP Error] {code}: {reason}."
+                        .format(code=e.code, reason=e.reason))
+  except URLError as e:
+    raise Exception("[URL Error] {reason}.".format(reason=e.reason))
+  
+  tempdest.flush()
+  
+  try:
+    # Is it an archive? expand!
+    mkdir(dest)
+    patoolib.extract_archive(tempdest.name, outdir=dest)
+    log.info("Extracted archive.")
+  except Exception:
+    # Just move the file
+    shutil.move(tempdest.name, dest)
+  log.info("Downloaded to %s" % dest)
+  

@@ -54,6 +54,7 @@ class DockerEnv(object):
         --name au2
         -d -it -P
         --net=host
+        --shm-size 1G
         -v `pwd`:/opt/au
         -v /:/outer_root
         -w /opt/au
@@ -135,6 +136,14 @@ def alluxio_start_master():
       /gcs
       gs://au2018gs/au2018
   """ % (GCS_ACCESS_KEY_ID, GCS_SECRET_ACCESS_KEY))
+
+"""
+
+ALLUXIO_MASTER_HOSTNAME=http://192.168.99.100 /opt/alluxio/bin/alluxio-start.sh local
+/opt/alluxio/bin/alluxio runTests
+/opt/alluxio/integration/fuse/bin/alluxio-fuse mount /mnt/alluxio
+"""
+
 
 def alluxio_start_worker():
   run_cmd("""

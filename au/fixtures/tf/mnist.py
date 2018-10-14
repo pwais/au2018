@@ -136,7 +136,7 @@ class MNistEager(nnmodel.INNModel):
 
   class Params(nnmodel.INNModel.ParamsBase):
     def __init__(self):
-      super(MNistEager.Params, self).__init__()
+      super(MNistEager.Params, self).__init__(model_name='MNistEager')
       self.BATCH_SIZE = 100
       self.LEARNING_RATE = 0.01
       self.MOMENTUM = 0.5
@@ -262,3 +262,6 @@ class MNistEager(nnmodel.INNModel):
     #     yield res
     #   except tf.errors.OutOfRangeError:
     #     break
+
+if __name__ == '__main__':
+  MNistEager.load_or_train()

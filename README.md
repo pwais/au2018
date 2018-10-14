@@ -6,6 +6,9 @@ training data and accuracy for convolutional neural networks.
 Named after Aurie Ginsberg
 
 
+pytest au/test -s --runslow
+
+
 
 build a bridge.
  * try to repro the GAN paper thing wher we can sample from mnist layer and
@@ -118,7 +121,12 @@ experiments:
       sample as a prior   https://arxiv.org/pdf/1411.1784.pdf or pix2pix
       
   
+deepmind prob gan paper
+https://arxiv.org/pdf/1806.05034.pdf
 
+bayes gan 
+https://github.com/andrewgordonwilson/bayesgan
+https://alexgkendall.com/computer_vision/bayesian_deep_learning_for_safe_ai/
 
 pgao paper
 http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
