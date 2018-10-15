@@ -1,0 +1,4 @@
+keras==2.2.2
+pathlib2
+patool
+pytest

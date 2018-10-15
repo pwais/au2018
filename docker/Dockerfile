@@ -112,5 +112,13 @@ RUN pip install -r /tmp/kubespray_requirements.txt
 ## Gcloud
 RUN \
   curl https://sdk.cloud.google.com | bash && \
-  pip install -U crcmod
+  pip install -U crcmod 
+
+# gcsfuse does NOT support read cache :P
+# and s3fs is broken too it seems
+#  export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && \
+#  echo "deb http://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list && \
+#  curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add - && \
+#  apt-get update && \
+#  apt-get install -y gcsfuse
 

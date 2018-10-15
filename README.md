@@ -64,7 +64,10 @@ ansible-playbook -v --become -i kubespray/inventory/default/hosts.ini external/k
  * 
 
 
+NB: gcsfuse does NOT do read cache :P :P :P 
+but s3fs does! https://github.com/s3fs-fuse/s3fs-fuse/wiki/Google-Cloud-Storage
 
+tool for phone demo? https://cordova.apache.org/
 
 # TODO
  * docker image to serve as dev env.  try to set up GCR?
@@ -75,7 +78,7 @@ ansible-playbook -v --become -i kubespray/inventory/default/hosts.ini external/k
 
 
 
-
+nice latent model paper: http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
 
 parzen window estimation of sample:
  * https://www.mit.edu/~andoni/LSH/  euclidean LSH
@@ -182,4 +185,24 @@ https://arxiv.org/pdf/1610.02136.pdf ... better! out of distribution !!! nips 18
 https://arxiv.org/pdf/1705.08664.pdf  could be very good metric, seem to use gaussian input to generate images tho using a network?
 
 daylen https://arxiv.org/pdf/1701.02362.pdf 
+
+
+
+
+# oops permissions problems with s3fs and gcloud :P   
+# https://stackoverflow.com/questions/17544139/allowing-permission-using-s3fs-bucket-directory-for-other-users
+# https://github.com/s3fs-fuse/s3fs-fuse/issues/169
+* Connection #0 to host au2018gs.storage.googleapis.com left intact
+[INF]       curl.cpp:RequestPerform(2062): HTTP response code 200
+[INF]       cache.cpp:AddStat(356): add stat cache entry[path=/au2018/]
+   NODEID: 2
+   unique: 2, success, outsize: 144
+unique: 3, opcode: GETXATTR (22), nodeid: 2, insize: 65, pid: 13768
+   unique: 3, error: -38 (Function not implemented), outsize: 16
+
+
+
+^C[INF] s3fs.cpp:s3fs_destroy(3432): destroy
+root@default:/tmp/s3fs-fuse# /usr/local/bin/s3fs -d -d -f au2018gs /mnt/s3fs_gcs -o use_cache=/opt/au/s3fs_cache4 -o passwd_file=/etc/gcs-auth.txt -o url=https://storage.googleapis.com -o sigv2 -o nomultipart -o allow_other,uid=`id -u`,umask=0077,mp_umask=0077 -o curldbg -o use_rrs
+#  apt-get install -y s3fs
 

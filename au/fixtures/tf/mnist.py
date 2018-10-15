@@ -90,7 +90,8 @@ def create_model(data_format='channels_last'):
       typically faster on GPUs while 'channels_last' is typically faster on
       CPUs. See
       https://www.tensorflow.org/performance/performance_guide#data_formats
-      -- NB: but this is mnist so channels order prolly doesn't matter :P
+      -- NB: BUT THIS IS MNIST SO THIS POINT IS LIKELY IRRELEVANT
+          EVEN FOR BENCHMARKING :P
   Returns:
     A tf.keras.Model.
   """
