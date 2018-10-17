@@ -5,6 +5,9 @@ import os
 import subprocess
 import sys
 
+# NB: We keep this file independent of the rest of AU intentionally so that
+# it can run w/out the source tree
+
 ## Logging
 import logging
 LOG_FORMAT = "%(asctime)s\t%(name)-4s %(process)d : %(message)s"
@@ -17,8 +20,10 @@ log.addHandler(console_handler)
 AU_ROOT = os.environ.get(
   'AU_ROOT', 
   os.path.dirname(os.path.abspath(__file__)))
-
-DOCKER_IMAGE = 'gcr.io/avian-augury-217704/env:v1'
+DOCKER_IMAGE = os.environ.get(
+                    'AU_DOCKER_IMAGE',
+                    'gcr.io/avian-augury-217704/env:v1')
+CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
 
 ## Utils
 
@@ -51,7 +56,7 @@ class DockerEnv(object):
     docker = 'nvidia-docker' if have_nvidia_docker else 'docker'
     CMD = """
       %s run
-        --name au2
+        --name %s
         -d -it -P
         --net=host
         -v `pwd`:/opt/au
@@ -59,17 +64,29 @@ class DockerEnv(object):
         -w /opt/au
         --env-file my.env
         --privileged %s sleep infinity || docker start au2 || true
-    """ % (docker, DOCKER_IMAGE)
+    """ % (docker, CONTAINER_NAME, DOCKER_IMAGE)
     run_cmd(CMD)
     
     # https://github.com/moby/moby/issues/33794#issuecomment-323003975
-    EXEC_CMD = 'docker exec -it au2 bash'#-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
+    #-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
+    EXEC_CMD = 'docker exec -it %s bash' % CONTAINER_NAME
     os.execvp("docker", EXEC_CMD.split(' '))
 
+  @classmethod
+  def rm_shell(cls):
+    try:
+      run_cmd('docker rm -f %s' % CONTAINER_NAME)
+    except Exception:
+      pass
+    log.info("Removed container %s" % CONTAINER_NAME)
 
 ## External Projects
 
 def setup_tf_models():
+  TF_MODELS_PATH = os.path.join(AU_ROOT, 'external/tensorflow_models/research')
+  if not os.path.exists(TF_MODELS_PATH):
+    log.warn("Skipping TF Models setup, can't find %s" % TF_MODELS_PATH)
+  
   # Do https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/installation.md#manual-protobuf-compiler-installation-and-usage
   run_cmd("""
     ls -lhat /opt/au/external/tensorflow_models/research/object_detection/protos/train_pb2.py ||
@@ -81,7 +98,7 @@ def setup_tf_models():
         cd /opt/au/external/tensorflow_models/research &&
         /opt/protobuf3/bin/protoc object_detection/protos/*.proto --python_out=. &&
         python object_detection/builders/model_builder_test.py )
-    """)
+    """ % TF_MODELS_PATH)
   
   #run_cmd("""
   #  ls -lhat /tmp/raw-data &&
@@ -93,8 +110,12 @@ def setup_tf_models():
 ## Services
 
 def test_spark():
+  log.info("Finding spark ...")
   import findspark
   findspark.init()
+  log.info("... found!")
+  
+  log.info("Running PI locally ...")
   import pyspark
   import random
   conf = pyspark.SparkConf()
@@ -109,8 +130,8 @@ def test_spark():
   count = sc.parallelize(range(0, num_samples)).filter(inside).count()
   sc.stop()
   pi = 4 * float(count) / num_samples
-  print("Pi estimate: %s" % pi)
-  assert abs(pi - 3.14) < 0.1
+  log.info("Pi estimate: %s" % pi)
+  assert abs(pi - 3.14) < 0.1, "Spark program had an error?"
   
 
 # def alluxio_start_master():
@@ -159,24 +180,28 @@ def test_spark():
 #   run_cmd('/opt/alluxio/integration/docker/bin/alluxio-worker.sh >> /var/log/alluxio-worker &')
 
 def alluxio_start_local():
-  # Alluxio really wants a ramdisk
+  log.info("Alluxio really wants a ramdisk, creating ...")
   run_cmd("""
     mkdir -p /mnt/alluxio-ramdisk &&
-    umount -f /mnt/alluxio-ramdisk &&
+    (umount -f /mnt/alluxio-ramdisk || true) &&
     mount -t ramfs -o size=2G ramfs /mnt/alluxio-ramdisk &&
     chmod a+w /mnt/alluxio-ramdisk
   """)
   
+  log.info("Starting single-node Alluxio local cluster ...")
   run_cmd("/opt/alluxio/bin/alluxio-start.sh local")
+  
+  log.info("Exposing Alluxio to host via FUSE ...")
   run_cmd("""
     mkdir -p /opt/alluxio-fuse &&
-    umount -f /opt/alluxio-fuse &&
+    (umount -f /opt/alluxio-fuse || true) && 
     /opt/alluxio/integration/fuse/bin/alluxio-fuse mount /opt/alluxio-fuse
   """)
   
   GCS_ACCESS_KEY_ID = os.environ.get('GCS_ACCESS_KEY_ID')
   GCS_SECRET_ACCESS_KEY = os.environ.get('GCS_SECRET_ACCESS_KEY')
   if GCS_ACCESS_KEY_ID:
+    log.info("Mounting GCS volume ...")
     run_cmd("""
       /opt/alluxio/bin/alluxio fs mount
         --option fs.gcs.accessKeyId=%s
@@ -185,7 +210,14 @@ def alluxio_start_local():
         gs://au2018gs/au2018
     """ % (GCS_ACCESS_KEY_ID, GCS_SECRET_ACCESS_KEY))
   
-  
+  ALLUXIO_HOST = os.environ.get('ALLUXIO_MASTER_HOSTNAME', 'localhost')
+  log.info("""
+    Done! Wait a few seconds for startup and then try:
+      Alluxio WebUI: http://%s:19999
+      Alluxio tests: /opt/alluxio/bin/alluxio runTests
+      Alluxio tests only for GCS volume:
+        /opt/alluxio/bin/alluxio runTests --directory /gcs
+  """ % ALLUXIO_HOST)
 
 ## CLI
 
@@ -196,6 +228,9 @@ def create_arg_parser():
   parser.add_argument(
     '--shell', default=False, action='store_true',
     help='Drop into a dockerized dev env shell')
+  parser.add_argument(
+    '--shell-rm', default=False, action='store_true',
+    help='Remove the au container')
   parser.add_argument(
     '--build-env', default=False, action='store_true',
     help='Build the dockerized dev env image %s' % DOCKER_IMAGE)
@@ -217,6 +252,8 @@ def main(args=None):
     DockerEnv.build()
   elif args.shell:
     DockerEnv.shell()
+  elif args.shell_rm:
+    DockerEnv.rm_shell()
   elif args.alluxio_local:
     alluxio_start_local()
   elif args.test_spark:
