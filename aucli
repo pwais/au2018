@@ -51,20 +51,19 @@ class DockerEnv(object):
     docker = 'nvidia-docker' if have_nvidia_docker else 'docker'
     CMD = """
       %s run
-        --name au
+        --name au2
         -d -it -P
         --net=host
-        --shm-size 1G
         -v `pwd`:/opt/au
         -v /:/outer_root
         -w /opt/au
-        --env my.env
-        --privileged %s sleep infinity || docker start au || true
+        --env-file my.env
+        --privileged %s sleep infinity || docker start au2 || true
     """ % (docker, DOCKER_IMAGE)
     run_cmd(CMD)
     
     # https://github.com/moby/moby/issues/33794#issuecomment-323003975
-    EXEC_CMD = 'docker exec -it au bash'#-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
+    EXEC_CMD = 'docker exec -it au2 bash'#-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
     os.execvp("docker", EXEC_CMD.split(' '))
 
 
@@ -84,10 +83,10 @@ def setup_tf_models():
         python object_detection/builders/model_builder_test.py )
     """)
   
-  run_cmd("""
-    ls -lhat /tmp/raw-data &&
-    bash object_detection/dataset_tools/download_and_preprocess_mscoco.sh /tmp
-  """)
+  #run_cmd("""
+  #  ls -lhat /tmp/raw-data &&
+  #  bash object_detection/dataset_tools/download_and_preprocess_mscoco.sh /tmp
+  #""")
 
 
 
@@ -114,50 +113,79 @@ def test_spark():
   assert abs(pi - 3.14) < 0.1
   
 
-def alluxio_start_master():
+# def alluxio_start_master():
+#   run_cmd("""
+#     mkdir /mnt/alluxio-ramdisk &&
+#     mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk &&
+#     chmod a+w /mnt/alluxio-ramdisk
+#   """)
+#   
+#   log.info("ALLUXIO_MASTER_HOSTNAME: %s" % os.environ.get('ALLUXIO_MASTER_HOSTNAME'))
+#   
+#   MASTER_CMD = '/opt/alluxio/integration/docker/bin/alluxio-master.sh >> /var/log/alluxio-master &'
+#   run_cmd(MASTER_CMD)
+#    
+#   GCS_ACCESS_KEY_ID = os.environ.get('GCS_ACCESS_KEY_ID')
+#   GCS_SECRET_ACCESS_KEY = os.environ.get('GCS_SECRET_ACCESS_KEY')
+#   assert GCS_ACCESS_KEY_ID
+#   run_cmd("""
+#     /opt/alluxio/bin/alluxio fs mount
+#       --option fs.gcs.accessKeyId=%s
+#       --option fs.gcs.secretAccessKey=%s
+#       /gcs
+#       gs://au2018gs/au2018
+#   """ % (GCS_ACCESS_KEY_ID, GCS_SECRET_ACCESS_KEY))
+# 
+# """
+# 
+# ALLUXIO_MASTER_HOSTNAME=http://192.168.99.100 /opt/alluxio/bin/alluxio-start.sh local
+# /opt/alluxio/bin/alluxio runTests
+# /opt/alluxio/integration/fuse/bin/alluxio-fuse mount /mnt/alluxio
+# """
+# 
+# 
+# def alluxio_start_worker():
+#   run_cmd("""
+#     mkdir /mnt/ramdisk &&
+#     mount -t ramfs -o size=1G ramfs /mnt/ramdisk &&
+#     chmod a+w /mnt/ramdisk
+#   """)
+#   
+#   run_cmd("""
+#     mkdir -p /opt/alluxio-fuse &&
+#     /opt/alluxio/integration/fuse/bin/alluxio-fuse mount /opt/alluxio-fuse
+#   """)
+#   
+#   run_cmd('/opt/alluxio/integration/docker/bin/alluxio-worker.sh >> /var/log/alluxio-worker &')
+
+def alluxio_start_local():
+  # Alluxio really wants a ramdisk
   run_cmd("""
-    mkdir /mnt/ramdisk &&
-    mount -t ramfs -o size=1G ramfs /mnt/ramdisk &&
-    chmod a+w /mnt/ramdisk
+    mkdir -p /mnt/alluxio-ramdisk &&
+    umount -f /mnt/alluxio-ramdisk &&
+    mount -t ramfs -o size=2G ramfs /mnt/alluxio-ramdisk &&
+    chmod a+w /mnt/alluxio-ramdisk
   """)
   
-  log.info("ALLUXIO_MASTER_HOSTNAME: %s" % os.environ.get('ALLUXIO_MASTER_HOSTNAME'))
-  
-  MASTER_CMD = '/opt/alluxio/integration/docker/bin/alluxio-master.sh >> /var/log/alluxio-master &'
-  run_cmd(MASTER_CMD)
-   
-  GCS_ACCESS_KEY_ID = os.environ.get('GCS_ACCESS_KEY_ID')
-  GCS_SECRET_ACCESS_KEY = os.environ.get('GCS_SECRET_ACCESS_KEY')
-  assert GCS_ACCESS_KEY_ID
-  run_cmd("""
-    /opt/alluxio/bin/alluxio fs mount
-      --option fs.gcs.accessKeyId=%s
-      --option fs.gcs.secretAccessKey=%s
-      /gcs
-      gs://au2018gs/au2018
-  """ % (GCS_ACCESS_KEY_ID, GCS_SECRET_ACCESS_KEY))
-
-"""
-
-ALLUXIO_MASTER_HOSTNAME=http://192.168.99.100 /opt/alluxio/bin/alluxio-start.sh local
-/opt/alluxio/bin/alluxio runTests
-/opt/alluxio/integration/fuse/bin/alluxio-fuse mount /mnt/alluxio
-"""
-
-
-def alluxio_start_worker():
-  run_cmd("""
-    mkdir /mnt/ramdisk &&
-    mount -t ramfs -o size=1G ramfs /mnt/ramdisk &&
-    chmod a+w /mnt/ramdisk
-  """)
-  
+  run_cmd("/opt/alluxio/bin/alluxio-start.sh local")
   run_cmd("""
     mkdir -p /opt/alluxio-fuse &&
+    umount -f /opt/alluxio-fuse &&
     /opt/alluxio/integration/fuse/bin/alluxio-fuse mount /opt/alluxio-fuse
   """)
   
-  run_cmd('/opt/alluxio/integration/docker/bin/alluxio-worker.sh >> /var/log/alluxio-worker &')
+  GCS_ACCESS_KEY_ID = os.environ.get('GCS_ACCESS_KEY_ID')
+  GCS_SECRET_ACCESS_KEY = os.environ.get('GCS_SECRET_ACCESS_KEY')
+  if GCS_ACCESS_KEY_ID:
+    run_cmd("""
+      /opt/alluxio/bin/alluxio fs mount
+        --option fs.gcs.accessKeyId=%s
+        --option fs.gcs.secretAccessKey=%s
+        /gcs
+        gs://au2018gs/au2018
+    """ % (GCS_ACCESS_KEY_ID, GCS_SECRET_ACCESS_KEY))
+  
+  
 
 ## CLI
 
@@ -172,8 +200,11 @@ def create_arg_parser():
     '--build-env', default=False, action='store_true',
     help='Build the dockerized dev env image %s' % DOCKER_IMAGE)
   parser.add_argument(
-    '--alluxio-master', default=False, action='store_true',
-    help='Start Alluxio master node')
+    '--alluxio-local', default=False, action='store_true',
+    help='Start Alluxio local node (e.g. for GFS access & caching)')
+  parser.add_argument(
+    '--test-spark', default=False, action='store_true',
+    help='Ensure Spark works locally')
   
   return parser
 
@@ -186,6 +217,10 @@ def main(args=None):
     DockerEnv.build()
   elif args.shell:
     DockerEnv.shell()
+  elif args.alluxio_local:
+    alluxio_start_local()
+  elif args.test_spark:
+    test_spark()
 
 if __name__ == '__main__':
   main()

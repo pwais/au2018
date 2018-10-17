@@ -28,6 +28,7 @@ RUN \
   apt-get install -y \
     curl \
     git \
+    net-tools \
     screen \
     ssh \
     sudo \
@@ -60,6 +61,7 @@ RUN curl -L --retry 3 \
   | tar -x -C /opt/ \
  && mv /opt/hadoop-$HADOOP_VERSION $HADOOP_HOME \
  && rm -rf $HADOOP_HOME/share/doc
+COPY docker/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
 ENV SPARK_VERSION 2.3.2
 ENV SPARK_PACKAGE spark-${SPARK_VERSION}-bin-without-hadoop
@@ -118,3 +120,5 @@ RUN \
 #  apt-get update && \
 #  apt-get install -y gcsfuse
 
+# AU
+COPY aucli /opt/au/aucli
