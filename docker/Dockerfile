@@ -82,8 +82,8 @@ RUN \
   mv /opt/alluxio-1.8.1-hadoop-2.9 /opt/alluxio && \
   rm /tmp/alluxio-1.8.1-hadoop-2.9-bin.tar.gz && \
   mkdir -p /opt/alluxio-cache && chmod 777 /opt/alluxio-cache && \
-  mkdir -p /opt/alluxio-underfs && chmod 777 /opt/alluxio-underfs && \
-  mkdir -p /mnt/alluxio-ramdisk && mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk
+  mkdir -p /opt/alluxio-underfs && chmod 777 /opt/alluxio-underfs
+#  mkdir -p /mnt/alluxio-ramdisk && mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk
 COPY docker/alluxio-site.properties /opt/alluxio/conf/alluxio-site.properties
 
 ## TF Models
