@@ -51,7 +51,7 @@ class DockerEnv(object):
     docker = 'nvidia-docker' if have_nvidia_docker else 'docker'
     CMD = """
       %s run
-        --name au2
+        --name au
         -d -it -P
         --net=host
         --shm-size 1G
@@ -59,12 +59,12 @@ class DockerEnv(object):
         -v /:/outer_root
         -w /opt/au
         --env my.env
-        --privileged %s sleep infinity || docker start au2 || true
+        --privileged %s sleep infinity || docker start au || true
     """ % (docker, DOCKER_IMAGE)
     run_cmd(CMD)
     
     # https://github.com/moby/moby/issues/33794#issuecomment-323003975
-    EXEC_CMD = 'docker exec -it au2 bash'#-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
+    EXEC_CMD = 'docker exec -it au bash'#-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
     os.execvp("docker", EXEC_CMD.split(' '))
 
 

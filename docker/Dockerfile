@@ -1,5 +1,7 @@
 FROM tensorflow/tensorflow:1.10.1-gpu
 
+COPY docker/sources.list /etc/apt/sources.list
+
 RUN apt-get update
 
 ## Java
