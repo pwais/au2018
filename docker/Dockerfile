@@ -20,10 +20,9 @@ RUN \
   ldconfig && \
   python -c 'from tensorflow.python.client import device_lib; device_lib.list_local_devices()' 
 
-COPY docker/sources.list /etc/apt/sources.list
-
-
 ## Dev tools
+COPY docker/.vimrc /root/.vimrc
+COPY docker/.screenrc /root/.screenrc
 RUN \
   apt-get update && \
   apt-get install -y \
@@ -37,10 +36,7 @@ RUN \
   curl -LO https://github.com/BurntSushi/ripgrep/releases/download/0.10.0/ripgrep_0.10.0_amd64.deb && \
   dpkg -i ripgrep_0.10.0_amd64.deb
 
-COPY docker/.vimrc /root/.vimrc
-COPY docker/.screenrc /root/.screenrc
-
-## Bazel
+## Bazel -- might not need this ...
 RUN \
   apt-get install -y bash-completion && \
   wget https://github.com/bazelbuild/bazel/releases/download/0.16.1/bazel_0.16.1-linux-x86_64.deb && \
@@ -88,9 +84,7 @@ RUN \
   mkdir -p /opt/alluxio-cache && chmod 777 /opt/alluxio-cache && \
   mkdir -p /opt/alluxio-underfs && chmod 777 /opt/alluxio-underfs && \
   mkdir -p /mnt/alluxio-ramdisk && mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk && 
-
 COPY docker/alluxio-site.properties /opt/alluxio/conf/alluxio-site.properties
-
 
 ## TF Models
 ENV PYTHONPATH $PYTHONPATH:/opt/au/external/tensorflow_models/research:/opt/au/external/tensorflow_models/research/slim:/opt/au/external/tensorflow_models/official:/opt/au/external/tensorflow_models/
