@@ -149,6 +149,50 @@ class MNistEager(nnmodel.INNModel):
     self.predictor = None
 
   @staticmethod
+  def save_datasets_as_png(params=None):   
+    params = params or MNistEager.Params()
+    
+    log = util.create_log()
+    
+    def save_dataset(ds, tag):
+      import imageio
+      import numpy as np
+      
+      img_dir = os.path.join(params.DATA_BASEDIR, tag, 'images')
+      util.mkdir(img_dir)
+      path_to_label = {}
+    
+      # Silly way to iterate over a tf.Dataset
+      # https://stackoverflow.com/a/47917849
+      iterator = ds.make_one_shot_iterator()
+      next_element = iterator.get_next()
+      i = 0
+      with tf.train.MonitoredTrainingSession() as sess:
+        while not sess.should_stop():
+          image, label = sess.run(next_element)
+          label = int(label)
+
+          image = np.expand_dims(image * 255, axis=0).astype(np.uint8)
+        
+          dest = os.path.abspath(os.path.join(img_dir, 'img_%s_label-%s.png' % (i, label)))
+          imageio.imwrite(dest, image)
+          path_to_label[dest] = label
+          if ((i+1) % 100) == 0:
+            log.info("Saved %s images to %s" % (i+1, img_dir))
+          
+          if i == params.LIMIT:
+            break
+          i += 1
+        
+      import json
+      with open(os.path.join(params.DATA_BASEDIR, tag, 'path_to_label.json'), 'w') as f:
+        json.dump(path_to_label, f, indent=2)
+    
+    from official.mnist import dataset as mnist_dataset
+    save_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train')
+    save_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test')
+
+  @staticmethod
   def _train(params):
     from official.mnist import dataset as mnist_dataset
     from official.mnist import mnist
