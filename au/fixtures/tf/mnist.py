@@ -170,10 +170,9 @@ class MNistEager(nnmodel.INNModel):
       with tf.train.MonitoredTrainingSession() as sess:
         while not sess.should_stop():
           image, label = sess.run(next_element)
+          image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
           label = int(label)
 
-          image = np.expand_dims(image * 255, axis=0).astype(np.uint8)
-        
           dest = os.path.abspath(os.path.join(img_dir, 'img_%s_label-%s.png' % (i, label)))
           imageio.imwrite(dest, image)
           path_to_label[dest] = label
@@ -308,5 +307,9 @@ class MNistEager(nnmodel.INNModel):
     #   except tf.errors.OutOfRangeError:
     #     break
 
-if __name__ == '__main__':
+def setup_caches():
+  MNistEager.save_datasets_as_png()
   MNistEager.load_or_train()
+
+if __name__ == '__main__':
+  setup_caches()

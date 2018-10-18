@@ -6,7 +6,7 @@ training data and accuracy for convolutional neural networks.
 Named after Aurie Ginsberg
 
 
-pytest au/test -s --runslow
+pytest au -s --runslow -k test_mnist_save_png
 
 
 
