@@ -31,13 +31,27 @@ def create_log(name='au'):
   return _LOGS[name]
 log = create_log()
 
-def tf_create_session(config=None):
+def tf_create_session_config(extra_opts=None):
+  extra_opts = extra_opts or {}
+  
   import tensorflow as tf
-  if config is None:
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    config.allow_soft_placement = True
-    config.log_device_placement = True
+  config = tf.ConfigProto()
+  config.gpu_options.allow_growth = True
+  config.allow_soft_placement = True
+  config.log_device_placement = False
+  
+  # Let the system pick number of threads
+#   config.intra_op_parallelism_threads = 0
+#   config.inter_op_parallelism_threads = 0
+  
+  for k, v in extra_opts.iteritems():
+    setattr(config, k, v)
+  return config
+
+def tf_create_session(config=None):
+  config = config or tf_create_session_config()
+
+  import tensorflow as tf
   sess = tf.Session(config=config)
   return sess
 

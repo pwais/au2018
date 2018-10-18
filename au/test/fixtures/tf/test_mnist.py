@@ -20,10 +20,10 @@ def _setup(monkeypatch):
 def test_mnist_train(monkeypatch):
   _setup(monkeypatch)
 
-  params = mnist.MNistEager.Params()
+  params = mnist.MNIST.Params()
   params.TRAIN_EPOCHS = 1
   params.LIMIT = 10
-  model = mnist.MNistEager.load_or_train(params)
+  model = mnist.MNIST.load_or_train(params)
   
   
   print list(model.iter_activations())
@@ -32,14 +32,14 @@ def test_mnist_train(monkeypatch):
 def test_mnist_save_pngs(monkeypatch):
   _setup(monkeypatch)
   
-  params = mnist.MNistEager.Params()
+  params = mnist.MNIST.Params()
   params.LIMIT = 100
 
-  mnist.MNistEager.save_datasets_as_png(params)
+  mnist.MNist.save_datasets_as_png(params)
   
   TEST_PATH = os.path.join(
                 TEST_TEMPDIR,
-                'data/MNistEager/test/images/img_0_label-7.png') 
+                'data/MNist/test/images/img_0_label-7.png') 
   
   assert os.path.exists(TEST_PATH)
 
