@@ -308,8 +308,8 @@ class MNistEager(nnmodel.INNModel):
     #     break
 
 def setup_caches():
-  MNistEager.save_datasets_as_png()
   MNistEager.load_or_train()
+  MNistEager.save_datasets_as_png()
 
 if __name__ == '__main__':
   setup_caches()

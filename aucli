@@ -53,18 +53,27 @@ class DockerEnv(object):
     except Exception:
       log.info("Not using nvidia-docker")
     
+    env_arg = ''
+    if os.path.exists('my.env'):
+      env_arg = '--env-file my.env' 
+    
     docker = 'nvidia-docker' if have_nvidia_docker else 'docker'
     CMD = """
-      %s run
-        --name %s
+      {docker} run
+        --name {container_name}
         -d -it -P
         --net=host
         -v `pwd`:/opt/au
         -v /:/outer_root
         -w /opt/au
-        --env-file my.env
-        --privileged %s sleep infinity || docker start au2 || true
-    """ % (docker, CONTAINER_NAME, DOCKER_IMAGE)
+        {env_arg}
+        --privileged
+          {docker_image} sleep infinity || docker start {container_name} || true
+    """.format(
+          docker=docker,
+          container_name=CONTAINER_NAME,
+          docker_image=DOCKER_IMAGE,
+          env_arg=env_arg)
     run_cmd(CMD)
     
     # https://github.com/moby/moby/issues/33794#issuecomment-323003975
