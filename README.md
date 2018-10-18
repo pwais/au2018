@@ -10,6 +10,14 @@ pytest au -s --runslow -k test_mnist_save_png
 
 
 
+for today:
+ * get inferences for mnist, mobilenet, and deeplab and/or maskrcnn working
+ * get the above running using sparkdl
+ * make a demo script / unit test
+ * plug in alluxio cache/ dump activations
+
+
+
 build a bridge.
  * try to repro the GAN paper thing wher we can sample from mnist layer and
     generate grad image via guided backprop

@@ -2,7 +2,11 @@ FROM tensorflow/tensorflow:1.10.1-gpu
 
 COPY docker/sources.list /etc/apt/sources.list
 
+## Required for installing things
 RUN apt-get update
+RUN apt-get install -y curl git python-dev wget
+
+
 
 ## Java
 RUN \
@@ -10,6 +14,15 @@ RUN \
   ls -lhat /usr/lib/jvm/java-8-openjdk-amd64 && \
   echo JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 >> /etc/environment
 ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
+
+
+
+## Bazel -- might not need this ...
+RUN \
+  apt-get install -y bash-completion && \
+  wget --progress=bar:force:noscroll https://github.com/bazelbuild/bazel/releases/download/0.16.1/bazel_0.16.1-linux-x86_64.deb && \
+  dpkg -i bazel_0.16.1-linux-x86_64.deb 
+
 
 
 ## Tensorflow
@@ -20,36 +33,9 @@ RUN \
   ldconfig && \
   python -c 'from tensorflow.python.client import device_lib; device_lib.list_local_devices()' 
 
-## Dev tools
-COPY docker/.vimrc /root/.vimrc
-COPY docker/.screenrc /root/.screenrc
-RUN \
-  apt-get update && \
-  apt-get install -y \
-    curl \
-    git \
-    net-tools \
-    screen \
-    ssh \
-    sudo \
-    vim \
-    wget && \
-  curl -LO https://github.com/BurntSushi/ripgrep/releases/download/0.10.0/ripgrep_0.10.0_amd64.deb && \
-  dpkg -i ripgrep_0.10.0_amd64.deb
-
-## Bazel -- might not need this ...
-RUN \
-  apt-get install -y bash-completion && \
-  wget --progress=bar:force:noscroll https://github.com/bazelbuild/bazel/releases/download/0.16.1/bazel_0.16.1-linux-x86_64.deb && \
-  dpkg -i bazel_0.16.1-linux-x86_64.deb 
-  
-
-## Python
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
 
 
-## Spark
+## Spark & Hadoop
 ENV HADOOP_VERSION 2.9.1
 ENV HADOOP_HOME /opt/hadoop
 ENV HADOOP_CONF_DIR $HADOOP_HOME/etc/hadoop
@@ -75,6 +61,8 @@ RUN curl -L --retry 3 \
  && mv /opt/$SPARK_PACKAGE $SPARK_HOME \
  && pip install findspark
 
+
+
 ## Alluxio
 RUN \
   apt-get install -y libfuse-dev && \
@@ -87,6 +75,31 @@ RUN \
   mkdir -p /opt/alluxio-underfs && chmod 777 /opt/alluxio-underfs
 #  mkdir -p /mnt/alluxio-ramdisk && mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk
 COPY docker/alluxio-site.properties /opt/alluxio/conf/alluxio-site.properties
+
+
+
+## Dev tools
+COPY docker/.vimrc /root/.vimrc
+COPY docker/.screenrc /root/.screenrc
+RUN \
+  apt-get update && \
+  apt-get install -y \
+    curl \
+    git \
+    net-tools \
+    screen \
+    ssh \
+    sudo \
+    vim \
+    wget && \
+  curl -LO https://github.com/BurntSushi/ripgrep/releases/download/0.10.0/ripgrep_0.10.0_amd64.deb && \
+  dpkg -i ripgrep_0.10.0_amd64.deb
+
+
+## AU Python
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
+
 
 ## TF Models
 ENV PYTHONPATH $PYTHONPATH:/opt/au/external/tensorflow_models/research:/opt/au/external/tensorflow_models/research/slim:/opt/au/external/tensorflow_models/official:/opt/au/external/tensorflow_models/
@@ -104,8 +117,10 @@ RUN pip install scipy h5py wget Pillow six scikit-image
 
 
 ## Kubespray
-COPY external/kubespray/requirements.txt /tmp/kubespray_requirements.txt
+# See docker/kubespray_requirements.txt for notes
+COPY docker/kubespray_requirements.txt /tmp/kubespray_requirements.txt
 RUN pip install -r /tmp/kubespray_requirements.txt
+
 
 ## Gcloud
 RUN \
@@ -120,5 +135,8 @@ RUN \
 #  apt-get update && \
 #  apt-get install -y gcsfuse
 
-# AU
+
+## AU
 COPY aucli /opt/au/aucli
+WORKDIR /opt/au
+RUN /opt/au/aucli --test-spark 
