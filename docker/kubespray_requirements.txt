@@ -1,0 +1,9 @@
+# To update, do:  cp external/kubespray/requirements.txt docker/kubespray_requirements.txt
+# We have a local copy here b/c docker is not so good about excluding external/ from
+# the docker build context, even when we try to exclude things properly.
+ansible>=2.4.0
+jinja2>=2.9.6
+netaddr
+pbr>=1.6
+ansible-modules-hashivault>=3.9.4
+hvac
