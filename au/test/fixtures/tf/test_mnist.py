@@ -14,7 +14,7 @@ def _setup(monkeypatch):
   monkeypatch.setattr(conf, 'AU_MODEL_CACHE', os.path.join(TEST_TEMPDIR, 'models'))
   monkeypatch.setattr(conf, 'AU_TENSORBOARD_DIR', os.path.join(TEST_TEMPDIR, 'tensorboard'))
   util.mkdir(TEST_TEMPDIR)
-#   util.rm_rf(TEST_TEMPDIR)
+  util.rm_rf(TEST_TEMPDIR)
 
 @pytest.mark.slow
 def test_mnist_train(monkeypatch):
@@ -35,11 +35,11 @@ def test_mnist_save_pngs(monkeypatch):
   params = mnist.MNIST.Params()
   params.LIMIT = 100
 
-  mnist.MNist.save_datasets_as_png(params)
+  mnist.MNIST.save_datasets_as_png(params)
   
   TEST_PATH = os.path.join(
                 TEST_TEMPDIR,
-                'data/MNist/test/images/img_0_label-7.png') 
+                'data/MNIST/test/images/img_0_label-7.png') 
   
   assert os.path.exists(TEST_PATH)
 

@@ -7,3 +7,9 @@
 [submodule "external/tf_cnnvis"]
 	path = external/tf_cnnvis
 	url = https://github.com/pwais/tf_cnnvis
+[submodule "external/probabilistic_unet"]
+	path = external/probabilistic_unet
+	url = https://github.com/SimonKohl/probabilistic_unet
+[submodule "external/batchgenerators"]
+	path = external/batchgenerators
+	url = https://github.com/MIC-DKFZ/batchgenerators

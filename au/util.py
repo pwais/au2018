@@ -130,17 +130,16 @@ def tf_create_session(config=None):
 @contextmanager
 def tf_data_session(dataset, sess=None, config=None):
   import tensorflow as tf
+
+  # Must declare these before the graph gets finalized below
+  iterator = dataset.make_one_shot_iterator()
+  next_element = iterator.get_next()
   
   # Silly way to iterate over a tf.Dataset
   # https://stackoverflow.com/a/47917849
   config = config or tf_create_session_config()
-  sess = sess or tf.train.MonitoredTrainingSession(config=config)
+  sess = sess or tf.train.MonitoredTrainingSession(config=config)  
   with sess as sess:
-    
-    
-    iterator = dataset.make_one_shot_iterator()
-    next_element = iterator.get_next()
-    
     def iter_dataset():
       while not sess.should_stop():
         yield sess.run(next_element)

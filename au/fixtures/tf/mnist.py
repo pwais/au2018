@@ -4,16 +4,10 @@ Based upon tensorflow/models official mnist.py
 https://github.com/tensorflow/models/blob/dfafba4a017c21c19dfdb60e1580f0b2ff5d361f/official/mnist/mnist.py
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
-import time
 
 import tensorflow as tf
 
-from au import conf
 from au import util
 from au.fixtures import nnmodel
 
@@ -77,8 +71,12 @@ def create_model(data_format='channels_last'):
       ])
 
 def model_fn(features, labels, mode, params):
-  """The model_fn argument for creating an Estimator."""
-  model = create_model()#params['data_format'])
+  """The model_fn argument for creating an Estimator.
+  
+  NB: `params` is a dict but unused; Tensorflow requires this parameter
+  (and for it to be named `params`).
+  """
+  model = create_model()#params_dict['data_format'])
   image = features
   if isinstance(image, dict):
     image = features['image']
@@ -101,7 +99,7 @@ def model_fn(features, labels, mode, params):
     optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
 
     # If we are running multi-GPU, we need to wrap the optimizer.
-    #if params.get('multi_gpu'):
+    #if params_dict.get('multi_gpu'):
     #  optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
 
     logits = model(image, training=True)
@@ -377,8 +375,12 @@ class MNIST(nnmodel.INNModel):
         json.dump(path_to_label, f, indent=2)
     
     from official.mnist import dataset as mnist_dataset
-    save_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train')
-    save_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test')
+    
+    # Keep our dataset ops in an isolated graph
+    g = tf.Graph()
+    with g.as_default():
+      save_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train')
+      save_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test')
 
   @staticmethod
   def _train(params):
@@ -451,17 +453,19 @@ class MNIST(nnmodel.INNModel):
 
   @classmethod
   def load_or_train(cls, params=None):
+    log = util.create_log()
+    
     model = MNIST()
     params = params or MNIST.Params()
     model.params = params
 
-#     tf.enable_eager_execution()
-
-    if not os.path.exists(params.MODEL_BASEDIR):
+    if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
       ## Train a model!
       MNIST._train(params)
 #       tf.reset_default_graph()
     
+    
+#     tf.reset_default_graph()
     
     # Load saved model
     # 
@@ -474,6 +478,9 @@ class MNIST(nnmodel.INNModel):
 
     # model.predictor = predictor.from_saved_model(params.MODEL_BASEDIR)
 #     print(model.graph)
+    import pprint
+    log.info("Loaded graph:")
+    log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(tf.get_default_graph())))
     return model
 
   def iter_activations(self):

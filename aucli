@@ -55,7 +55,11 @@ class DockerEnv(object):
     
     env_arg = ''
     if os.path.exists('my.env'):
-      env_arg = '--env-file my.env' 
+      env_arg = '--env-file my.env'
+    
+    # Persist ivy2 / spark jar cache on host
+    IVY2_PERSISTED_DIR = '/tmp/au_ivy2'
+    run_cmd('mkdir -p %s' % IVY2_PERSISTED_DIR)
     
     docker = 'nvidia-docker' if have_nvidia_docker else 'docker'
     CMD = """
@@ -63,8 +67,9 @@ class DockerEnv(object):
         --name {container_name}
         -d -it -P
         --net=host
-        -v `pwd`:/opt/au
-        -v /:/outer_root
+        -v `pwd`:/opt/au:z
+        -v {ivy2_persisted_cache}:/root/.ivy2:z
+        -v /:/outer_root:z
         -w /opt/au
         {env_arg}
         --privileged
@@ -73,7 +78,8 @@ class DockerEnv(object):
           docker=docker,
           container_name=CONTAINER_NAME,
           docker_image=DOCKER_IMAGE,
-          env_arg=env_arg)
+          env_arg=env_arg,
+          ivy2_persisted_cache=IVY2_PERSISTED_DIR)
     run_cmd(CMD)
     
     # https://github.com/moby/moby/issues/33794#issuecomment-323003975
