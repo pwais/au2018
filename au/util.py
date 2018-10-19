@@ -2,21 +2,9 @@ import os
 import shutil
 import sys
 
+from contextlib import contextmanager
 
-## Utils
-
-try:
-  import pathlib
-except ImportError:
-  import pathlib2 as pathlib
-
-def mkdir(path):
-  pathlib.Path(path).mkdir(parents=True, exist_ok=True)
-
-def rm_rf(path):
-  shutil.rmtree(path)
-
-## Logging
+### Logging
 _LOGS = {}
 def create_log(name='au'):
   if name not in _LOGS:
@@ -31,29 +19,20 @@ def create_log(name='au'):
   return _LOGS[name]
 log = create_log()
 
-def tf_create_session_config(extra_opts=None):
-  extra_opts = extra_opts or {}
-  
-  import tensorflow as tf
-  config = tf.ConfigProto()
-  config.gpu_options.allow_growth = True
-  config.allow_soft_placement = True
-  config.log_device_placement = False
-  
-  # Let the system pick number of threads
-#   config.intra_op_parallelism_threads = 0
-#   config.inter_op_parallelism_threads = 0
-  
-  for k, v in extra_opts.iteritems():
-    setattr(config, k, v)
-  return config
 
-def tf_create_session(config=None):
-  config = config or tf_create_session_config()
+### I/O
 
-  import tensorflow as tf
-  sess = tf.Session(config=config)
-  return sess
+try:
+  import pathlib
+except ImportError:
+  import pathlib2 as pathlib
+  # TODO use six?
+
+def mkdir(path):
+  pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+
+def rm_rf(path):
+  shutil.rmtree(path)
 
 def download(uri, dest):
   """Fetch `uri`, which is a file or archive, and put in `dest`, which
@@ -120,4 +99,52 @@ def download(uri, dest):
     # Just move the file
     shutil.move(tempdest.name, dest)
   log.info("Downloaded to %s" % dest)
+
+
+### Tensorflow
+
+def tf_create_session_config(extra_opts=None):
+  extra_opts = extra_opts or {}
+  
+  import tensorflow as tf
+  config = tf.ConfigProto()
+  config.gpu_options.allow_growth = True
+  config.allow_soft_placement = True
+  config.log_device_placement = False
+  
+  # Let the system pick number of threads
+#   config.intra_op_parallelism_threads = 0
+#   config.inter_op_parallelism_threads = 0
+  
+  for k, v in extra_opts.iteritems():
+    setattr(config, k, v)
+  return config
+
+def tf_create_session(config=None):
+  config = config or tf_create_session_config()
+
+  import tensorflow as tf
+  sess = tf.Session(config=config)
+  return sess
+
+@contextmanager
+def tf_data_session(dataset, sess=None, config=None):
+  import tensorflow as tf
+  
+  # Silly way to iterate over a tf.Dataset
+  # https://stackoverflow.com/a/47917849
+  config = config or tf_create_session_config()
+  sess = sess or tf.train.MonitoredTrainingSession(config=config)
+  with sess as sess:
+    
+    
+    iterator = dataset.make_one_shot_iterator()
+    next_element = iterator.get_next()
+    
+    def iter_dataset():
+      while not sess.should_stop():
+        yield sess.run(next_element)
+    yield sess, iter_dataset
+
+
   

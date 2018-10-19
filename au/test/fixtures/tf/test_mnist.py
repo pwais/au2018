@@ -14,7 +14,7 @@ def _setup(monkeypatch):
   monkeypatch.setattr(conf, 'AU_MODEL_CACHE', os.path.join(TEST_TEMPDIR, 'models'))
   monkeypatch.setattr(conf, 'AU_TENSORBOARD_DIR', os.path.join(TEST_TEMPDIR, 'tensorboard'))
   util.mkdir(TEST_TEMPDIR)
-  util.rm_rf(TEST_TEMPDIR)
+#   util.rm_rf(TEST_TEMPDIR)
 
 @pytest.mark.slow
 def test_mnist_train(monkeypatch):

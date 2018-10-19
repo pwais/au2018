@@ -69,7 +69,9 @@ def create_model(data_format='channels_last'):
               activation=tf.nn.relu),
           max_pool,
           l.Flatten(),
-          l.Dense(1024, activation=tf.nn.relu),
+          l.Dense(
+            1024,
+            activation=tf.nn.relu),
           l.Dropout(0.4),
           l.Dense(10)
       ])
@@ -123,7 +125,7 @@ def model_fn(features, labels, mode, params):
         loss=loss,
         train_op=optimizer.minimize(loss, global_step))
 
-  if mode == tf.estimator.ModeKeys.EVAL:
+  elif mode == tf.estimator.ModeKeys.EVAL:
     logits = model(image, training=False)
     loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
     return tf.estimator.EstimatorSpec(
@@ -134,6 +136,14 @@ def model_fn(features, labels, mode, params):
                 tf.metrics.accuracy(
                     labels=labels, predictions=tf.argmax(logits, axis=1)),
         })
+
+def test_dataset(params):
+  from official.mnist import dataset as mnist_dataset
+  test_ds = mnist_dataset.test(params.DATA_BASEDIR)
+  if params.LIMIT >= 0:
+    test_ds = test_ds.take(params.LIMIT)
+  test_ds = test_ds.batch(params.BATCH_SIZE)
+  return test_ds
 
 def mnist_train(params):
   log = util.create_log()
@@ -154,20 +164,18 @@ def mnist_train(params):
       log_step_count_steps=10))
     
   ## Data
-  from official.mnist import dataset as mnist_dataset
   def train_input_fn():
+    from official.mnist import dataset as mnist_dataset
+    
     # Load the datasets
-    train_ds = mnist_dataset.train(params.DATA_BASEDIR).shuffle(60000)
+    train_ds = mnist_dataset.train(params.DATA_BASEDIR)
     if params.LIMIT >= 0:
       train_ds = train_ds.take(params.LIMIT)
-    train_ds = train_ds.batch(params.BATCH_SIZE)
+    train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
     return train_ds
   
   def eval_input_fn():
-    test_ds = mnist_dataset.test(params.DATA_BASEDIR)
-    if params.LIMIT >= 0:
-      test_ds = test_ds.take(params.LIMIT)
-    test_ds = test_ds.batch(params.BATCH_SIZE)
+    test_ds = test_dataset(params)
     # No idea why we return an interator thingy instead of a dataset ...
     return test_ds.make_one_shot_iterator().get_next()
 
@@ -221,7 +229,7 @@ def mnist_train(params):
 #       break
 
   # Export the model
-  image = tf.placeholder(tf.float32, [None, 28, 28])
+  image = tf.placeholder(tf.float32, [None, 28, 28, 1], name='input_image')
   input_fn = tf.estimator.export.build_raw_serving_input_receiver_fn({
       'image': image,
   })
@@ -348,14 +356,9 @@ class MNIST(nnmodel.INNModel):
       util.mkdir(img_dir)
       path_to_label = {}
     
-      # Silly way to iterate over a tf.Dataset
-      # https://stackoverflow.com/a/47917849
-      iterator = ds.make_one_shot_iterator()
-      next_element = iterator.get_next()
       i = 0
-      with tf.train.MonitoredTrainingSession() as sess:
-        while not sess.should_stop():
-          image, label = sess.run(next_element)
+      with util.tf_data_session(ds) as (sess, iter_dataset):
+        for image, label in iter_dataset():
           image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
           label = int(label)
 
@@ -459,6 +462,7 @@ class MNIST(nnmodel.INNModel):
       MNIST._train(params)
 #       tf.reset_default_graph()
     
+    
     # Load saved model
     # 
     # sess = tf.get_default_session() or tf.Session()
@@ -469,22 +473,66 @@ class MNIST(nnmodel.INNModel):
     root.restore(tf.train.latest_checkpoint(params.MODEL_BASEDIR))
 
     # model.predictor = predictor.from_saved_model(params.MODEL_BASEDIR)
-    print(tf.get_default_graph())
+#     print(model.graph)
     return model
 
   def iter_activations(self):
-    from official.mnist import dataset as mnist_dataset
-    test_ds = mnist_dataset.test(self.params.DATA_BASEDIR)
-    if self.params.LIMIT >= 0:
-      test_ds = test_ds.take(self.params.LIMIT)
-    test_ds = test_ds.batch(self.params.BATCH_SIZE)
-    # sess = tf.get_default_session() or tf.Session()
 
-
-
+    config = util.tf_create_session_config()
+    with tf.train.MonitoredTrainingSession(config=config) as sess:
+      
+      # Sometimes saved model / saved graphs are finalized ...
+      sess.graph._unsafe_unfinalize()
+      
+#       tf.keras.summary()
+      
+#       print(tf.contrib.graph_editor.get_tensors(tf.get_default_graph()))
+      
+      dataset = test_dataset(self.params)
+      iterator = dataset.make_one_shot_iterator()
+      images, labels = iterator.get_next()
+      pred = self.tf_model((images, labels), training=False)
+      
+      TENSOR_NAMES = (
+       'sequential/conv2d/Relu:0',
+       'sequential/conv2d_1/Relu:0',
+       'sequential/dense/Relu:0',
+       'sequential/dense_1/MatMul:0',
+      )
+      tensors = [sess.graph.get_tensor_by_name(n) for n in TENSOR_NAMES]
+      
+      args = [pred] + tensors
+      
+      while not sess.should_stop():
+        res = sess.run(args)
+        name_to_val = zip(['predictions'] + list(TENSOR_NAMES), res)
+        yield dict(name_to_val) 
+#         yield {
+#           'pred': ,#args),
+# #           'conv1/Relu:0': tf.keras.activations.get('conv1/Relu:0'),
+# #           'conv2/Relu:0': tf.keras.activations.get('conv2/Relu:0'),
+# #           'fc1/Relu:0': tf.keras.activations.get('fc1/Relu:0'),
+# #           'fc2/Relu:0': tf.keras.activations.get('fc2/Relu:0'),
+#         }
+#     
+#     
+#     with util.tf_data_session(ds) as (sess, iter_dataset):
+#       for images, labels in iter_dataset():
+#         yield self.tf_model(images, training=False)
     
-    for (images, labels) in test_ds:
-      yield self.tf_model(images, training=False)
+#     
+#     from official.mnist import dataset as mnist_dataset
+#     test_ds = mnist_dataset.test(self.params.DATA_BASEDIR)
+#     if self.params.LIMIT >= 0:
+#       test_ds = test_ds.take(self.params.LIMIT)
+#     test_ds = test_ds.batch(self.params.BATCH_SIZE)
+#     # sess = tf.get_default_session() or tf.Session()
+# 
+# 
+# 
+#     import pdb; pdb.set_trace()
+#     for (images, labels) in test_ds:
+#       yield self.tf_model(images, training=False)
 
     # iterator = test_ds.make_one_shot_iterator()
     # #sess.run(iterator.initializer)
