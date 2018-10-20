@@ -47,7 +47,6 @@ RUN curl -L --retry 3 \
   | tar -x -C /opt/ \
  && mv /opt/hadoop-$HADOOP_VERSION $HADOOP_HOME \
  && rm -rf $HADOOP_HOME/share/doc
-COPY docker/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
 ENV SPARK_VERSION 2.3.2
 ENV SPARK_PACKAGE spark-${SPARK_VERSION}-bin-without-hadoop
@@ -60,7 +59,7 @@ RUN curl -L --retry 3 \
   | tar x -C /opt/ \
  && mv /opt/$SPARK_PACKAGE $SPARK_HOME \
  && pip install findspark
-
+COPY docker/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
 
 ## Alluxio
@@ -71,7 +70,7 @@ RUN \
   tar --checkpoint=1000 --checkpoint-action=dot -xzf alluxio-1.8.1-hadoop-2.9-bin.tar.gz -C /opt/ && \
   mv /opt/alluxio-1.8.1-hadoop-2.9 /opt/alluxio && \
   rm /tmp/alluxio-1.8.1-hadoop-2.9-bin.tar.gz && \
-  cp -v /opt/alluxio/client/alluxio-1.8.1-client.jar /opt/spark/jars/ %% \
+  cp -v /opt/alluxio/client/alluxio-1.8.1-client.jar $SPARK_HOME/jars/ && \
   mkdir -p /opt/alluxio-cache && chmod 777 /opt/alluxio-cache && \
   mkdir -p /opt/alluxio-underfs && chmod 777 /opt/alluxio-underfs
 #  mkdir -p /mnt/alluxio-ramdisk && mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk

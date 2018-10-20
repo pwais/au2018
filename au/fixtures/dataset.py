@@ -33,11 +33,11 @@ class ImageRow(object):
     
     if ('_image_bytes' not in kwargs and 
         kwargs.get('image_bytes', '') is not ''):
-      self.image_bytes = kwargs['image_bytes']
+      self._image_bytes = kwargs['image_bytes']
     
     if ('_label_bytes' not in kwargs and
         kwargs.get('label_bytes', '') is not ''):
-      self.label_bytes = kwargs['label_bytes']
+      self._label_bytes = kwargs['label_bytes']
   
   @staticmethod
   def from_path(path, **kwargs):
@@ -129,7 +129,11 @@ class ImageRow(object):
         log.info("... read %s paths ..." % n)
     log.info("... read %s total paths." % n)
   
-  
+  @staticmethod
+  def from_pandas(df, **kwargs):
+    for row in df.to_dict(orient='records'):
+      row.update(**kwargs)
+      yield ImageRow(**row)
   
   DEFAULT_PQ_PARTITION_COLS = ['dataset', 'split']
 

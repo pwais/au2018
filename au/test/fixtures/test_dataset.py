@@ -76,8 +76,34 @@ def test_imagerow_demo(monkeypatch):
   ImageRow.write_to_parquet(train, PQ_TEMPDIR)
   ImageRow.write_to_parquet(test, PQ_TEMPDIR)
   
+  # pyarrow's parquet writer should have created some nice partitioned
+  # directories
+  for split in ('train', 'test'):
+    d = os.path.join(PQ_TEMPDIR, 'dataset=d', 'split=%s' % split) 
+    assert os.path.exists(d)
   
-    
-    
-
+  # Now try reading it back
+  import pandas as pd
+  import pyarrow as pa
+  import pyarrow.parquet as pq
   
+  pa_table = pq.read_table(PQ_TEMPDIR)
+  df = pa_table.to_pandas()
+  
+  # Did we read back the correct images?
+  assert set(df['uri']) == set(r.uri for r in rows)
+  
+  # Are the splits correct?
+  expected_uri_to_split = {}
+  expected_uri_to_split.update((r.uri, r.split) for r in train)
+  expected_uri_to_split.update((r.uri, r.split) for r in test)
+  df_rows = df.loc[:,['uri', 'split']].to_dict(orient='records')
+  actual_uri_to_split = dict((d['uri'], d['split']) for d in df_rows)
+  assert actual_uri_to_split == expected_uri_to_split
+  
+  # Check the table contents; we should see the image bytes are identical
+  # to the files
+  for decoded_row in ImageRow.from_pandas(df):
+    assert os.path.exists(decoded_row.uri)
+    expected_bytes = open(decoded_row.uri, 'rb').read()
+    assert decoded_row.image_bytes == expected_bytes
