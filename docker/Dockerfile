@@ -140,4 +140,4 @@ RUN \
 ## AU
 COPY aucli /opt/au/aucli
 WORKDIR /opt/au
-RUN /opt/au/aucli --test-spark 
+RUN SPARK_LOCAL_IP=127.0.0.1 SPARK_MASTER=local[4] /opt/au/aucli --test-spark 

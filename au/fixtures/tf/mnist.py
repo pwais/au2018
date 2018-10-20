@@ -2,6 +2,10 @@
 
 Based upon tensorflow/models official mnist.py
 https://github.com/tensorflow/models/blob/dfafba4a017c21c19dfdb60e1580f0b2ff5d361f/official/mnist/mnist.py
+
+NB: earlier we tried mnist_eager.py, and it was less code (and much
+simpler code) but a major PITA to interop with anything else.  
+
 """
 
 import os
@@ -177,36 +181,6 @@ def mnist_train(params):
     # No idea why we return an interator thingy instead of a dataset ...
     return test_ds.make_one_shot_iterator().get_next()
 
-  
-    
-  ## Wire up
-    
-#   train_dir = os.path.join(params.TENSORBOARD_BASEDIR, 'train')
-#   test_dir = os.path.join(params.TENSORBOARD_BASEDIR, 'eval')
-#   tf.gfile.MakeDirs(train_dir)
-#   tf.gfile.MakeDirs(test_dir)
-#     
-#     
-# 
-#     # Set up training and evaluation input functions.
-#     def train_input_fn():
-#       """Prepare data for training."""
-#   
-#       # When choosing shuffle buffer sizes, larger sizes result in better
-#       # randomness, while smaller sizes use less memory. MNIST is a small
-#       # enough dataset that we can easily shuffle the full epoch.
-#       ds = dataset.train(flags_obj.data_dir)
-#       ds = ds.cache().shuffle(buffer_size=50000).batch(flags_obj.batch_size)
-#   
-#       # Iterate through the dataset a set number (`epochs_between_evals`) of times
-#       # during each training session.
-#       ds = ds.repeat(flags_obj.epochs_between_evals)
-#       return ds
-# 
-#   def eval_input_fn():
-#     return dataset.test(flags_obj.data_dir).batch(
-#         flags_obj.batch_size).make_one_shot_iterator().get_next()
-
   # Set up hook that outputs training logs every 100 steps.
   from official.utils.logs import hooks_helper
   train_hooks = hooks_helper.get_train_hooks(
@@ -221,105 +195,13 @@ def mnist_train(params):
     eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
     log.info('\nEvaluation results:\n\t%s\n' % eval_results)
 
-#     from official.utils.misc import model_helpers
-#     if model_helpers.past_stop_threshold(flags_obj.stop_threshold,
-#                                          eval_results['accuracy']):
-#       break
-
   # Export the model
+  # TODO do we need this placeholder junk?
   image = tf.placeholder(tf.float32, [None, 28, 28, 1], name='input_image')
   input_fn = tf.estimator.export.build_raw_serving_input_receiver_fn({
       'image': image,
   })
   mnist_classifier.export_savedmodel(params.MODEL_BASEDIR, input_fn)
-
-
-
-
-
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# def loss(logits, labels):
-#   return tf.reduce_mean(
-#       tf.nn.sparse_softmax_cross_entropy_with_logits(
-#           logits=logits, labels=labels))
-# 
-# def compute_accuracy(logits, labels):
-#   predictions = tf.argmax(logits, axis=1, output_type=tf.int64)
-#   labels = tf.cast(labels, tf.int64)
-#   batch_size = int(logits.shape[0])
-#   return tf.reduce_sum(
-#       tf.cast(tf.equal(predictions, labels), dtype=tf.float32)) / batch_size
-# 
-# def train(model, optimizer, dataset, step_counter, log_interval=None):
-#   """Trains model on `dataset` using `optimizer`."""
-# 
-#   log = util.create_log()
-# 
-#   start = time.time()
-#   for (batch, (images, labels)) in enumerate(dataset):
-#     with tf.contrib.summary.record_summaries_every_n_global_steps(
-#         10, global_step=step_counter):
-#       # Record the operations used to compute the loss given the input,
-#       # so that the gradient of the loss with respect to the variables
-#       # can be computed.
-#       with tf.GradientTape() as tape:
-#         logits = model(images, training=True)
-#         loss_value = loss(logits, labels)
-#         tf.contrib.summary.scalar('loss', loss_value)
-#         tf.contrib.summary.scalar('accuracy', compute_accuracy(logits, labels))
-#       grads = tape.gradient(loss_value, model.variables)
-#       optimizer.apply_gradients(
-#           zip(grads, model.variables), global_step=step_counter)
-#       if log_interval and batch % log_interval == 0:
-#         rate = log_interval / (time.time() - start)
-#         log.info('Step #%d\tLoss: %.6f (%d steps/sec)' % (batch, loss_value, rate))
-#         start = time.time()
-# 
-# 
-# def test(model, dataset):
-#   """Perform an evaluation of `model` on the examples from `dataset`."""
-#   avg_loss = tfe.metrics.Mean('loss', dtype=tf.float32)
-#   accuracy = tfe.metrics.Accuracy('accuracy', dtype=tf.float32)
-# 
-#   log = util.create_log()
-# 
-#   for (images, labels) in dataset:
-#     logits = model(images, training=False)
-#     avg_loss(loss(logits, labels))
-#     accuracy(
-#         tf.argmax(logits, axis=1, output_type=tf.int64),
-#         tf.cast(labels, tf.int64))
-#   log.info('Test set: Average loss: %.4f, Accuracy: %4f%%\n' %
-#         (avg_loss.result(), 100 * accuracy.result()))
-#   with tf.contrib.summary.always_record_summaries():
-#     tf.contrib.summary.scalar('loss', avg_loss.result())
-#     tf.contrib.summary.scalar('accuracy', accuracy.result())
 
 
 
