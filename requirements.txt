@@ -1,5 +1,7 @@
 imageio
 keras==2.2.2
+pandas
 pathlib2
 patool
+pyarrow
 pytest

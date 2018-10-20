@@ -1,3 +1,4 @@
+import itertools
 import os
 import shutil
 import sys
@@ -19,6 +20,21 @@ def create_log(name='au'):
   return _LOGS[name]
 log = create_log()
 
+
+### Pythonisms
+
+def ichunked(seq, n):
+  """Generate chunks of `seq` of size (at most) `n`.  More efficient
+  and less junk than itertools recipes version using izip_longest...
+  """
+  n = max(1, n)
+  seq = iter(seq)
+  while True:
+    chunk = tuple(itertools.islice(seq, n))
+    if chunk:
+      yield chunk
+    else:
+      break
 
 ### I/O
 

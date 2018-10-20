@@ -124,7 +124,7 @@ def setup_tf_models():
 
 ## Services
 
-def test_spark():
+def test_spark():  
   log.info("Finding spark ...")
   import findspark
   findspark.init()
@@ -147,6 +147,9 @@ def test_spark():
   pi = 4 * float(count) / num_samples
   log.info("Pi estimate: %s" % pi)
   assert abs(pi - 3.14) < 0.1, "Spark program had an error?"
+  
+  log.info("Testing Alluxio-Spark")
+  run_cmd('SPARK_LOCAL_IP=127.0.0.1 /opt/alluxio/integration/checker/bin/alluxio-checker.sh spark local[4]')
   
 
 # def alluxio_start_master():

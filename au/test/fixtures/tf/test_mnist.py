@@ -3,10 +3,11 @@ import os
 from au import conf
 from au import util
 from au.fixtures.tf import mnist
+from au.test import testconf
 
 import pytest
 
-TEST_TEMPDIR = '/tmp/au_test/test_mnist' 
+TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist') 
 
 def _setup(monkeypatch):
   monkeypatch.setattr(conf, 'AU_CACHE', TEST_TEMPDIR)
@@ -45,10 +46,7 @@ def test_mnist_save_pngs(monkeypatch):
 
   import imageio
   image = imageio.imread(TEST_PATH)
-  expected = imageio.imread(
-                os.path.join(
-                  conf.AU_ROOT,
-                  'au/test/mnist_test_img.png'))
+  expected = imageio.imread(testconf.MNIST_TEST_IMG_PATH)
   
   import numpy as np
   np.testing.assert_array_equal(image, expected)
