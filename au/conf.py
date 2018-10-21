@@ -6,9 +6,17 @@ AU_CACHE = os.environ.get('AU_CACHE', os.path.join(AU_ROOT, 'cache'))
 
 AU_CACHE_TMP = os.environ.get('AU_CACHE_TMP', os.path.join(AU_CACHE, 'tmp'))
 
+# AU_IMAGE_TABLE_ROOT = os.environ.get(
+#                     'AU_IMAGE_TABLE_ROOT',
+#                     os.path.join(AU_CACHE, 'image_table'))
+
 AU_DATA_CACHE = os.environ.get(
                     'AU_DATA_CACHE',
                     os.path.join(AU_CACHE, 'data'))
+
+AU_TABLE_CACHE = os.environ.get(
+                    'AU_TABLE_CACHE',
+                    os.path.join(AU_CACHE, 'tables'))
 
 AU_MODEL_CACHE = os.environ.get(
                     'AU_MODEL_CACHE',

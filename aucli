@@ -72,7 +72,6 @@ class DockerEnv(object):
         -v /:/outer_root:z
         -w /opt/au
         {env_arg}
-        --privileged
           {docker_image} sleep infinity || docker start {container_name} || true
     """.format(
           docker=docker,

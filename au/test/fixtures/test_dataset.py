@@ -32,8 +32,7 @@ def test_imagerow_demo(monkeypatch):
     'split': '',
     'uri': '',
     'image_bytes': '',
-    'label_type': '',
-    'label_bytes': '',
+    'label': '',
   }
   assert ImageRow().to_dict() == empty_row_as_dict
   
@@ -60,7 +59,15 @@ def test_imagerow_demo(monkeypatch):
             conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
             dataset='d')
   rows = list(rows)
-  assert len(rows) > 4
+  assert len(rows) >= 6
+  
+#   # Rows can have labels of various types, too
+#   rows[0].label = 'fake_label'
+#   rows[1].label = 4 # fake label
+#   rows[2].label = [1, 2]
+#   rows[3].label = np.array([1, 2])
+#   rows[4].label = {'key': 'value'}
+  
   train = rows[:4]
   test = rows[4:]
   
@@ -107,3 +114,19 @@ def test_imagerow_demo(monkeypatch):
     assert os.path.exists(decoded_row.uri)
     expected_bytes = open(decoded_row.uri, 'rb').read()
     assert decoded_row.image_bytes == expected_bytes
+
+
+  ## We can also dump sets of rows as PNGs partitioned by dataset 
+  with monkeypatch.context() as m: 
+    m.setattr(conf, 'AU_DATA_CACHE', testconf.TEST_TEMPDIR_ROOT)
+    ImageRow.write_to_pngs(rows)
+
+    def expect_file(relpath, uri_to_expected):
+      path = os.path.join(testconf.TEST_TEMPDIR_ROOT, relpath) 
+      assert os.path.exists(path)
+      expected_bytes = open(uri_to_expected, 'rb').read()
+      actual_bytes = open(path, 'rb').read()
+      assert expected_bytes == actual_bytes
+
+    expect_file('d/train/img_0.png', train[0].uri)
+    expect_file('d/test/img_4.png', test[0].uri)

@@ -8,11 +8,13 @@ simpler code) but a major PITA to interop with anything else.
 
 """
 
+import itertools
 import os
 
 import tensorflow as tf
 
 from au import util
+from au.fixtures import dataset
 from au.fixtures import nnmodel
 
 ## From mnist.py
@@ -222,47 +224,62 @@ class MNIST(nnmodel.INNModel):
     self.tf_model = None
     self.predictor = None
 
-  @staticmethod
-  def save_datasets_as_png(params=None):   
-    params = params or MNIST.Params()
-    
-    log = util.create_log()
-    
-    def save_dataset(ds, tag):
-      import imageio
-      import numpy as np
-      
-      img_dir = os.path.join(params.DATA_BASEDIR, tag, 'images')
-      util.mkdir(img_dir)
-      path_to_label = {}
-    
-      i = 0
-      with util.tf_data_session(ds) as (sess, iter_dataset):
-        for image, label in iter_dataset():
-          image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
-          label = int(label)
+#   @staticmethod
+#   def save_datasets_as_pq(params=None):
+#     params = params or MNIST.Params()
+#     
+#     log = util.create_log()
+#     
+#     
 
-          dest = os.path.abspath(os.path.join(img_dir, 'img_%s_label-%s.png' % (i, label)))
-          imageio.imwrite(dest, image)
-          path_to_label[dest] = label
-          if ((i+1) % 100) == 0:
-            log.info("Saved %s images to %s" % (i+1, img_dir))
-          
-          if i == params.LIMIT:
-            break
-          i += 1
-        
-      import json
-      with open(os.path.join(params.DATA_BASEDIR, tag, 'path_to_label.json'), 'w') as f:
-        json.dump(path_to_label, f, indent=2)
-    
-    from official.mnist import dataset as mnist_dataset
-    
-    # Keep our dataset ops in an isolated graph
-    g = tf.Graph()
-    with g.as_default():
-      save_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train')
-      save_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test')
+  
+
+  
+
+  @staticmethod
+  def insert_datasets_to_image_table(params=None):
+    dataset.ImageRow.insert_to_image_table(
+        MNIST.datasets_iter_image_rows(params=params))
+#     
+#     params = params or MNIST.Params()
+#     
+#     log = util.create_log()
+#     
+#     def save_dataset(ds, split):
+#       import imageio
+#       import numpy as np
+#       
+#       img_dir = os.path.join(params.DATA_BASEDIR, split, 'images')
+#       util.mkdir(img_dir)
+#       path_to_label = {}
+#     
+#       i = 0
+#       with util.tf_data_session(ds) as (sess, iter_dataset):
+#         for image, label in iter_dataset():
+#           image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
+#           label = int(label)
+# 
+#           dest = os.path.abspath(os.path.join(img_dir, 'img_%s_label-%s.png' % (i, label)))
+#           imageio.imwrite(dest, image)
+#           path_to_label[dest] = label
+#           if ((i+1) % 100) == 0:
+#             log.info("Saved %s images to %s" % (i+1, img_dir))
+#           
+#           if i == params.LIMIT:
+#             break
+#           i += 1
+#         
+#       import json
+#       with open(os.path.join(params.DATA_BASEDIR, split, 'path_to_label.json'), 'w') as f:
+#         json.dump(path_to_label, f, indent=2)
+#     
+#     from official.mnist import dataset as mnist_dataset
+#     
+#     # Keep our dataset ops in an isolated graph
+#     g = tf.Graph()
+#     with g.as_default():
+#       save_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train')
+#       save_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test')
 
   @staticmethod
   def _train(params):
@@ -432,9 +449,61 @@ class MNIST(nnmodel.INNModel):
     #   except tf.errors.OutOfRangeError:
     #     break
 
+class MNISTDataset(dataset.ImageTable):
+  TABLE_NAME = 'MNIST'
+  
+  @classmethod
+  def datasets_iter_image_rows(cls, params=None):
+    params = params or MNIST.Params()
+    
+    log = util.create_log()
+    
+    def gen_dataset(ds, split):
+      import imageio
+      import numpy as np
+    
+      n = 0
+      with util.tf_data_session(ds) as (sess, iter_dataset):
+        for image, label in iter_dataset():
+          image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
+          label = int(label)
+          row = dataset.ImageRow.from_np_img_labels(
+                                      image,
+                                      label,
+                                      dataset=cls.TABLE_NAME,
+                                      split=split,
+                                      uri='mnist_%s_%s' % (split, n))
+          yield row
+          
+          if params.LIMIT >= 0 and n == params.LIMIT:
+            break
+          n += 1
+          if n % 100 == 0:
+            log.info("Read %s records from tf.Dataset" % n)
+    
+    from official.mnist import dataset as mnist_dataset
+    
+    # Keep our dataset ops in an isolated graph
+    g = tf.Graph()
+    with g.as_default():
+      gens = itertools.chain(
+          gen_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train'),
+          gen_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test'))
+      for row in gens:
+        yield row
+  
+  @classmethod
+  def save_datasets_as_png(cls, params=None):
+    dataset.ImageRow.write_to_pngs(
+        cls.datasets_iter_image_rows(params=params))
+  
+  @classmethod
+  def init(cls, params=None):
+    cls.save_to_image_table(cls.datasets_iter_image_rows(params=params))
+
 def setup_caches():
   MNIST.load_or_train()
-  MNIST.save_datasets_as_png()
+  MNISTDataset.init()
 
 if __name__ == '__main__':
   setup_caches()

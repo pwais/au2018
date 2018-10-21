@@ -30,23 +30,37 @@ def test_mnist_train(monkeypatch):
   print list(model.iter_activations())
 
 @pytest.mark.slow
-def test_mnist_save_pngs(monkeypatch):
+def test_mnist_dataset(monkeypatch):
   _setup(monkeypatch)
+  
+  
   
   params = mnist.MNIST.Params()
   params.LIMIT = 100
-
-  mnist.MNIST.save_datasets_as_png(params)
   
+  mnist.MNISTDataset.init(params=params)
+  
+  rows = mnist.MNISTDataset.get_rows_by_uris(
+                                  ('mnist_train_0',
+                                   'mnist_test_0',
+                                   'not_in_mnist'))
+  assert len(rows) == 2
+  rows = sorted(rows)
+  assert rows[0].uri == 'mnist_test_0'
+  assert rows[1].uri == 'mnist_train_0'
+  expected_bytes = open(testconf.MNIST_TEST_IMG_PATH, 'rb').read()
+  assert rows[0].image_bytes == expected_bytes
+
+
+  mnist.MNISTDataset.save_datasets_as_png(params=params)
   TEST_PATH = os.path.join(
                 TEST_TEMPDIR,
-                'data/MNIST/test/images/img_0_label-7.png') 
-  
+                'data/MNIST/test/MNIST-test-label_7-mnist_test_0.png') 
   assert os.path.exists(TEST_PATH)
 
   import imageio
-  image = imageio.imread(TEST_PATH)
   expected = imageio.imread(testconf.MNIST_TEST_IMG_PATH)
-  
+
   import numpy as np
+  image = imageio.imread(TEST_PATH)
   np.testing.assert_array_equal(image, expected)
