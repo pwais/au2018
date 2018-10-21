@@ -246,8 +246,8 @@ class ImageRow(object):
     log.info("... wrote %s total PNGs to %s ." % (n, dest_root))  
       
 class ImageTable(object):
-  """A table of images (can handle multiple datasets;  perhaps use one table
-  per family of experiments).  Persisted as parquet."""
+  """A (partitioned Parquet) table of images (perhaps use one table
+  per dataset / label type)."""
   
   TABLE_NAME = 'default'
   ROWS_PER_FILE = 100
@@ -255,9 +255,23 @@ class ImageTable(object):
   @classmethod
   def init(cls):
     """Subclasses should override to create a dataset from scratch
-    (e.g. download images, create a table, etc)
+    (e.g. download images, create a table, etc).  The base class
+    is just a bunch of images from ImageNet.
     """
-    pass
+    rows = ImageRow.rows_from_images_dir(
+                      conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
+                      dataset=cls.TABLE_NAME)
+    rows = list(rows)
+    
+    import json
+    with open(conf.AU_IMAGENET_SAMPLE_LABELS_PATH, 'rb') as f:
+      fname_to_label = json.load(f)
+    
+    for row in rows:
+      fname = row.uri.split('/')[-1]
+      row.label = fname_to_label[fname]
+    
+    cls.save_to_image_table(rows)
   
   @classmethod
   def table_root(cls):
@@ -282,6 +296,8 @@ class ImageTable(object):
     df = pa_table.to_pandas()
     matching = df[df.uri.isin(uris)]
     return list(ImageRow.from_pandas(matching))
+  
+  
     
 #   @classmethod
 #   def show_stats(cls, spark=None):

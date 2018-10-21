@@ -26,6 +26,14 @@ AU_TENSORBOARD_DIR = os.environ.get(
                     'AU_TENSORBOARD_DIR',
                     os.path.join(AU_CACHE, 'tensorboard'))
 
+AU_IMAGES_SAMPLE = os.environ.get(
+                'AU_IMAGENET_SAMPLE',
+                os.path.join(AU_ROOT, 'au', 'fixtures', 'images'))
+
 AU_IMAGENET_SAMPLE_IMGS_DIR = os.environ.get(
                 'AU_IMAGENET_SAMPLE_IMGS_DIR',
-                os.path.join(AU_ROOT, 'au', 'fixtures', 'images', 'imagenet'))
+                os.path.join(AU_IMAGES_SAMPLE, 'imagenet'))
+
+AU_IMAGENET_SAMPLE_LABELS_PATH = os.environ.get(
+                'AU_IMAGENET_SAMPLE_LABELS_PATH',
+                os.path.join(AU_IMAGES_SAMPLE, 'imagenet_fname_to_label.json'))

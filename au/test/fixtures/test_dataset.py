@@ -6,6 +6,7 @@ import numpy as np
 from au import conf
 from au import util
 from au.fixtures.dataset import ImageRow
+from au.fixtures.dataset import ImageTable
 from au.test import testconf
 
 def test_imagerow_demo(monkeypatch):
@@ -130,3 +131,27 @@ def test_imagerow_demo(monkeypatch):
 
     expect_file('d/train/img_0.png', train[0].uri)
     expect_file('d/test/img_4.png', test[0].uri)
+
+def test_imagetable_demo(monkeypatch):
+  
+  TABLE_TEMPDIR = os.path.join(
+                      testconf.TEST_TEMPDIR_ROOT,
+                      'ImageTable_pq_demo')
+  util.mkdir(TABLE_TEMPDIR)
+  util.rm_rf(TABLE_TEMPDIR)
+  
+  with monkeypatch.context() as m: 
+    m.setattr(conf, 'AU_TABLE_CACHE', TABLE_TEMPDIR)
+  
+    ImageTable.init()
+  
+    test_img_path = os.path.join(
+                        conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
+                        '2929331372_398d58807e.jpg')
+    rows = ImageTable.get_rows_by_uris((test_img_path, 'not_in_table'))
+    assert len(rows) == 1
+    row = rows[0]
+    
+    expected_bytes = open(test_img_path, 'rb').read()
+    assert row.image_bytes == expected_bytes
+    assert row.label == 'coffee'
