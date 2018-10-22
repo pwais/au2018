@@ -134,7 +134,7 @@ class ImageRow(object):
     toks = (
       self.dataset,
       self.split,
-      'label_%s' % self.label if has_fnamable_label else '',
+      'label_%s' % str(self.label).replace(' ', '-') if has_fnamable_label else '',
       self.uri.split('/')[-1] if self.uri else '',
     )
     
@@ -254,21 +254,51 @@ class ImageRow(object):
 
 ## Ops & Utils
 
+import cv2
+
+def _make_have_target_chan(img, nchan):
+  shape = img.shape
+  if len(shape) == 2:
+    img = np.expand_dims(img, axis=-1)
+  elif len(shape) != 3:
+    raise ValueError("Hmm input image has shape: %s" % (shape,))
+  
+  shape = img.shape  
+  if shape[-1] == nchan:
+    return img
+  elif nchan == 1:
+    if len(shape) == 3 and shape[-1] == 3:
+      return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    else:
+      raise ValueError("TODO input image has != 3 chan %s" % (shape,))
+  elif nchan == 3:
+    if len(shape) == 3 and shape[-1] == 1:
+      return np.stack([img, img, img], axis=-1)
+    else:
+      raise ValueError("TODO input image has != 1 chan %s" % (shape,))
+  else:
+    raise ValueError("TODO idk yet %s %s" % (nchan, shape,))
+
 class FillNormalized(object):
-  def __init__(self, target_size=None, norm_func=None):
+  def __init__(self, target_hw=None, target_nchan=None, norm_func=None):
     self.norm_func = norm_func
-    self.target_size = target_size
+    self.target_hw = target_hw
+    self.target_nchan = target_nchan
     self.thruput = util.ThruputObserver(
                             name='FillNormalized',
                             log_on_del=True)
-    
-    import cv2
   
   def __call__(self, row):
     with self.thruput.observe(n=1, num_bytes=len(row.image_bytes)):
       normalized = row.as_numpy()
-      if self.target_size is not None:
-        normalized = cv2.resize(normalized, self.target_size)
+      
+      if self.target_hw is not None:
+        h, w = self.target_hw
+        normalized = cv2.resize(normalized, (w, h)) # Sneaky, opencv!
+      
+      if self.target_nchan is not None:
+        normalized = _make_have_target_chan(normalized, self.target_nchan)
+      
       if self.norm_func is not None:
         normalized = self.norm_func(normalized)
       
@@ -327,15 +357,23 @@ class ImageTable(object):
   @classmethod
   def get_rows_by_uris(cls, uris):
     import pandas as pd
-    import pyarrow as pa
     import pyarrow.parquet as pq
     
     pa_table = pq.read_table(cls.table_root())
     df = pa_table.to_pandas()
     matching = df[df.uri.isin(uris)]
     return list(ImageRow.from_pandas(matching))
-  
-  
+
+  @classmethod
+  def iter_all_rows(cls):
+    """Convenience method (mainly for testing) using Pandas"""
+    import pandas as pd
+    import pyarrow.parquet as pq
+    
+    pa_table = pq.read_table(cls.table_root())
+    df = pa_table.to_pandas()
+    for row in ImageRow.from_pandas(df):
+      yield row
 
 #   @classmethod
 #   def show_stats(cls, spark=None):
@@ -364,7 +402,7 @@ and we'll wanna add maskrcnn mebbe ?
 SPARK_LOCAL_IP=127.0.0.1 $SPARK_HOME/bin/pyspark --packages databricks:tensorframes:0.5.0-s_2.11 --packages databricks:spark-deep-learning:1.2.0-spark2.3-s_2.11
 
 
-"""
+
 
 
 class DatasetFactoryBase(object):
@@ -380,3 +418,4 @@ class DatasetFactoryBase(object):
   @classmethod
   def get_ctx_for_entry(cls, entry_id):
     pass
+"""

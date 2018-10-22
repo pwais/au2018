@@ -281,6 +281,8 @@ class MNIST(nnmodel.INNModel):
       self.MOMENTUM = 0.5
       self.TRAIN_EPOCHS = 2
       self.LIMIT = -1
+      self.INPUT_TENSOR_SHAPE = [
+                  None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1]
 
   def __init__(self):
     self.tf_graph = None

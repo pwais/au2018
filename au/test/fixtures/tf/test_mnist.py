@@ -9,19 +9,9 @@ import pytest
 
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist') 
 
-def _setup(monkeypatch):
-  monkeypatch.setattr(conf, 'AU_CACHE', TEST_TEMPDIR)
-  monkeypatch.setattr(conf, 'AU_DATA_CACHE', os.path.join(TEST_TEMPDIR, 'data'))
-  monkeypatch.setattr(conf, 'AU_TABLE_CACHE', os.path.join(TEST_TEMPDIR, 'tables'))
-  monkeypatch.setattr(conf, 'AU_MODEL_CACHE', os.path.join(TEST_TEMPDIR, 'models'))
-  monkeypatch.setattr(conf, 'AU_TENSORBOARD_DIR', os.path.join(TEST_TEMPDIR, 'tensorboard'))
-  
-  util.mkdir(TEST_TEMPDIR)
-  util.rm_rf(TEST_TEMPDIR)
-
 @pytest.mark.slow
 def test_mnist_train(monkeypatch):
-  _setup(monkeypatch)
+  testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
 
   params = mnist.MNIST.Params()
   params.TRAIN_EPOCHS = 1
@@ -33,9 +23,7 @@ def test_mnist_train(monkeypatch):
 
 @pytest.mark.slow
 def test_mnist_dataset(monkeypatch):
-  _setup(monkeypatch)
-  
-  
+  testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
   
   params = mnist.MNIST.Params()
   params.LIMIT = 100

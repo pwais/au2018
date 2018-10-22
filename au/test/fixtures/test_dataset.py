@@ -157,6 +157,8 @@ def test_imagetable_demo(monkeypatch):
     expected_bytes = open(test_img_path, 'rb').read()
     assert row.image_bytes == expected_bytes
     assert row.label == 'coffee'
+    
+    assert len(list(ImageTable.iter_all_rows())) == 6
 
 class TestFillNormalized(object):
   def test_identity(self):

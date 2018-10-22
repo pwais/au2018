@@ -25,6 +25,9 @@ class INNModel(object):
 
       # For tensorflow models
       self.INPUT_TENSOR_SHAPE = [None, None, None, None]
+      
+      # For batching inference
+      self.INFERENCE_BATCH_SIZE = 10
   
   def __init__(self):
     self.params = INNModel.ParamsBase()
@@ -43,7 +46,7 @@ class TFInferenceGraphFactory(object):
   
   def create_inference_graph(self, input_image, base_graph):
     """Create and return an inference graph based upon `base_graph`.
-    Use `input_image` as a tensor of uint8 [batch, width, height, chan]
+    Use `input_image` as a tensor of uint8 [batch, height, width, chan]
     that respects `params.INPUT_TENSOR_SHAPE`.  
     
     Subclasses can use `make_normalize_ftor()` below to specify how to
@@ -54,7 +57,12 @@ class TFInferenceGraphFactory(object):
     return base_graph
   
   def make_normalize_ftor(self):
-    return dataset.FillNormalized()
+    input_dims = self.input_tensor_shape
+    target_hw = (input_dims[1], input_dims[2])
+    target_nchan = input_dims[3]
+    return dataset.FillNormalized(
+                        target_hw=target_hw,
+                        target_nchan=target_nchan)
   
 #   @property
 #   def input(self):
@@ -66,9 +74,15 @@ class TFInferenceGraphFactory(object):
     return self.params.INPUT_TENSOR_SHAPE
   
   @property
+  def batch_size(self):
+    return self.params.INFERENCE_BATCH_SIZE
+  
+  @property
   def output_names(self):
     return tuple()
 
+
+## Utils
 
 class FillActivationsBase(object):
   
@@ -86,7 +100,7 @@ class FillActivationsBase(object):
     for row in iter_imagerows:
       yield row
       
-class FillActivationsTFDataset(object):
+class FillActivationsTFDataset(FillActivationsBase):
   
   def __call__(self, iter_imagerows):
     self.overall_thruput.start_block()
@@ -97,9 +111,7 @@ class FillActivationsTFDataset(object):
     log = util.create_log()
     
     graph = tf.Graph()
-    
-    total_rows = 0
-    total_bytes = 0
+    total_rows_bytes = [0, 0]
     processed_rows = Queue.Queue()
     def iter_normalized_np_images():
       normalize = self.tigraph_factory.make_normalize_ftor()
@@ -107,8 +119,8 @@ class FillActivationsTFDataset(object):
         row = normalize(row)
         
         processed_rows.put(row, block=True)
-        total_rows += 1
-        total_bytes += row.attrs['normalized'].nbytes
+        total_rows_bytes[0] += 1
+        total_rows_bytes[1] += row.attrs['normalized'].nbytes
         
         yield row.attrs['normalized']
     
@@ -123,11 +135,15 @@ class FillActivationsTFDataset(object):
     # Python execution won't block inference if inference dominates. To achieve
     # multi-threaded I/O, we lean on Spark. 
     with graph.as_default():
-      dataset = tf.Dataset.from_generator(
-                     iter_normalized_np_images,
-                     tf.uint8,
-                     self.tigraph_factory.input_tensor_shape)
-      input_image = dataset.make_one_shot_iterator().get_next()
+      # Hack: let us handle batch size here ...
+      input_shape = list(self.tigraph_factory.input_tensor_shape)
+      input_shape = input_shape[1:]
+      d = tf.data.Dataset.from_generator(
+                      iter_normalized_np_images,
+                      tf.uint8,
+                      input_shape)
+      d = d.batch(self.tigraph_factory.batch_size)
+      input_image = d.make_one_shot_iterator().get_next()
     
     final_graph = self.tigraph_factory.create_inference_graph(
                                               input_image,
@@ -138,10 +154,14 @@ class FillActivationsTFDataset(object):
       
       # TODO: can we just use vanilla Session? & handle a tf.Dataset Stop?
       with tf.train.MonitoredTrainingSession(config=config) as sess:
-        log.info("Session devices: %s" % ','.join(
-                                  (d.name for d in sess.list_devices())))
+#         log.info("Session devices: %s" % ','.join(
+#                                   (d.name for d in sess.list_devices())))
         
         tensors_to_eval = self.tigraph_factory.output_names
+        
+#         import pprint
+#         log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(final_graph)))
+        
         while not sess.should_stop():
           with self.tf_thruput.observe():
             result = sess.run(tensors_to_eval)
@@ -150,12 +170,13 @@ class FillActivationsTFDataset(object):
           batch_size = result[0].shape[0]
           for n in range(batch_size):
             row = processed_rows.get(block=True)
-            name_val = zip(
+            activation_to_val = dict(
                         (name, result[i][n,...])
                         for i, name in enumerate(tensors_to_eval))
-            row.attrs['activation_to_val'] = dict(name_val)
+            row.attrs['activation_to_val'] = activation_to_val
             yield row
     
+    total_rows, total_bytes = total_rows_bytes
     self.tf_thruput.update_tallies(n=total_rows, num_bytes=total_bytes)
     self.overall_thruput.stop_block(n=total_rows, num_bytes=total_bytes)
 
