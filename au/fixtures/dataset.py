@@ -9,6 +9,10 @@ from au import conf
 from au.util import create_log
 from au import util
 
+##
+## Images
+##
+
 class ImageRow(object):
   """For expected usage, see `test_imagerow_demo`"""
   
@@ -22,6 +26,7 @@ class ImageRow(object):
     '_cached_image_fobj',
     
     'label',
+    'attrs',
 #     '_label_bytes', # NB: see property label and label_bytes
 #     '_cached_label',
 #     '_cached_label_arr',
@@ -205,7 +210,7 @@ class ImageRow(object):
       # Pandas wants dicts
       if isinstance(r, ImageRow):
         row_chunk = [r.to_dict() for r in row_chunk]
-#       import ipdb; ipdb.set_trace()
+
       df = pd.DataFrame(row_chunk)
       table = pa.Table.from_pandas(df)
       util.mkdir(dest_dir)
@@ -244,7 +249,40 @@ class ImageRow(object):
       if n % 100 == 0:
         log.info("... write %s PNGs ..." % n)
     log.info("... wrote %s total PNGs to %s ." % (n, dest_root))  
+
+
+
+## Ops & Utils
+
+class FillNormalized(object):
+  def __init__(self, target_size=None, norm_func=None):
+    self.norm_func = norm_func
+    self.target_size = target_size
+    self.thruput = util.ThruputObserver(
+                            name='FillNormalized',
+                            log_on_del=True)
+    
+    import cv2
+  
+  def __call__(self, row):
+    with self.thruput.observe(n=1, num_bytes=len(row.image_bytes)):
+      normalized = row.as_numpy()
+      if self.target_size is not None:
+        normalized = cv2.resize(normalized, self.target_size)
+      if self.norm_func is not None:
+        normalized = self.norm_func(normalized)
       
+      row.attrs = row.attrs or {}
+      
+      row.attrs.update({
+        'normalized': normalized,
+      })
+    return row
+
+##
+## Tables of images
+##
+
 class ImageTable(object):
   """A (partitioned Parquet) table of images (perhaps use one table
   per dataset / label type)."""
@@ -298,7 +336,7 @@ class ImageTable(object):
     return list(ImageRow.from_pandas(matching))
   
   
-    
+
 #   @classmethod
 #   def show_stats(cls, spark=None):
 #     

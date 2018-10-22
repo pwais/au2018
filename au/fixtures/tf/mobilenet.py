@@ -83,11 +83,10 @@ class Mobilenet(nnmodel.INNModel):
     #ema = tf.train.ExponentialMovingAverage(0.999)
     #vs = ema.variables_to_restore()
     
-    if not model.params.tf_sess:
-      model.params.tf_sess = util.tf_create_session()
+    tf_sess = util.tf_create_session()
     saver = tf.train.Saver()#vs)
     saver.restore(
-        model.params.tf_sess,
+        tf_sess,
         os.path.join(model.params.MODEL_BASEDIR, model.params.CHECKPOINT + '.ckpt'))
     return model
     

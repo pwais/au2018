@@ -2,6 +2,7 @@ import itertools
 import os
 import shutil
 import sys
+import time
 
 from contextlib import contextmanager
 
@@ -35,6 +36,80 @@ def ichunked(seq, n):
       yield chunk
     else:
       break
+
+class ThruputObserver(object):
+  
+  def __init__(self, name='', log_on_del=False):
+    self.n = 0
+    self.num_bytes = 0
+    self.ts = []
+    self.name = name
+    self.log_on_del = log_on_del
+    self._start = None
+  
+  @contextmanager
+  def observe(self, n=0, num_bytes=0):
+    start = time.time()
+    yield
+    end = time.time()
+    
+    self.n += n
+    self.num_bytes += num_bytes
+    self.ts.append(end - start)
+  
+  def start_block(self):
+    self._start = time.time()
+  
+  def update_tallies(self, n=0, num_bytes=0):
+    self.n += n
+    self.num_bytes += num_bytes
+  
+  def stop_block(self, n=0, num_bytes=0):
+    end = time.time()
+    self.n += n
+    self.num_bytes += num_bytes
+    self.ts.append(end - self._start)
+    self._start = None
+  
+  @staticmethod
+  def union(thruputs):
+    u = ThruputObserver()
+    for t in thruputs:
+      u.n += t.n
+      u.num_bytes += t.num_bytes
+      u.ts.extend(t.ts)
+    return u
+  
+  def __str__(self):
+    import numpy as np
+    import tabulate
+
+    gbytes = 1e-9 * self.num_bytes
+    total_time = sum(self.ts) or float('nan')
+
+    stats = (
+      ('N thru', self.n),
+      ('N chunks', len(self.ts)),
+      ('total time (sec)', total_time),
+      ('total GBytes', gbytes),
+      ('overall GBytes/sec', gbytes / total_time),
+      ('Hz', float(self.n) / total_time),
+      ('Latency (per chunk)', ''),
+      ('avg (sec)', np.mean(self.ts)),
+      ('p50 (sec)', np.percentile(self.ts, 50) if self.ts else '-'),
+      ('p95 (sec)', np.percentile(self.ts, 95) if self.ts else '-'),
+      ('p99 (sec)', np.percentile(self.ts, 99) if self.ts else '-'),
+    )
+    summary = tabulate.tabulate(stats)
+    if self.name:
+      summary = self.name + '\n' + summary
+    return summary
+  
+  def __del__(self):
+    if self.log_on_del:
+      log = create_log()
+      log.info('\n' + str(self) + '\n')
+    
 
 ### I/O
 

@@ -52,7 +52,7 @@ gcloud ubuntu-minimal-1604-xenial-v20180814
 cd external/kubespray
 ansible-playbook -v --become -i kubespray/inventory/default/hosts.ini external/kubespray/cluster.yml
 
-
+kubespray -- need to override for nvidia-docker in /etc/ docker default runtime
 ```
 
 

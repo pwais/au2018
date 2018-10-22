@@ -8,6 +8,10 @@ import sys
 # NB: We keep this file independent of the rest of AU intentionally so that
 # it can run w/out the source tree
 
+AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
+DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:v1')
+CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
+
 ## Logging
 import logging
 LOG_FORMAT = "%(asctime)s\t%(name)-4s %(process)d : %(message)s"
@@ -16,14 +20,6 @@ log.setLevel(logging.INFO)
 console_handler = logging.StreamHandler(sys.stderr)
 console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 log.addHandler(console_handler)
-
-AU_ROOT = os.environ.get(
-  'AU_ROOT', 
-  os.path.dirname(os.path.abspath(__file__)))
-DOCKER_IMAGE = os.environ.get(
-                    'AU_DOCKER_IMAGE',
-                    'gcr.io/avian-augury-217704/env:v1')
-CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
 
 ## Utils
 

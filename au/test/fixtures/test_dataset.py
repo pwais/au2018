@@ -5,6 +5,7 @@ import numpy as np
 
 from au import conf
 from au import util
+from au.fixtures.dataset import FillNormalized
 from au.fixtures.dataset import ImageRow
 from au.fixtures.dataset import ImageTable
 from au.test import testconf
@@ -34,6 +35,7 @@ def test_imagerow_demo(monkeypatch):
     'uri': '',
     'image_bytes': '',
     'label': '',
+    'attrs': '',
   }
   assert ImageRow().to_dict() == empty_row_as_dict
   
@@ -155,3 +157,28 @@ def test_imagetable_demo(monkeypatch):
     expected_bytes = open(test_img_path, 'rb').read()
     assert row.image_bytes == expected_bytes
     assert row.label == 'coffee'
+
+class TestFillNormalized(object):
+  def test_identity(self):
+    f = FillNormalized()
+    row = ImageRow.from_path(testconf.MNIST_TEST_IMG_PATH)
+    row = f(row)
+    np.testing.assert_array_equal(row.as_numpy(), row.attrs['normalized'])
+  
+  def test_resize(self):
+    f = FillNormalized(target_size=(14, 14))
+    row = ImageRow.from_path(testconf.MNIST_TEST_IMG_PATH)
+    assert row.as_numpy().shape == (28, 28)
+    
+    row = f(row)
+    assert row.attrs['normalized'].shape == (14, 14)
+    
+  def test_transform(self):
+    def normalize(x):
+      return x - 10
+    f = FillNormalized(norm_func=normalize)
+    row = ImageRow.from_path(testconf.MNIST_TEST_IMG_PATH)
+    row = f(row)
+    expected = row.as_numpy() - 10
+    np.testing.assert_array_equal(expected, row.attrs['normalized'])
+  

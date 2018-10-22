@@ -10,12 +10,15 @@ simpler code) but a major PITA to interop with anything else.
 
 import itertools
 import os
+from collections import OrderedDict
 
 import tensorflow as tf
 
 from au import util
 from au.fixtures import dataset
 from au.fixtures import nnmodel
+
+MNIST_INPUT_SIZE = (28, 28)
 
 ## From mnist.py
 
@@ -209,6 +212,65 @@ def mnist_train(params):
 
 ## Interface
 
+class MNISTGraph(nnmodel.TFInferenceGraphFactory):
+  def __init__(self, params):
+    self.params = params
+    
+  def create_inference_graph(self, input_image, base_graph):
+    log = util.create_log()
+    self.graph = base_graph
+    with self.graph.as_default():
+      # Create ops and load weights
+      self.tf_model = create_model()
+      root = tf.train.Checkpoint(model=self.tf_model)
+      root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
+      
+#       self._input = tf.placeholder(
+#                           tf.uint8,
+#                           [None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1],
+#                           name='au_input_image')
+      
+      self.pred = self.tf_model(tf.cast(input_image, tf.float32), training=False)
+      
+      # Install canonical names
+#       def install(tensor_name, canon_name):
+#         v = tf.identity(
+#                 self.graph.get_tensor_by_name(tensor_name),
+#                 name=canon_name)
+#         return v
+#       install('sequential/conv2d/Relu:0', 'conv1:0')
+#       install('sequential/conv2d_1/Relu:0', 'conv2:0')
+#       install('sequential/dense/Relu:0', 'fc1:0')
+#       install('sequential/dense_1/MatMul:0', 'fc2:0')
+      
+    import pprint
+    log.info("Loaded graph:")
+    log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(self.graph)))
+    return self.graph 
+
+  @property
+  def output_name_to_tensor(self):
+    if not hasattr(self, '_name_to_tensor'):
+      self._name_to_tensor = OrderedDict()
+      
+      TENSOR_NAMES = (
+       'sequential/conv2d/Relu:0',
+       'sequential/conv2d_1/Relu:0',
+       'sequential/dense/Relu:0',
+       'sequential/dense_1/MatMul:0',
+      )
+#       TENSOR_NAMES = (
+#         'conv1',
+#         'conv2',
+#         'fc1',
+#         'fc2',
+#       )
+      for name in TENSOR_NAMES:
+        self._name_to_tensor[name] = self.graph.get_tensor_by_name(name) 
+
+      self._name_to_tensor['predictions'] = self.pred
+    return self._name_to_tensor
+
 class MNIST(nnmodel.INNModel):
 
   class Params(nnmodel.INNModel.ParamsBase):
@@ -221,134 +283,14 @@ class MNIST(nnmodel.INNModel):
       self.LIMIT = -1
 
   def __init__(self):
+    self.tf_graph = None
     self.tf_model = None
     self.predictor = None
 
 #   @staticmethod
-#   def save_datasets_as_pq(params=None):
-#     params = params or MNIST.Params()
-#     
-#     log = util.create_log()
-#     
-#     
-
-  
-
-  
-
-  @staticmethod
-  def insert_datasets_to_image_table(params=None):
-    dataset.ImageRow.insert_to_image_table(
-        MNIST.datasets_iter_image_rows(params=params))
-#     
-#     params = params or MNIST.Params()
-#     
-#     log = util.create_log()
-#     
-#     def save_dataset(ds, split):
-#       import imageio
-#       import numpy as np
-#       
-#       img_dir = os.path.join(params.DATA_BASEDIR, split, 'images')
-#       util.mkdir(img_dir)
-#       path_to_label = {}
-#     
-#       i = 0
-#       with util.tf_data_session(ds) as (sess, iter_dataset):
-#         for image, label in iter_dataset():
-#           image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
-#           label = int(label)
-# 
-#           dest = os.path.abspath(os.path.join(img_dir, 'img_%s_label-%s.png' % (i, label)))
-#           imageio.imwrite(dest, image)
-#           path_to_label[dest] = label
-#           if ((i+1) % 100) == 0:
-#             log.info("Saved %s images to %s" % (i+1, img_dir))
-#           
-#           if i == params.LIMIT:
-#             break
-#           i += 1
-#         
-#       import json
-#       with open(os.path.join(params.DATA_BASEDIR, split, 'path_to_label.json'), 'w') as f:
-#         json.dump(path_to_label, f, indent=2)
-#     
-#     from official.mnist import dataset as mnist_dataset
-#     
-#     # Keep our dataset ops in an isolated graph
-#     g = tf.Graph()
-#     with g.as_default():
-#       save_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train')
-#       save_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test')
-
-  @staticmethod
-  def _train(params):
-#     from official.mnist import dataset as mnist_dataset
-#     from official.mnist import mnist
-# 
-#     # tf.enable_eager_execution()
-    log = util.create_log()
-# 
-#     # Automatically determine device and data_format
-#     #(device, data_format) = ('/gpu:0', 'channels_first')
-#     #if not tf.test.is_gpu_available():
-#     #  (device, data_format) = ('/cpu:0', 'channels_last')
-#     #log.info('Using device %s, and data format %s.' % (device, data_format))
-# 
-#     # Load the datasets
-#     train_ds = mnist_dataset.train(params.DATA_BASEDIR).shuffle(60000)
-#     if params.LIMIT >= 0:
-#       train_ds = train_ds.take(params.LIMIT)
-#     train_ds = train_ds.batch(params.BATCH_SIZE)
-# 
-#     test_ds = mnist_dataset.test(params.DATA_BASEDIR)
-#     if params.LIMIT >= 0:
-#       test_ds = test_ds.take(params.LIMIT)
-#     test_ds = test_ds.batch(params.BATCH_SIZE)
-# 
-#     # Create the model and optimizer
-#     model = create_model('channels_last')
-#     optimizer = tf.train.MomentumOptimizer(params.LEARNING_RATE, params.MOMENTUM)
-# 
-#     # Create directories to which summaries will be written
-#     # tensorboard --logdir=<output_dir>
-#     # can then be used to see the recorded summaries.
-#     train_dir = os.path.join(params.TENSORBOARD_BASEDIR, 'train')
-#     test_dir = os.path.join(params.TENSORBOARD_BASEDIR, 'eval')
-#     tf.gfile.MakeDirs(params.TENSORBOARD_BASEDIR)
-# 
-#     summary_writer = tf.contrib.summary.create_file_writer(
-#       train_dir, flush_millis=10000)
-#     test_summary_writer = tf.contrib.summary.create_file_writer(
-#       test_dir, flush_millis=10000, name='test')
-# 
-#     # Create and restore checkpoint (if one exists on the path)
-#     tf.gfile.MakeDirs(params.MODEL_BASEDIR)
-#     checkpoint_prefix = os.path.join(params.MODEL_BASEDIR, 'ckpt')
-#     step_counter = tf.train.get_or_create_global_step()
-#     checkpoint = tf.train.Checkpoint(
-#       model=model, optimizer=optimizer, step_counter=step_counter)
-#     checkpoint.restore(tf.train.latest_checkpoint(params.MODEL_BASEDIR))
-
-    # Train and evaluate for a set number of epochs.
-    log.info("Training!")
-    mnist_train(params)
-    
-#     # with tf.device(device):
-#     for _ in range(params.TRAIN_EPOCHS):
-#       start = time.time()
-#       with summary_writer.as_default():
-#         train(model, optimizer, train_ds, step_counter, 10)
-#       end = time.time()
-#       log.info('\nTrain time for epoch #%d (%d total steps): %f' %
-#             (checkpoint.save_counter.numpy() + 1,
-#              step_counter.numpy(),
-#              end - start))
-#       with test_summary_writer.as_default():
-#         test(model, test_ds)
-#       checkpoint.save(checkpoint_prefix)
-    # tf.train.write_graph(sess.graph_def, '/tmp/my-model', 'train.pbtxt')
-    log.info("Done training!")
+#   def insert_datasets_to_image_table(params=None):
+#     dataset.ImageRow.insert_to_image_table(
+#         MNIST.datasets_iter_image_rows(params=params))
 
   @classmethod
   def load_or_train(cls, params=None):
@@ -359,60 +301,72 @@ class MNIST(nnmodel.INNModel):
     model.params = params
 
     if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
-      ## Train a model!
-      MNIST._train(params)
-#       tf.reset_default_graph()
-    
-    
-#     tf.reset_default_graph()
-    
-    # Load saved model
-    # 
-    # sess = tf.get_default_session() or tf.Session()
-    model.tf_model = create_model()
-    # saver = tf.train.Saver()
-    # saver.restore(sess, 
-    root = tf.train.Checkpoint(model=model.tf_model)
-    root.restore(tf.train.latest_checkpoint(params.MODEL_BASEDIR))
+      log.info("Training!")
+      mnist_train(params)
+      log.info("Done training!")
 
-    # model.predictor = predictor.from_saved_model(params.MODEL_BASEDIR)
-#     print(model.graph)
-    import pprint
-    log.info("Loaded graph:")
-    log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(tf.get_default_graph())))
+    model.igraph = MNISTGraph(params)
     return model
+#     
+#     
+#     model.tf_graph = tf.Graph()
+#     with model.tf_graph.as_default():
+#       
+#       # Load saved model
+#       # 
+#       # sess = tf.get_default_session() or tf.Session()
+#       model.tf_model = create_model()
+#       # saver = tf.train.Saver()
+#       # saver.restore(sess, 
+#       
+#   
+#       # model.predictor = predictor.from_saved_model(params.MODEL_BASEDIR)
+#   #     print(model.graph)
+#     import pprint
+#     log.info("Loaded graph:")
+#     log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(model.tf_graph)))
+#     return model
 
   def iter_activations(self):
 
-    config = util.tf_create_session_config()
-    with tf.train.MonitoredTrainingSession(config=config) as sess:
-      
-      # Sometimes saved model / saved graphs are finalized ...
-      sess.graph._unsafe_unfinalize()
-      
-#       tf.keras.summary()
-      
-#       print(tf.contrib.graph_editor.get_tensors(tf.get_default_graph()))
-      
+#     igraph = self.igraph_cls(images, labels)
+    
+    with self.igraph.graph.as_default():
       dataset = test_dataset(self.params)
       iterator = dataset.make_one_shot_iterator()
       images, labels = iterator.get_next()
-      pred = self.tf_model((images, labels), training=False)
       
-      TENSOR_NAMES = (
-       'sequential/conv2d/Relu:0',
-       'sequential/conv2d_1/Relu:0',
-       'sequential/dense/Relu:0',
-       'sequential/dense_1/MatMul:0',
-      )
-      tensors = [sess.graph.get_tensor_by_name(n) for n in TENSOR_NAMES]
-      
-      args = [pred] + tensors
-      
-      while not sess.should_stop():
-        res = sess.run(args)
-        name_to_val = zip(['predictions'] + list(TENSOR_NAMES), res)
-        yield dict(name_to_val) 
+      config = util.tf_create_session_config()
+      with tf.train.MonitoredTrainingSession(config=config) as sess:
+        
+        # Sometimes saved model / saved graphs are finalized ...
+#         sess.graph._unsafe_unfinalize()
+        
+  #       tf.keras.summary()
+        
+  #       print(tf.contrib.graph_editor.get_tensors(tf.get_default_graph()))
+        
+        
+#         pred = self.tf_model((images, labels), training=False)
+#         
+#         TENSOR_NAMES = (
+#          'sequential/conv2d/Relu:0',
+#          'sequential/conv2d_1/Relu:0',
+#          'sequential/dense/Relu:0',
+#          'sequential/dense_1/MatMul:0',
+#         )
+#         tensors = [sess.graph.get_tensor_by_name(n) for n in TENSOR_NAMES]
+#         
+#         args = [pred] + tensors
+        args = self.igraph.output_tensor_name_to_t.values()
+        
+        while not sess.should_stop():
+          moof = sess.run(images)
+          import numpy as np
+          moof = np.reshape(moof, (10, 28, 28, 1))
+          res = sess.run(args, feed_dict={self.igraph.input: moof})
+          name_to_val = zip(self.igraph.output_tensor_name_to_t.keys(), res)
+          yield dict(name_to_val)
 #         yield {
 #           'pred': ,#args),
 # #           'conv1/Relu:0': tf.keras.activations.get('conv1/Relu:0'),
@@ -420,34 +374,6 @@ class MNIST(nnmodel.INNModel):
 # #           'fc1/Relu:0': tf.keras.activations.get('fc1/Relu:0'),
 # #           'fc2/Relu:0': tf.keras.activations.get('fc2/Relu:0'),
 #         }
-#     
-#     
-#     with util.tf_data_session(ds) as (sess, iter_dataset):
-#       for images, labels in iter_dataset():
-#         yield self.tf_model(images, training=False)
-    
-#     
-#     from official.mnist import dataset as mnist_dataset
-#     test_ds = mnist_dataset.test(self.params.DATA_BASEDIR)
-#     if self.params.LIMIT >= 0:
-#       test_ds = test_ds.take(self.params.LIMIT)
-#     test_ds = test_ds.batch(self.params.BATCH_SIZE)
-#     # sess = tf.get_default_session() or tf.Session()
-# 
-# 
-# 
-#     import pdb; pdb.set_trace()
-#     for (images, labels) in test_ds:
-#       yield self.tf_model(images, training=False)
-
-    # iterator = test_ds.make_one_shot_iterator()
-    # #sess.run(iterator.initializer)
-    # while True:
-    #   try:
-    #     res = sess.run(self.tf_model)
-    #     yield res
-    #   except tf.errors.OutOfRangeError:
-    #     break
 
 class MNISTDataset(dataset.ImageTable):
   TABLE_NAME = 'MNIST'

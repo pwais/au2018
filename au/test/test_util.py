@@ -19,3 +19,22 @@ def test_ichunked():
   assert list_ichunked((1, 2, 3, 4, 5), 6) == [(1, 2, 3, 4, 5)]
   
   assert list_ichunked('abcde', 4) == [('a', 'b', 'c', 'd'), ('e',)]
+
+def test_thruput_observer():
+  t1 = util.ThruputObserver()
+  assert str(t1)
+  
+  t2 = util.ThruputObserver()
+  
+  import random
+  import time
+  MAX_WAIT = 0.1
+  for _ in range(10):
+    with t2.observe(n=1, num_bytes=1):
+      time.sleep(random.random() * MAX_WAIT)
+  
+  assert str(t2)
+  
+  u = util.ThruputObserver.union((t1, t2))
+  assert str(u) == str(t2)
+  

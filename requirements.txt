@@ -1,7 +1,9 @@
 imageio
 keras==2.2.2
+opencv-python
 pandas
 pathlib2
 patool
 pyarrow
 pytest
+tabulate
