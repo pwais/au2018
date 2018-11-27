@@ -29,7 +29,6 @@ def run_cmd(cmd):
   subprocess.check_call(cmd, shell=True)
   log.info("... done with %s " % cmd)
 
-
 ## Env
 
 class DockerEnv(object):
@@ -213,15 +212,17 @@ def alluxio_start_local():
   
   GCS_ACCESS_KEY_ID = os.environ.get('GCS_ACCESS_KEY_ID')
   GCS_SECRET_ACCESS_KEY = os.environ.get('GCS_SECRET_ACCESS_KEY')
-  if GCS_ACCESS_KEY_ID:
+  AU_GCS_URI = os.environ.get('AU_GCS_URI')
+  if AU_GCS_URI and GCS_ACCESS_KEY_ID:
     log.info("Mounting GCS volume ...")
-    run_cmd("""
+    cmd = """
       /opt/alluxio/bin/alluxio fs mount
-        --option fs.gcs.accessKeyId=%s
-        --option fs.gcs.secretAccessKey=%s
+        --option fs.gcs.accessKeyId={user}
+        --option fs.gcs.secretAccessKey={secret}
         /gcs
-        gs://au2018gs/au2018
-    """ % (GCS_ACCESS_KEY_ID, GCS_SECRET_ACCESS_KEY))
+        {bucket}
+    """.format(user=GCS_ACCESS_KEY_ID, secret=GCS_SECRET_ACCESS_KEY, bucket=AU_GCS_URI)
+    run_cmd(cmd)
   
   ALLUXIO_HOST = os.environ.get('ALLUXIO_MASTER_HOSTNAME', 'localhost')
   log.info("""

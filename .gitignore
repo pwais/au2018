@@ -1,6 +1,8 @@
+# Allow user to store keys here:
+my.env
+
 *.pyc
 *.DS_Store
 .ipynb_checkpoints
 cache
-my.env
 local_cache
