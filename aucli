@@ -1,12 +1,26 @@
 #!/usr/bin/env python
 # vim: tabstop=2 shiftwidth=2 expandtab
 
+DESC = """
+aucli is a tool for boostrapping the AU project.  This tool has limited
+dependencies (e.g. just python) so that it can run w/out the source tree.
+
+## Example Workflow
+Drop into a dockerized development shell:
+  aucli --shell
+
+Now develop!  Run tests:
+  pytest au -s --runslow -k test_mnist_save_png
+
+## (Re)-build the dockerized environment image
+Outside of the dockerized environment, use:
+  aucli --build-env
+
+"""
+
 import os
 import subprocess
 import sys
-
-# NB: We keep this file independent of the rest of AU intentionally so that
-# it can run w/out the source tree
 
 AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
 DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:v1')
@@ -45,6 +59,7 @@ class DockerEnv(object):
     have_nvidia_docker = False
     try:
       run_cmd('nvidia-docker --help')
+      have_nvidia_docker = True
     except Exception:
       log.info("Not using nvidia-docker")
     
@@ -238,7 +253,9 @@ def alluxio_start_local():
 def create_arg_parser():
   import argparse
   
-  parser = argparse.ArgumentParser()
+  parser = argparse.ArgumentParser(
+                      description=DESC,
+                      formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument(
     '--shell', default=False, action='store_true',
     help='Drop into a dockerized dev env shell')

@@ -1,0 +1,34 @@
+[k8s-cluster:children]
+kube-master 	 
+kube-node 	 
+
+[all:vars]
+ansible_ssh_user=au2018survey
+# ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+[all]
+node1 	 ansible_host=35.192.43.233 ip=10.128.0.2
+node2 	 ansible_host=35.225.233.244 ip=10.128.0.3
+node3 	 ansible_host=104.154.132.199 ip=10.128.0.4
+
+[kube-master]
+node1 	 
+node2 	 
+
+[kube-node]
+node1 	 
+node2 	 
+node3 	 
+
+[etcd]
+node1 	 
+node2 	 
+node3 	 
+
+[calico-rr]
+
+[vault]
+node1 	 
+node2 	 
+node3 	 
+

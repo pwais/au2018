@@ -1,6 +1,10 @@
 # Allow user to store keys here:
 my.env
 
+# Allow user to have hosts.ini file, repo should only
+# contain the .example file
+kubespray/inventory/default/hosts.ini
+
 *.pyc
 *.DS_Store
 .ipynb_checkpoints

@@ -1,0 +1,34 @@
+#!/bin/bash
+
+set -eux 
+
+# Install basics for 16.04 image: http://releases.ubuntu.com/16.04/ubuntu-16.04.5-desktop-amd64.iso
+
+apt-get update
+apt-get install -y \
+  curl \
+  git \
+  openssh-server \
+  screen \
+  ssh \
+  vim \
+  wget
+service ssh restart
+ubuntu-drivers autoinstall
+
+curl -fsSL https://get.docker.com | bash
+usermod -aG docker au
+
+# Add the package repositories
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \
+  sudo apt-key add -
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
+  sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+apt-get update
+
+# Install nvidia-docker2 and reload the Docker daemon configuration
+apt-get install -y nvidia-docker2
+pkill -SIGHUP dockerd
+
+
