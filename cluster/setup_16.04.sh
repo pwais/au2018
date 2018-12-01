@@ -16,19 +16,30 @@ apt-get install -y \
 service ssh restart
 ubuntu-drivers autoinstall
 
-curl -fsSL https://get.docker.com | bash
+## Docker
+#curl -fsSL https://get.docker.com | bash
+# kubespray wants this version of docker
+service docker stop || true
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+add-apt-repository \
+   "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+   $(lsb_release -cs) \
+   stable"
+apt-get update
+apt-get install -y docker-ce=18.06.1~ce~3-0~ubuntu
 usermod -aG docker au
 
-# Add the package repositories
+## nvidia-docker
 curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | \
   sudo apt-key add -
 distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
 curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
   sudo tee /etc/apt/sources.list.d/nvidia-docker.list
 apt-get update
-
-# Install nvidia-docker2 and reload the Docker daemon configuration
 apt-get install -y nvidia-docker2
 pkill -SIGHUP dockerd
 
+# Passwordless sudo
+echo "au ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
+echo "Reboot and test with $ nvidia-docker run -it --rm nvidia/cuda:9.0-base nvidia-smi"

@@ -5,8 +5,12 @@ my.env
 # contain the .example file
 kubespray/inventory/default/hosts.ini
 
+# Don't check in user's cluster artifacts
+kubespray/inventory/default/artifacts
+
 *.pyc
 *.DS_Store
 .ipynb_checkpoints
+.vscode
 cache
 local_cache
