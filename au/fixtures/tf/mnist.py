@@ -230,7 +230,9 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
 #                           [None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1],
 #                           name='au_input_image')
       
-      self.pred = self.tf_model(tf.cast(input_image, tf.float32), training=False)
+      self.pred = self.tf_model(
+                      tf.cast(input_image, tf.float32),
+                      training=False)
       
       # Install canonical names
 #       def install(tensor_name, canon_name):
@@ -329,9 +331,13 @@ class MNIST(nnmodel.INNModel):
 #     log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(model.tf_graph)))
 #     return model
 
+  def compute_activations_df(self, imagerow_df):
+    pass
+
+
   def iter_activations(self):
 
-#     igraph = self.igraph_cls(images, labels)
+    #     igraph = self.igraph_cls(images, labels)
     
     with self.igraph.graph.as_default():
       dataset = test_dataset(self.params)

@@ -37,4 +37,7 @@ def test_thruput_observer():
   
   u = util.ThruputObserver.union((t1, t2))
   assert str(u) == str(t2)
-  
+
+def test_spark():
+  with util.Spark.sess() as spark:
+    util.Spark.test_pi(spark)

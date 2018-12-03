@@ -39,8 +39,9 @@ def test_activations_sobel(monkeypatch):
   tigraph_factory = Sobel.GraphFactory(params)
   filler = nnmodel.FillActivationsTFDataset(tigraph_factory)
   
-  irows = dataset.ImageTable.iter_all_rows()
-  filled = list(filler(irows))
+  rows = list(dataset.ImageTable.iter_all_rows())
+  filled = list(filler(rows))
+  assert rows and len(rows) == len(filled)
   
   for row in filled:
     assert row.attrs is not ''
@@ -80,11 +81,8 @@ def test_activations_sobel(monkeypatch):
       assert sobel_y_bytes == open(SOBEL_Y_TEST_IMG_PATH).read()
       assert sobel_x_bytes == open(SOBEL_X_TEST_IMG_PATH).read()
     
-    # For debugging
-#     visible_path = row.to_debug()
-#     imageio.imwrite(visible_path + '.sobel_x.png', sobel_x)
-#     imageio.imwrite(visible_path + '.sobel_y.png', sobel_y)
-#     print visible_path
-
-    
-    
+      # For debugging
+      visible_path = row.to_debug()
+      imageio.imwrite(visible_path + '.sobel_x.png', sobel_x)
+      imageio.imwrite(visible_path + '.sobel_y.png', sobel_y)
+      print("Debug images saved to %s" % visible_path)

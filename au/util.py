@@ -237,4 +237,58 @@ def tf_data_session(dataset, sess=None, config=None):
     yield sess, iter_dataset
 
 
+### Spark
+
+class Spark(object):
+  MASTER = None
+  CONF = None
+  CONF_KV = None
+  HIVE = False
   
+  @classmethod
+  def _setup(cls):
+    log.info("Finding spark ...")
+    import findspark
+    findspark.init()
+    log.info("... found!")
+  
+  @classmethod
+  def getOrCreate(cls):
+    cls._setup()
+
+    import pyspark
+    from pyspark import sql
+    builder = sql.SparkSession.builder
+    if cls.MASTER is not None:
+      builder = builder.setMaster(cls.Master)
+    if cls.CONF is not None:
+      builder = builder.config(conf=conf)
+    if cls.CONF_KV is not None:
+      for k, v in cls.CONF_KV.iteritems():
+        builder = builder.config(k, v)
+    if cls.HIVE:
+      # TODO fixme see mebbe https://creativedata.atlassian.net/wiki/spaces/SAP/pages/82255289/Pyspark+-+Read+Write+files+from+Hive
+      # builder = builder.config("hive.metastore.warehouse.dir", '/tmp') 
+      # builder = builder.config("spark.sql.warehouse.dir", '/tmp')
+      builder = builder.enableHiveSupport()
+    return builder.getOrCreate()
+  
+  @classmethod
+  @contextmanager
+  def sess(cls):
+    spark = cls.getOrCreate()
+    yield spark
+
+  @staticmethod
+  def test_pi(spark):
+    log.info("Running PI ...")
+    sc = spark.sparkContext
+    num_samples = 1000000
+    def inside(p):
+      import random
+      x, y = random.random(), random.random()
+      return x*x + y*y < 1
+    count = sc.parallelize(range(0, num_samples)).filter(inside).count()
+    pi = 4 * float(count) / num_samples
+    log.info("Pi estimate: %s" % pi)
+    assert abs(pi - 3.14) < 0.1, "Spark program had an error?"

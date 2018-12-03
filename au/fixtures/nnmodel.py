@@ -5,6 +5,7 @@ from au import util
 from au.fixtures import dataset
 
 class INNModel(object):
+  """A fascade for (neural network) models. Probably needs a new name."""
   
   class ParamsBase(object):
     def __init__(self, model_name='INNModel'):
@@ -28,19 +29,25 @@ class INNModel(object):
       
       # For batching inference
       self.INFERENCE_BATCH_SIZE = 10
-  
+
   def __init__(self):
     self.params = INNModel.ParamsBase()
   
   @classmethod
   def load_or_train(self, cls, params=None):
-    raise NotImplementedError
+    """Create and return an instance, optionally training a model
+    from scratch in the process"""
+    return INNModel()
   
   def compute_activations_df(self, imagerow_df):
     raise NotImplementedError
   
 
+
 class TFInferenceGraphFactory(object):
+  """Fascade for creating an inference-oriented graph
+  for a Tensorflow model."""
+
   def __init__(self, params=None):
     self.params = params # ParamsBase
   
@@ -87,6 +94,7 @@ class TFInferenceGraphFactory(object):
 class FillActivationsBase(object):
   
   def __init__(self, tigraph_factory):
+    assert instanceof(tigraph_factory, TFInferenceGraphFactory)
     self.tigraph_factory = tigraph_factory
     clazzname = self.__class__.__name__
     self.overall_thruput = util.ThruputObserver(
@@ -97,10 +105,13 @@ class FillActivationsBase(object):
                               log_on_del=True)
   
   def __call__(self, iter_imagerows):
+    # Identity op; fills nothing!
     for row in iter_imagerows:
       yield row
-      
+
 class FillActivationsTFDataset(FillActivationsBase):
+  """A `FillActivationsBase` impl that leverages Tensorflow
+  tf.Dataset to feed data into a tf.Graph""" 
   
   def __call__(self, iter_imagerows):
     self.overall_thruput.start_block()
@@ -165,11 +176,17 @@ class FillActivationsTFDataset(FillActivationsBase):
         while not sess.should_stop():
           with self.tf_thruput.observe():
             result = sess.run(tensors_to_eval)
+              # NB: processes batch_size rows in one run()
           
           assert len(result) >= 1
           batch_size = result[0].shape[0]
           for n in range(batch_size):
             row = processed_rows.get(block=True)
+              # NB: we expect worker threads to spend most of their time
+              # blocking on the Tensorflow `sess.run()` call above, so
+              # this Queue::get() call should in practice block very rarely.
+              # Confirm using thruput stats (`overall_thruput` vs `tf_thruput`)
+
             activation_to_val = dict(
                         (name, result[i][n,...])
                         for i, name in enumerate(tensors_to_eval))
