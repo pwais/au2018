@@ -58,7 +58,7 @@ class DockerEnv(object):
   def shell(cls):
     have_nvidia_docker = False
     try:
-      run_cmd('nvidia-docker --help')
+      run_cmd('nvidia-docker --help > /dev/null')
       have_nvidia_docker = True
     except Exception:
       log.info("Not using nvidia-docker")

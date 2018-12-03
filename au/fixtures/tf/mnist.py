@@ -434,4 +434,5 @@ def setup_caches():
   MNISTDataset.init()
 
 if __name__ == '__main__':
+  # self-test / demo mode!
   setup_caches()
