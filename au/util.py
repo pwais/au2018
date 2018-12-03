@@ -260,9 +260,9 @@ class Spark(object):
     from pyspark import sql
     builder = sql.SparkSession.builder
     if cls.MASTER is not None:
-      builder = builder.setMaster(cls.Master)
+      builder = builder.master(cls.MASTER)
     if cls.CONF is not None:
-      builder = builder.config(conf=conf)
+      builder = builder.config(conf=cls.CONF)
     if cls.CONF_KV is not None:
       for k, v in cls.CONF_KV.iteritems():
         builder = builder.config(k, v)

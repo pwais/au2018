@@ -1,4 +1,5 @@
 from au import util
+from au.test import testutils
 
 def test_ichunked():
   
@@ -39,5 +40,6 @@ def test_thruput_observer():
   assert str(u) == str(t2)
 
 def test_spark():
-  with util.Spark.sess() as spark:
+  with testutils.LocalSpark.sess() as spark:
     util.Spark.test_pi(spark)
+

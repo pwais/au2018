@@ -1,3 +1,5 @@
+"""Magic pytest file that conf(igures py)test"""
+
 import pytest
 
 def pytest_addoption(parser):
