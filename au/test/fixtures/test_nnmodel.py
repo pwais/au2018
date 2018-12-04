@@ -2,9 +2,12 @@ from au import conf
 from au.fixtures import dataset
 from au.fixtures import nnmodel
 from au.test import testconf
+from au.test import testutils
 
 import os
+import unittest
 
+import pytest
 import tensorflow as tf
 
 class Sobel(nnmodel.INNModel):
@@ -25,9 +28,8 @@ class Sobel(nnmodel.INNModel):
     @property
     def output_names(self):
       return ('sobel:0',)
-  
-def test_activations_sobel(monkeypatch):
-  
+
+def _create_fixture(monkeypatch):
   TEST_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
                       'sobel_test')
@@ -38,12 +40,23 @@ def test_activations_sobel(monkeypatch):
   params = Sobel.Params()
   tigraph_factory = Sobel.GraphFactory(params)
   filler = nnmodel.FillActivationsTFDataset(tigraph_factory)
-  
+
   rows = list(dataset.ImageTable.iter_all_rows())
-  filled = list(filler(rows))
-  assert rows and len(rows) == len(filled)
+  assert rows
+
+  class Fixture(object):
+    pass
+  fixture = Fixture()
+  fixture.rows = rows
+  fixture.filler = filler
+  fixture.tigraph_factory = tigraph_factory
+  return fixture
+
+def _check_rows(fixture, filled_rows):
+  assert len(filled_rows)
+  assert len(fixture.rows) == len(filled_rows)
   
-  for row in filled:
+  for row in filled_rows:
     assert row.attrs is not ''
     assert 'activation_to_val' in row.attrs
     
@@ -54,7 +67,8 @@ def test_activations_sobel(monkeypatch):
     
     if '202228408_eccfe4790e' in row.uri:
     
-      sobel_tensor = activation_to_val[tigraph_factory.output_names[0]]
+      tensor_name = fixture.tigraph_factory.output_names[0]
+      sobel_tensor = activation_to_val[tensor_name]
       
       sobel_y = sobel_tensor[...,0]
       sobel_x = sobel_tensor[...,1]
@@ -86,3 +100,22 @@ def test_activations_sobel(monkeypatch):
       imageio.imwrite(visible_path + '.sobel_x.png', sobel_x)
       imageio.imwrite(visible_path + '.sobel_y.png', sobel_y)
       print("Debug images saved to %s" % visible_path)
+
+def test_activations_sobel(monkeypatch):
+  fixture = _create_fixture(monkeypatch)
+
+  filled = list(fixture.filler(fixture.rows))
+  _check_rows(fixture, filled)
+  
+@pytest.mark.slow
+def test_activations_sobel_spark(monkeypatch):
+  fixture = _create_fixture(monkeypatch)
+
+  rows = dataset.ImageTable.iter_all_rows()
+  with testutils.LocalSpark.sess() as spark:
+    sc = spark.sparkContext
+    rdd = sc.parallelize([fixture.rows])
+    rdd = rdd.flatMap(fixture.filler)
+    
+    filled = rdd.collect()
+    _check_rows(fixture, filled)

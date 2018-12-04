@@ -94,7 +94,7 @@ class TFInferenceGraphFactory(object):
 class FillActivationsBase(object):
   
   def __init__(self, tigraph_factory):
-    assert instanceof(tigraph_factory, TFInferenceGraphFactory)
+    assert isinstance(tigraph_factory, TFInferenceGraphFactory)
     self.tigraph_factory = tigraph_factory
     clazzname = self.__class__.__name__
     self.overall_thruput = util.ThruputObserver(
@@ -114,6 +114,7 @@ class FillActivationsTFDataset(FillActivationsBase):
   tf.Dataset to feed data into a tf.Graph""" 
   
   def __call__(self, iter_imagerows):
+
     self.overall_thruput.start_block()
     
     import Queue

@@ -5,7 +5,7 @@ import pytest
 
 MODEL_BASEDIR = '/tmp/au_test/test_mobilenet'
 
-#@pytest.mark.slow
+@pytest.mark.slow
 def test_mobilenet():
   util.mkdir(MODEL_BASEDIR)
   util.rm_rf(MODEL_BASEDIR)
