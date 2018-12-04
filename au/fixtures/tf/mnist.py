@@ -251,27 +251,13 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
     return self.graph 
 
   @property
-  def output_name_to_tensor(self):
-    if not hasattr(self, '_name_to_tensor'):
-      self._name_to_tensor = OrderedDict()
-      
-      TENSOR_NAMES = (
-       'sequential/conv2d/Relu:0',
-       'sequential/conv2d_1/Relu:0',
-       'sequential/dense/Relu:0',
-       'sequential/dense_1/MatMul:0',
-      )
-#       TENSOR_NAMES = (
-#         'conv1',
-#         'conv2',
-#         'fc1',
-#         'fc2',
-#       )
-      for name in TENSOR_NAMES:
-        self._name_to_tensor[name] = self.graph.get_tensor_by_name(name) 
-
-      self._name_to_tensor['predictions'] = self.pred
-    return self._name_to_tensor
+  def output_names(self):
+    return (
+      'sequential/conv2d/Relu:0',
+      'sequential/conv2d_1/Relu:0',
+      'sequential/dense/Relu:0',
+      'sequential/dense_1/MatMul:0',
+    )
 
 class MNIST(nnmodel.INNModel):
 
@@ -432,7 +418,7 @@ class MNISTDataset(dataset.ImageTable):
         cls.datasets_iter_image_rows(params=params))
   
   @classmethod
-  def init(cls, params=None):
+  def setup(cls, params=None):
     cls.save_to_image_table(cls.datasets_iter_image_rows(params=params))
 
 def setup_caches():

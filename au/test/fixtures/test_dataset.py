@@ -131,8 +131,8 @@ def test_imagerow_demo(monkeypatch):
       actual_bytes = open(path, 'rb').read()
       assert expected_bytes == actual_bytes
 
-    expect_file('d/train/img_0.png', train[0].uri)
-    expect_file('d/test/img_4.png', test[0].uri)
+    expect_file(os.path.join('d/train', train[0].fname()), train[0].uri)
+    expect_file(os.path.join('d/test', test[0].fname()), test[0].uri)
 
 def test_imagetable_demo(monkeypatch):
   
@@ -145,7 +145,7 @@ def test_imagetable_demo(monkeypatch):
   with monkeypatch.context() as m: 
     m.setattr(conf, 'AU_TABLE_CACHE', TABLE_TEMPDIR)
   
-    ImageTable.init()
+    ImageTable.setup()
   
     test_img_path = os.path.join(
                         conf.AU_IMAGENET_SAMPLE_IMGS_DIR,

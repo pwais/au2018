@@ -91,5 +91,5 @@ class Mobilenet(nnmodel.INNModel):
     return model
     
   def iter_activations(self):
-    import pdb; pdb.set_trace()
+    yield 1
 

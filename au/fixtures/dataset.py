@@ -321,7 +321,7 @@ class ImageTable(object):
   ROWS_PER_FILE = 100
   
   @classmethod
-  def init(cls):
+  def setup(cls):
     """Subclasses should override to create a dataset from scratch
     (e.g. download images, create a table, etc).  The base class
     is just a bunch of images from ImageNet.

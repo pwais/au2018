@@ -35,7 +35,7 @@ def _create_fixture(monkeypatch):
                       'sobel_test')
   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
   
-  dataset.ImageTable.init()
+  dataset.ImageTable.setup()
   
   params = Sobel.Params()
   tigraph_factory = Sobel.GraphFactory(params)
@@ -114,8 +114,8 @@ def test_activations_sobel_spark(monkeypatch):
   rows = dataset.ImageTable.iter_all_rows()
   with testutils.LocalSpark.sess() as spark:
     sc = spark.sparkContext
-    rdd = sc.parallelize([fixture.rows])
-    rdd = rdd.flatMap(fixture.filler)
+    rdd = sc.parallelize(fixture.rows)
+    rdd = rdd.mapPartitions(fixture.filler)
     
     filled = rdd.collect()
     _check_rows(fixture, filled)

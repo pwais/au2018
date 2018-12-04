@@ -170,6 +170,7 @@ class FillActivationsTFDataset(FillActivationsBase):
 #                                   (d.name for d in sess.list_devices())))
         
         tensors_to_eval = self.tigraph_factory.output_names
+        assert tensors_to_eval
         
 #         import pprint
 #         log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(final_graph)))
