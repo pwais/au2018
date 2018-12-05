@@ -12,6 +12,9 @@ import tensorflow as tf
 
 class Sobel(nnmodel.INNModel):
   
+  def __init__(self, params=None):
+    self.params = params or Sobel.Params()
+
   class Params(nnmodel.INNModel.ParamsBase):
     def __init__(self):
       super(Sobel.Params, self).__init__(model_name='Sobel')
@@ -28,18 +31,25 @@ class Sobel(nnmodel.INNModel):
     @property
     def output_names(self):
       return ('sobel:0',)
+  
+  @classmethod
+  def load_or_train(cls, params=None):
+    return Sobel(params=params)
+  
+  def get_inference_graph(self):
+    return Sobel.GraphFactory(self.params)
+
 
 def _create_fixture(monkeypatch):
   TEST_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
                       'sobel_test')
   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
-  
+
   dataset.ImageTable.setup()
   
-  params = Sobel.Params()
-  tigraph_factory = Sobel.GraphFactory(params)
-  filler = nnmodel.FillActivationsTFDataset(tigraph_factory)
+  model = Sobel.load_or_train()
+  filler = nnmodel.FillActivationsTFDataset(model=model)
 
   rows = list(dataset.ImageTable.iter_all_rows())
   assert rows
@@ -49,7 +59,7 @@ def _create_fixture(monkeypatch):
   fixture = Fixture()
   fixture.rows = rows
   fixture.filler = filler
-  fixture.tigraph_factory = tigraph_factory
+  fixture.model = model
   return fixture
 
 def _check_rows(fixture, filled_rows):
@@ -67,7 +77,7 @@ def _check_rows(fixture, filled_rows):
     
     if '202228408_eccfe4790e' in row.uri:
     
-      tensor_name = fixture.tigraph_factory.output_names[0]
+      tensor_name = fixture.model.get_inference_graph().output_names[0]
       sobel_tensor = activation_to_val[tensor_name]
       
       sobel_y = sobel_tensor[...,0]
@@ -117,5 +127,25 @@ def test_activations_sobel_spark(monkeypatch):
     rdd = sc.parallelize(fixture.rows)
     rdd = rdd.mapPartitions(fixture.filler)
     
+    # df = rdd.map(lambda r: r.to_dict()).toDF()
+    # df.save.parque('/tmp/yay')
+
     filled = rdd.collect()
     _check_rows(fixture, filled)
+
+@pytest.mark.slow
+def test_fill_activations_table(monkeypatch):
+  fixture = _create_fixture(monkeypatch)
+
+  class TestActivationsTable(nnmodel.ActivationsTable):
+    TABLE_NAME = 'sobel_fill_activations_test'
+    NNMODEL_CLS = Sobel
+    IMAGE_TABLE_CLS = dataset.ImageTable
+
+  with testutils.LocalSpark.sess() as spark:
+    TestActivationsTable.setup(spark=spark)
+
+    df = spark.read.parquet(TestActivationsTable.table_root())
+    df.registerTempTable("sobel_activations")
+    spark.sql("SELECT * FROM sobel_activations").show()
+

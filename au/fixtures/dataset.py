@@ -72,7 +72,16 @@ class ImageRow(object):
     attrs = []
     for k in self.__slots__:
       if not k.startswith('_'):
-        attrs.append((k, getattr(self, k)))
+
+        # pyarrow + python 2.7 -> str gets interpreted as binary
+        # https://stackoverflow.com/a/49507268
+        # Can skip for python3 ...
+        v = getattr(self, k)
+        if isinstance(v, basestring):
+          v = unicode(v.encode('utf-8'))
+          
+        attrs.append((k, v))
+
       elif k == '_image_bytes':
         attrs.append(('image_bytes', self.image_bytes))
 #       elif k == '_label_bytes':
@@ -186,6 +195,9 @@ class ImageRow(object):
     for row in df.to_dict(orient='records'):
       row.update(**kwargs)
       yield ImageRow(**row)
+
+  # @staticmethod
+  # def from_spark(df, spark, **kwargs):
 
   @staticmethod
   def write_to_parquet(
@@ -336,9 +348,16 @@ class ImageTable(object):
     (e.g. download images, create a table, etc).  The base class
     is just a bunch of images from ImageNet.
     """
+    if os.path.exists(cls.table_root()):
+      util.log.info(
+        "Skipping setup for %s, %s exists." % (
+          cls.TABLE_NAME, cls.table_root()))
+      return
+
     rows = ImageRow.rows_from_images_dir(
                       conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
-                      dataset=cls.TABLE_NAME)
+                      dataset=cls.TABLE_NAME,
+                      split='__default')
     rows = list(rows)
     
     import json
@@ -384,6 +403,24 @@ class ImageTable(object):
     df = pa_table.to_pandas()
     for row in ImageRow.from_pandas(df):
       yield row
+  
+  @classmethod
+  def as_imagerow_rdd(cls, spark):
+    df = spark.read.parquet(cls.table_root())
+    row_rdd = df.rdd.map(lambda row: ImageRow(**row.asDict()))
+    return row_rdd
+  
+
+
+
+
+
+
+
+
+
+
+
 
 #   @classmethod
 #   def show_stats(cls, spark=None):

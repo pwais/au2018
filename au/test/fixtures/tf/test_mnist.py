@@ -10,17 +10,17 @@ import pytest
 
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist') 
 
-@pytest.mark.slow
-def test_mnist_train(monkeypatch):
-  testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+# @pytest.mark.slow
+# def test_mnist_train(monkeypatch):
+#   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
 
-  params = mnist.MNIST.Params()
-  params.TRAIN_EPOCHS = 1
-  params.LIMIT = 10
-  model = mnist.MNIST.load_or_train(params)
+#   params = mnist.MNIST.Params()
+#   params.TRAIN_EPOCHS = 1
+#   params.LIMIT = 10
+#   model = mnist.MNIST.load_or_train(params)
   
-  # TODO: test with more rigor
-  assert model.igraph
+#   # TODO: test with more rigor
+#   assert model.igraph
 
 @pytest.mark.slow
 def test_mnist_dataset(monkeypatch):
@@ -65,14 +65,14 @@ def test_mnist_igraph(monkeypatch):
   params.TRAIN_EPOCHS = 1
   params.LIMIT = 10
   model = mnist.MNIST.load_or_train(params)
-  assert model.igraph
+  assert model.get_inference_graph() != nnmodel.TFInferenceGraphFactory()
 
   params = mnist.MNIST.Params()
   params.LIMIT = 100
   mnist.MNISTDataset.setup(params=params)
   rows = list(mnist.MNISTDataset.iter_all_rows())
 
-  filler = nnmodel.FillActivationsTFDataset(model.igraph)
+  filler = nnmodel.FillActivationsTFDataset(model=model)
   out_rows = list(filler(rows))
   assert len(out_rows) == len(rows)
   for row in out_rows:
@@ -83,4 +83,3 @@ def test_mnist_igraph(monkeypatch):
       
       # Check that we have a non-empty array
       assert activation_to_val[tensor_name].shape
-

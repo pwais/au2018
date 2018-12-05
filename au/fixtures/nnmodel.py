@@ -20,9 +20,6 @@ class INNModel(object):
       self.TENSORBOARD_BASEDIR = os.path.join(
                                     conf.AU_TENSORBOARD_DIR,
                                     self.MODEL_NAME)
-      
-#       # Tensorflow session, if available
-#       self.tf_sess = None
 
       # For tensorflow models
       self.INPUT_TENSOR_SHAPE = [None, None, None, None]
@@ -30,17 +27,20 @@ class INNModel(object):
       # For batching inference
       self.INFERENCE_BATCH_SIZE = 10
 
+
   def __init__(self):
     self.params = INNModel.ParamsBase()
   
   @classmethod
-  def load_or_train(self, cls, params=None):
+  def load_or_train(cls, params=None):
     """Create and return an instance, optionally training a model
-    from scratch in the process"""
+    from scratch in the process."""
     return INNModel()
   
-  def compute_activations_df(self, imagerow_df):
-    raise NotImplementedError
+  def get_inference_graph(self):
+    """Create and return a factory for creating inference graph(s)
+    based upon this model instance."""
+    return TFInferenceGraphFactory()
   
 
 
@@ -93,8 +93,12 @@ class TFInferenceGraphFactory(object):
 
 class FillActivationsBase(object):
   
-  def __init__(self, tigraph_factory):
+  def __init__(self, tigraph_factory=None, model=None):
+    if tigraph_factory is None:
+      assert model is not None
+      tigraph_factory = model.get_inference_graph()
     assert isinstance(tigraph_factory, TFInferenceGraphFactory)
+    
     self.tigraph_factory = tigraph_factory
     clazzname = self.__class__.__name__
     self.overall_thruput = util.ThruputObserver(
@@ -198,6 +202,71 @@ class FillActivationsTFDataset(FillActivationsBase):
     total_rows, total_bytes = total_rows_bytes
     self.tf_thruput.update_tallies(n=total_rows, num_bytes=total_bytes)
     self.overall_thruput.stop_block(n=total_rows, num_bytes=total_bytes)
+
+
+
+class ActivationsTable(object):
+
+  TABLE_NAME = 'default'
+  NNMODEL_CLS = None
+  MODEL_PARAMS = None
+  IMAGE_TABLE_CLS = None
+
+  @classmethod
+  def table_root(cls):
+    return os.path.join(conf.AU_TABLE_CACHE, cls.TABLE_NAME)
+  
+  @classmethod
+  def setup(cls, spark=None, parallel=10):
+    log = util.create_log()
+    log.info("Building table %s ..." % cls.TABLE_NAME)
+
+    spark = spark or util.Spark.getOrCreate()
+
+    img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
+    
+    model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
+    filler = FillActivationsTFDataset(model=model)
+
+    img_rdd = img_rdd.repartition(parallel)
+    activated = img_rdd.mapPartitions(filler)
+
+    def to_activation_rows(imagerows):
+      for row in imagerows:
+        if row.attrs is '':
+          continue
+
+        activation_to_val = row.attrs.get('activation_to_val')
+        if not activation_to_val:
+          continue
+        
+        import pickle
+        yield {
+          'model_name': model.params.MODEL_NAME,
+          'dataset': row.dataset,
+          'split': row.split,
+          'uri': row.uri,
+          'activations': dict(
+            (k, pickle.dumps(v))
+            for k, v in activation_to_val.iteritems()),
+        }
+    
+    activation_row_rdd = activated.mapPartitions(to_activation_rows)
+    
+    df = spark.createDataFrame(activation_row_rdd)
+    df.show()
+    writer = df.write.parquet(
+                path=cls.table_root(),
+                mode='overwrite',
+                compression='snappy',
+                partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
+    log.info("... wrote to %s ." % cls.table_root())
+
+        
+
+
+
+
 
 """
 
