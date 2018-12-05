@@ -210,7 +210,7 @@ def mnist_train(params):
 
 
 
-## Interface
+## AU Interface
 
 class MNISTGraph(nnmodel.TFInferenceGraphFactory):
   def __init__(self, params):
@@ -224,26 +224,11 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
       self.tf_model = create_model()
       root = tf.train.Checkpoint(model=self.tf_model)
       root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
-      
-#       self._input = tf.placeholder(
-#                           tf.uint8,
-#                           [None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1],
-#                           name='au_input_image')
-      
+      log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
+            
       self.pred = self.tf_model(
                       tf.cast(input_image, tf.float32),
                       training=False)
-      
-      # Install canonical names
-#       def install(tensor_name, canon_name):
-#         v = tf.identity(
-#                 self.graph.get_tensor_by_name(tensor_name),
-#                 name=canon_name)
-#         return v
-#       install('sequential/conv2d/Relu:0', 'conv1:0')
-#       install('sequential/conv2d_1/Relu:0', 'conv2:0')
-#       install('sequential/dense/Relu:0', 'fc1:0')
-#       install('sequential/dense_1/MatMul:0', 'fc2:0')
       
     import pprint
     log.info("Loaded graph:")
@@ -272,23 +257,18 @@ class MNIST(nnmodel.INNModel):
       self.INPUT_TENSOR_SHAPE = [
                   None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1]
 
-  def __init__(self):
+  def __init__(self, params=None):
+    super(MNIST, self).__init__(params=params)
     self.tf_graph = None
     self.tf_model = None
     self.predictor = None
-
-#   @staticmethod
-#   def insert_datasets_to_image_table(params=None):
-#     dataset.ImageRow.insert_to_image_table(
-#         MNIST.datasets_iter_image_rows(params=params))
 
   @classmethod
   def load_or_train(cls, params=None):
     log = util.create_log()
     
-    model = MNIST()
     params = params or MNIST.Params()
-    model.params = params
+    model = MNIST(params=params)
 
     if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
       log.info("Training!")
@@ -298,8 +278,8 @@ class MNIST(nnmodel.INNModel):
     model.igraph = MNISTGraph(params)
     return model
 
-def get_inference_graph(self):
-  return self.igraph
+  def get_inference_graph(self):
+    return self.igraph
 
 # #     
 # #     

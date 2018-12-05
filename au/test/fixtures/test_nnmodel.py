@@ -37,7 +37,7 @@ class Sobel(nnmodel.INNModel):
     return Sobel(params=params)
   
   def get_inference_graph(self):
-    return Sobel.GraphFactory(self.params)
+    return Sobel.GraphFactory(params=self.params)
 
 
 def _create_fixture(monkeypatch):

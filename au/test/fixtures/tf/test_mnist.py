@@ -67,8 +67,8 @@ def test_mnist_igraph(monkeypatch):
   model = mnist.MNIST.load_or_train(params)
   assert model.get_inference_graph() != nnmodel.TFInferenceGraphFactory()
 
-  params = mnist.MNIST.Params()
-  params.LIMIT = 100
+  # params = mnist.MNIST.Params()
+  # params.LIMIT = 100 # num images
   mnist.MNISTDataset.setup(params=params)
   rows = list(mnist.MNISTDataset.iter_all_rows())
 

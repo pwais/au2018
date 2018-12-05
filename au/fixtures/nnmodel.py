@@ -28,8 +28,8 @@ class INNModel(object):
       self.INFERENCE_BATCH_SIZE = 10
 
 
-  def __init__(self):
-    self.params = INNModel.ParamsBase()
+  def __init__(self, params=None):
+    self.params = params or INNModel.ParamsBase()
   
   @classmethod
   def load_or_train(cls, params=None):
@@ -49,7 +49,7 @@ class TFInferenceGraphFactory(object):
   for a Tensorflow model."""
 
   def __init__(self, params=None):
-    self.params = params # ParamsBase
+    self.params = params or INNModel.ParamsBase()
   
   def create_inference_graph(self, input_image, base_graph):
     """Create and return an inference graph based upon `base_graph`.
@@ -71,11 +71,6 @@ class TFInferenceGraphFactory(object):
                         target_hw=target_hw,
                         target_nchan=target_nchan)
   
-#   @property
-#   def input(self):
-#     # must be uint8 [None, width, height, chan]
-#     pass
-  
   @property
   def input_tensor_shape(self):
     return self.params.INPUT_TENSOR_SHAPE
@@ -95,7 +90,6 @@ class FillActivationsBase(object):
   
   def __init__(self, tigraph_factory=None, model=None):
     if tigraph_factory is None:
-      assert model is not None
       tigraph_factory = model.get_inference_graph()
     assert isinstance(tigraph_factory, TFInferenceGraphFactory)
     
