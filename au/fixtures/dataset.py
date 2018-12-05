@@ -48,6 +48,12 @@ class ImageRow(object):
 #         kwargs.get('label_bytes', '') is not ''):
 #       self._label_bytes = kwargs['label_bytes']
   
+  def astuple(self):
+    return tuple(getattr(self, k) for k in self.__slots__)
+
+  def __lt__(self, other):
+    return self.astuple() < other.astuple()
+
   @staticmethod
   def from_np_img_labels(np_img, label='', **kwargs):
     row = ImageRow(**kwargs)

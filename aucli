@@ -7,17 +7,17 @@ dependencies (e.g. just python) so that it can run w/out the source tree.
 
 ## Example Workflow
 Run all tests in a containerized environment (self-check):
-  aucli --test-full
+  ./aucli --test-full
 
 Drop into a dockerized development shell:
-  aucli --shell
+  ./aucli --shell
 
 Now develop!  Run tests locally:
   pytest au -s --runslow -k test_mnist_save_png
 
 ## (Re)-build the dockerized environment image
 Outside of the dockerized environment, use:
-  aucli --build-env
+  ./aucli --build-env
 
 """
 
@@ -315,7 +315,8 @@ def create_arg_parser():
     help='Ensure Spark works locally')
   parser.add_argument(
     '--test-full', default=False, action='store_true',
-    help='Run the full set of tests in a containerized environment')
+    help='Run the full set of tests with the local source tree in a '
+         'containerized environment')
   
   return parser
 
