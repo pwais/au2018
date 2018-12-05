@@ -1,0 +1,13 @@
+version: 2
+jobs:
+  build:
+	machine: true
+    steps:
+      - checkout
+      - run:
+          name: "Pull submodules"
+          command: git submodule update --init
+      - run:
+          name: "Run tests"
+          command: time ./aucli --test-full
+
