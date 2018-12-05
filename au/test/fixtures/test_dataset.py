@@ -1,4 +1,5 @@
 import os
+import unittest
 
 import imageio
 import numpy as np
@@ -9,6 +10,8 @@ from au.fixtures.dataset import FillNormalized
 from au.fixtures.dataset import ImageRow
 from au.fixtures.dataset import ImageTable
 from au.test import testconf
+
+
 
 def test_imagerow_demo(monkeypatch):
   
@@ -160,7 +163,7 @@ def test_imagetable_demo(monkeypatch):
     
     assert len(list(ImageTable.iter_all_rows())) == 6
 
-class TestFillNormalized(object):
+class TestFillNormalized(unittest.TestCase):
   def test_identity(self):
     f = FillNormalized()
     row = ImageRow.from_path(testconf.MNIST_TEST_IMG_PATH)
@@ -168,13 +171,26 @@ class TestFillNormalized(object):
     np.testing.assert_array_equal(row.as_numpy(), row.attrs['normalized'])
   
   def test_resize(self):
-    f = FillNormalized(target_size=(14, 14))
+    f = FillNormalized(target_hw=(10, 14))
     row = ImageRow.from_path(testconf.MNIST_TEST_IMG_PATH)
     assert row.as_numpy().shape == (28, 28)
     
     row = f(row)
-    assert row.attrs['normalized'].shape == (14, 14)
+    assert row.attrs['normalized'].shape == (10, 14)
+  
+  def test_nchan(self):
+    f = FillNormalized(target_nchan=1)
+
+    test_img_path = os.path.join(
+                        conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
+                        '2929331372_398d58807e.jpg')
+
+    row = ImageRow.from_path(test_img_path)
+    assert row.as_numpy().shape == (375, 500, 3)
     
+    row = f(row)
+    assert row.attrs['normalized'].shape == (375, 500, 1)
+
   def test_transform(self):
     def normalize(x):
       return x - 10

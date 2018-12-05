@@ -34,7 +34,7 @@ class ImageRow(object):
   )
   
   DEFAULT_PQ_PARTITION_COLS = ['dataset', 'split']
-    # NB: must be a list and not a tuple due to c++ api
+    # NB: must be a list and not a tuple due to pyarrow c++ api
   
   def __init__(self, **kwargs):
     for k in self.__slots__:
@@ -268,11 +268,15 @@ def _make_have_target_chan(img, nchan):
     return img
   elif nchan == 1:
     if len(shape) == 3 and shape[-1] == 3:
-      return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+      # Make the image greyscale
+      img2 = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+      return np.expand_dims(img2, axis=-1)
     else:
       raise ValueError("TODO input image has != 3 chan %s" % (shape,))
   elif nchan == 3:
     if len(shape) == 3 and shape[-1] == 1:
+      # Repeate the grey channel to create an RGB image
+      # (or BGR or who knows)
       return np.stack([img, img, img], axis=-1)
     else:
       raise ValueError("TODO input image has != 1 chan %s" % (shape,))
