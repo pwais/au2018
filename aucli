@@ -6,10 +6,13 @@ aucli is a tool for boostrapping the AU project.  This tool has limited
 dependencies (e.g. just python) so that it can run w/out the source tree.
 
 ## Example Workflow
+Run all tests in a containerized environment (self-check):
+  aucli --test-full
+
 Drop into a dockerized development shell:
   aucli --shell
 
-Now develop!  Run tests:
+Now develop!  Run tests locally:
   pytest au -s --runslow -k test_mnist_save_png
 
 ## (Re)-build the dockerized environment image
@@ -48,14 +51,15 @@ def run_cmd(cmd):
 class DockerEnv(object):
   
   @classmethod
-  def build(cls):
+  def build(cls, image=DOCKER_IMAGE, and_push=True):
     run_cmd(
-      'docker build -t ' + DOCKER_IMAGE + ' -f ' + AU_ROOT + '/docker/Dockerfile ' + AU_ROOT)
-    run_cmd(
-      'docker push ' + DOCKER_IMAGE)
+      'docker build -t ' + image + ' -f ' + AU_ROOT + '/docker/Dockerfile ' + AU_ROOT)
+    if and_push:
+      run_cmd(
+        'docker push ' + image)
 
   @classmethod
-  def shell(cls):
+  def start(cls, container_name=CONTAINER_NAME, image=DOCKER_IMAGE):
     have_nvidia_docker = False
     try:
       run_cmd('nvidia-docker --help > /dev/null')
@@ -67,7 +71,8 @@ class DockerEnv(object):
     if os.path.exists('my.env'):
       env_arg = '--env-file my.env'
     
-    # Persist ivy2 / spark jar cache on host
+    # Persist ivy2 / spark jar cache on host.  Saves having to download
+    # spark jars every run (can be time consuming on slow connections)
     IVY2_PERSISTED_DIR = '/tmp/au_ivy2'
     run_cmd('mkdir -p %s' % IVY2_PERSISTED_DIR)
     
@@ -85,24 +90,61 @@ class DockerEnv(object):
           {docker_image} sleep infinity || docker start {container_name} || true
     """.format(
           docker=docker,
-          container_name=CONTAINER_NAME,
-          docker_image=DOCKER_IMAGE,
+          container_name=container_name,
+          docker_image=image,
           env_arg=env_arg,
           ivy2_persisted_cache=IVY2_PERSISTED_DIR)
     run_cmd(CMD)
+
+  @classmethod
+  def shell(cls, container_name=CONTAINER_NAME, image=DOCKER_IMAGE):
+    cls.start(container_name=container_name, image=image)
     
     # https://github.com/moby/moby/issues/33794#issuecomment-323003975
     #-c "export COLUMNS=`tput cols`; export LINES=`tput lines`; exec bash"'
-    EXEC_CMD = 'docker exec -it %s bash' % CONTAINER_NAME
+    EXEC_CMD = 'docker exec -it %s bash' % container_name
     os.execvp("docker", EXEC_CMD.split(' '))
 
   @classmethod
-  def rm_shell(cls):
+  def rm_shell(cls, container_name=CONTAINER_NAME):
     try:
-      run_cmd('docker rm -f %s' % CONTAINER_NAME)
+      run_cmd('docker rm -f %s' % container_name)
     except Exception:
       pass
-    log.info("Removed container %s" % CONTAINER_NAME)
+    log.info("Removed container %s" % container_name)
+
+  @classmethod
+  def run_cmd(cls, cmd, container_name=None, image=None, rm=True):
+    
+    ### Decide which image to use
+    if not image:
+      image = DOCKER_IMAGE
+    
+    have_image = False
+    try:
+      run_cmd('docker image inspect %s > /dev/null' % image)
+      have_image = True
+    except Exception:
+      pass
+
+    if not have_image:
+      log.info("Don't have %s, trying to build ..." % image)
+      cls.build(image=image, and_push=False)
+      log.info("... done building.")
+
+    log.info("Using docker image %s" % image)
+
+
+    ### Run `cmd`!
+    if not container_name:
+      container_name = 'aucli-temp'
+    cls.start(container_name=container_name, image=image)
+    RUN_CMD = 'docker exec -it %s %s' % (container_name, cmd)
+    run_cmd(RUN_CMD)
+
+    if rm:
+      cls.rm_shell(container_name=container_name)
+
 
 ## External Projects
 
@@ -271,6 +313,9 @@ def create_arg_parser():
   parser.add_argument(
     '--test-spark', default=False, action='store_true',
     help='Ensure Spark works locally')
+  parser.add_argument(
+    '--test-full', default=False, action='store_true',
+    help='Run the full set of tests in a containerized environment')
   
   return parser
 
@@ -289,6 +334,10 @@ def main(args=None):
     alluxio_start_local()
   elif args.test_spark:
     test_spark()
+  elif args.test_full:
+    DockerEnv.run_cmd(
+      'pytest au -s --runslow',
+      container_name='aucli_full_test')
 
 if __name__ == '__main__':
   main()
