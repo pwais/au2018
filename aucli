@@ -26,7 +26,7 @@ import subprocess
 import sys
 
 AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
-DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:v1')
+DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:v1.1')
 CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
 
 ## Logging

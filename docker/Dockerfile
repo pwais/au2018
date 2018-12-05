@@ -1,4 +1,6 @@
-FROM tensorflow/tensorflow:1.10.1-gpu
+FROM tensorflow/tensorflow:1.11.0-gpu
+
+ENV PYTHONDONTWRITEBYTECODE 1
 
 COPY docker/sources.list /etc/apt/sources.list
 
