@@ -251,6 +251,8 @@ class Spark(object):
     import findspark
     findspark.init()
     log.info("... found!")
+
+    # TODO set up egg to ship to workers ...
   
   @classmethod
   def getOrCreate(cls):

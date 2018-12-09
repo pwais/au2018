@@ -211,7 +211,7 @@ class ActivationsTable(object):
     return os.path.join(conf.AU_TABLE_CACHE, cls.TABLE_NAME)
   
   @classmethod
-  def setup(cls, spark=None, parallel=10):
+  def setup(cls, spark=None):
     log = util.create_log()
     log.info("Building table %s ..." % cls.TABLE_NAME)
 
@@ -222,7 +222,7 @@ class ActivationsTable(object):
     model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
     filler = FillActivationsTFDataset(model=model)
 
-    img_rdd = img_rdd.repartition(parallel)
+    # img_rdd = img_rdd.repartition(parallel)
     activated = img_rdd.mapPartitions(filler)
 
     def to_activation_rows(imagerows):
@@ -256,10 +256,31 @@ class ActivationsTable(object):
                 partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
     log.info("... wrote to %s ." % cls.table_root())
 
+  # @classmethod
+  # def get_as_imagerow_rdd(cls, spark=None, include_images=True):
+  #   log = util.create_log()
+  #   log.info("Reading from %s ..." % cls.table_root())
+
+  #   spark = spark or util.Spark.getOrCreate()
+
+  #   df = spark.read.parquet(cls.table_root())
+  #   df.registerTempTable("tmp_activations_df_%s" % cls.TABLE_NAME)
+  #   if include_images:
+  #     df = spark.read.parquet(cls.IMAGE_TABLE_CLS.table_root())
+  #     df.registerTempTable("tmp_images_%s" % cls.TABLE_NAME)
+
+  #     query = """
+  #       SELECT
+
+  #     img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
+
+
+  #   else:
+  #     df = activations_df
+    
+
+
         
-
-
-
 
 
 """
