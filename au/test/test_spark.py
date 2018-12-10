@@ -22,11 +22,13 @@ def test_spark_numpy_df():
   import numpy as np
   rows = [
     {
+       'id': 1,
       'a': np.array([1]), 
       'b': np.array( [ [1] ] ),
       'c': np.array([[[1]], [[2]], [[3]]]),
     },
     {
+      'id': 2,
       'a': np.array([]),
       'b': None,
       'c': None,
@@ -58,9 +60,11 @@ def test_spark_numpy_df():
     # We can't do assert sorted(rows) == sorted(decoded_rows)
     # because numpy syntatic sugar breaks ==
     import pprint
-    import warnings
-    with warnings.catch_warnings():
-      # These DeprecationWarning things are obnoxious af
-      warnings.filterwarnings("ignore", category=DeprecationWarning)
-      assert pprint.pformat(sorted(rows)) == pprint.pformat(sorted(decoded_rows))
+    # import warnings
+    # with warnings.catch_warnings():
+    #   # These DeprecationWarning things are obnoxious af
+    #   warnings.filterwarnings("ignore", category=DeprecationWarning)
+    def sorted_row_str(rowz):
+      return pprint.pformat(sorted(rowz, key=lambda row: row['id']))
+    assert sorted_row_str(rows) == sorted_row_str(decoded_rows)
 
