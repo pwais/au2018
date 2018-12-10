@@ -1,4 +1,4 @@
-from au import util
+from au import spark
 
-class LocalSpark(util.Spark):
+class LocalSpark(spark.Spark):
   MASTER = 'local[8]'
