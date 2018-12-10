@@ -43,7 +43,7 @@ def test_spark_numpy_df():
     ]
 
     df = spark.createDataFrame(wrapped_rows)
-    # df.show()
+    df.show()
     outpath = os.path.join(TEST_TEMPDIR, 'rowdata')
     df.write.parquet(outpath)
 

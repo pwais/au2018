@@ -8,6 +8,7 @@ import os
 import unittest
 
 import pytest
+
 import tensorflow as tf
 
 class Sobel(nnmodel.INNModel):
@@ -68,17 +69,22 @@ def _check_rows(fixture, filled_rows):
   
   for row in filled_rows:
     assert row.attrs is not ''
-    assert 'activation_to_val' in row.attrs
+    assert 'activations' in row.attrs
     
-    activation_to_val = row.attrs['activation_to_val'] 
+    igraph = fixture.model.get_inference_graph()
+
+    acts = row.attrs['activations']
+    assert acts
+    act = acts[0]
+    assert act.model_name == igraph.model_name
     
     import imageio
     import numpy as np
     
     if '202228408_eccfe4790e' in row.uri:
     
-      tensor_name = fixture.model.get_inference_graph().output_names[0]
-      sobel_tensor = activation_to_val[tensor_name]
+      tensor_name = igraph.output_names[0]
+      sobel_tensor = act.tensor_to_value[tensor_name]
       
       sobel_y = sobel_tensor[...,0]
       sobel_x = sobel_tensor[...,1]
@@ -133,19 +139,19 @@ def test_activations_sobel_spark(monkeypatch):
     filled = rdd.collect()
     _check_rows(fixture, filled)
 
-@pytest.mark.slow
-def test_fill_activations_table(monkeypatch):
-  fixture = _create_fixture(monkeypatch)
+# @pytest.mark.slow
+# def test_fill_activations_table(monkeypatch):
+#   fixture = _create_fixture(monkeypatch)
 
-  class TestActivationsTable(nnmodel.ActivationsTable):
-    TABLE_NAME = 'sobel_fill_activations_test'
-    NNMODEL_CLS = Sobel
-    IMAGE_TABLE_CLS = dataset.ImageTable
+#   class TestActivationsTable(nnmodel.ActivationsTable):
+#     TABLE_NAME = 'sobel_fill_activations_test'
+#     NNMODEL_CLS = Sobel
+#     IMAGE_TABLE_CLS = dataset.ImageTable
 
-  with testutils.LocalSpark.sess() as spark:
-    TestActivationsTable.setup(spark=spark)
+#   with testutils.LocalSpark.sess() as spark:
+#     TestActivationsTable.setup(spark=spark)
 
-    df = spark.read.parquet(TestActivationsTable.table_root())
-    df.registerTempTable("sobel_activations")
-    spark.sql("SELECT * FROM sobel_activations").show()
+#     df = spark.read.parquet(TestActivationsTable.table_root())
+#     df.registerTempTable("sobel_activations")
+#     spark.sql("SELECT * FROM sobel_activations").show()
 

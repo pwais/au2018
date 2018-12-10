@@ -65,7 +65,8 @@ def test_mnist_igraph(monkeypatch):
   params.TRAIN_EPOCHS = 1
   params.LIMIT = 10
   model = mnist.MNIST.load_or_train(params)
-  assert model.get_inference_graph() != nnmodel.TFInferenceGraphFactory()
+  igraph = model.get_inference_graph()
+  assert igraph != nnmodel.TFInferenceGraphFactory()
 
   # params = mnist.MNIST.Params()
   # params.LIMIT = 100 # num images
@@ -76,10 +77,12 @@ def test_mnist_igraph(monkeypatch):
   out_rows = list(filler(rows))
   assert len(out_rows) == len(rows)
   for row in out_rows:
-    assert 'activation_to_val' in row.attrs
-    activation_to_val = row.attrs['activation_to_val']
+    acts = row.attrs['activations']
+    act = acts[0]
+    assert act.model_name == igraph.model_name
+    tensor_to_value = act.tensor_to_value
     for tensor_name in model.igraph.output_names:
-      assert tensor_name in activation_to_val
+      assert tensor_name in tensor_to_value
       
       # Check that we have a non-empty array
-      assert activation_to_val[tensor_name].shape
+      assert tensor_to_value[tensor_name].shape

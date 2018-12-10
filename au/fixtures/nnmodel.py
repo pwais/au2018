@@ -82,6 +82,10 @@ class TFInferenceGraphFactory(object):
   @property
   def output_names(self):
     return tuple()
+  
+  @property
+  def model_name(self):
+    return self.params.MODEL_NAME
 
 
 ## Utils
@@ -105,7 +109,35 @@ class FillActivationsBase(object):
   def __call__(self, iter_imagerows):
     # Identity op; fills nothing!
     for row in iter_imagerows:
+      row['activations'] = row.get('activations', [])
       yield row
+
+
+class Activations(object):
+  """A pyspark-SQL-friendly wrapper for a set of activations"""
+
+  __slots__ = ('model_name', '_tensor_to_value')
+
+  def __init__(self, **kwargs):
+    self.model_name = kwargs.get('model_name', '')
+    self._tensor_to_value = {}
+    if 'tensor_to_value' in kwargs:
+      self.tensor_to_value = kwargs['tensor_to_value']
+  
+  def get_tensor_to_value(self):
+    # Unpack numpy arrays
+    if self._tensor_to_value is None:
+      return {}
+    return dict((k, v.arr) for k, v in self._tensor_to_value.iteritems())
+  
+  def set_tensor_to_value(self, tensor_to_value):
+    # Pack numpy arrays for Spark
+    from au.spark import NumpyArray
+    for k, v in tensor_to_value.iteritems():
+      self._tensor_to_value[k] = NumpyArray(v)
+  
+  tensor_to_value = property(get_tensor_to_value, set_tensor_to_value)
+
 
 class FillActivationsTFDataset(FillActivationsBase):
   """A `FillActivationsBase` impl that leverages Tensorflow
@@ -119,6 +151,8 @@ class FillActivationsTFDataset(FillActivationsBase):
     import tensorflow as tf
     
     log = util.create_log()
+    log.info(
+      "Filling activations for %s ..." % self.tigraph_factory.model_name)
     
     graph = tf.Graph()
     total_rows_bytes = [0, 0]
@@ -187,15 +221,26 @@ class FillActivationsTFDataset(FillActivationsBase):
               # this Queue::get() call should in practice block very rarely.
               # Confirm using thruput stats (`overall_thruput` vs `tf_thruput`)
 
-            activation_to_val = dict(
+            tensor_to_value = dict(
                         (name, result[i][n,...])
                         for i, name in enumerate(tensors_to_eval))
-            row.attrs['activation_to_val'] = activation_to_val
+
+            if 'activations' not in row.attrs:
+              row.attrs['activations'] = []  
+            
+            act = Activations(
+                      model_name=self.tigraph_factory.model_name,
+                      tensor_to_value=tensor_to_value)
+            row.attrs['activations'].append(act)
             yield row
     
     total_rows, total_bytes = total_rows_bytes
     self.tf_thruput.update_tallies(n=total_rows, num_bytes=total_bytes)
     self.overall_thruput.stop_block(n=total_rows, num_bytes=total_bytes)
+
+
+
+
 
 
 
