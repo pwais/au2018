@@ -13,3 +13,6 @@
 [submodule "external/batchgenerators"]
 	path = external/batchgenerators
 	url = https://github.com/MIC-DKFZ/batchgenerators
+[submodule "external/youtube-8m"]
+	path = external/youtube-8m
+	url = https://github.com/google/youtube-8m
