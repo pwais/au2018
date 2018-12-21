@@ -92,7 +92,7 @@ kube_apiserver_insecure_port: 8080 # (http)
 
 # Kube-proxy proxyMode configuration.
 # Can be ipvs, iptables
-kube_proxy_mode: iptables
+kube_proxy_mode: ipvs
 
 # Kube-proxy nodeport address.
 # cidr to bind nodeport services. Flag --nodeport-addresses on kube-proxy manifest
@@ -179,7 +179,8 @@ persistent_volumes_enabled: false
 
 ## Container Engine Acceleration
 ## Enable container accelertion feature, for example use gpu acceleration in containers
-# nvidia_accelerator_enabled: true
+nvidia_accelerator_enabled: true
+
 ## Nvidia GPU driver install. Install will by done by a (init) pod running as a daemonset.
 ## Important: if you use Ubuntu then you should set in all.yml 'docker_storage_options: -s overlay2'
 ## Array with nvida_gpu_nodes, leave empty or comment if you dont't want to install drivers.

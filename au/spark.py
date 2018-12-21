@@ -1,7 +1,9 @@
 """A module with Spark-related utilities"""
 
+from au import conf
 from au import util
 
+import os
 import pickle
 from contextlib import contextmanager
 
@@ -32,12 +34,95 @@ class Spark(object):
   CONF = None
   CONF_KV = None
   HIVE = False
+
+  # Optional
+  SRC_ROOT = os.path.join(conf.AU_ROOT, 'au')
   
   @classmethod
+  def _create_egg(cls, src_root=None, tmp_path=None, quiet=True):
+    """Build a Python Egg from the current project and return a path
+    to the artifact.  
+
+    Why an Egg?  `pyspark` supports zipfiles and egg files as Python artifacts.
+    One might wish to use a wheel instead of an egg.  See this excellent
+    article and repo:
+     * https://bytes.grubhub.com/managing-dependencies-and-artifacts-in-pyspark-7641aa89ddb7
+     * https://github.com/alekseyig/spark-submit-deps
+    
+    The drawbacks to using a wheel include:
+     * wheels often require native libraries to be installed (e.g. via
+        `apt-get`), and those deps are typically best baked into the Spark
+        Worker environment (versus installed every job run).
+     * The `BdistSpark` example above is actually rather slow, especially
+        when Tensorflow is a dependency, and `BdistSpark` must run before
+        every job is submitted.
+     * Spark treats wheels as zip files and unzips them on every run; this
+        unzip operation can be very expensive if the zipfile contains large
+        binaries (e.g. tensorflow)
+    
+    In comparison, an Egg provides the main benefits we want (to ship project
+    code, often pre-committed code, to workers).
+    """
+
+    log = util.create_log()
+
+    if tmp_path is None:
+      import tempfile
+      tmp_path = tempfile.gettempdir()
+
+    if src_root is None:
+      log.info("Trying to auto-resolve path to src root ...")
+      try:
+        import inspect
+        path = inspect.getfile(inspect.currentframe())
+        src_root = os.path.dirname(os.path.abspath(path))
+      except Exception as e:
+        log.info(
+          "Failed to auto-resolve src root, "
+          "falling back to %s" % cls.PROJ_DIR)
+        src_root = cls.SRC_ROOT
+    
+    log.info("Using source root %s " % src_root)
+
+    # Based upon https://github.com/pypa/setuptools/blob/a94ccbf404a79d56f9b171024dee361de9a948da/setuptools/tests/test_bdist_egg.py#L30
+    # See also https://github.com/pypa/setuptools/blob/f52b3b1c976e54df7a70db42bf59ca283412b461/setuptools/dist.py
+    from setuptools.dist import Distribution
+    MODNAME = 'au_spark_temp'
+    dist = Distribution(attrs=dict(
+        script_name='setup.py',
+        script_args=['bdist_egg', '-q', '--dist-dir', tmp_path],
+        name=MODNAME,
+        src_root=src_root,
+    ))
+    log.info("Generating egg to %s ..." % tmp_path)
+    with util.quiet():
+      dist.parse_command_line()
+      dist.run_commands()
+
+    egg_path = os.path.join(tmp_path, MODNAME + '-0.0.0-py2.7.egg')
+    assert os.path.exists(egg_path)
+    log.info("... done.  Egg at %s" % egg_path)
+    return egg_path
+
+    # This didn't work so well ...
+    # Typically we want to give spark the egg from:
+    #  $ python setup.py bdist_egg
+    # from setuptools.command import bdist_egg
+    # cmd = bdist_egg.bdist_egg(bdist_dir=os.path.dirname(setup_py_path), editable=True)
+    # cmd.run()
+
+  @classmethod
+  def egg_path(cls):
+    if not hasattr(cls, '_cached_egg_path'):
+      cls._cached_egg_path = cls._create_egg()
+    return cls._cached_egg_path
+
+  @classmethod
   def _setup(cls):
-    # TODO set up egg to ship to workers ...
-    pass
-  
+    # Warm the cache
+    egg_path = cls.egg_path()
+    # os.environ['PYSPARK_SUBMIT_ARGS'] = '--py-files %s' % egg_path
+
   @classmethod
   def getOrCreate(cls):
     cls._setup()
@@ -57,7 +142,10 @@ class Spark(object):
       # builder = builder.config("hive.metastore.warehouse.dir", '/tmp') 
       # builder = builder.config("spark.sql.warehouse.dir", '/tmp')
       builder = builder.enableHiveSupport()
-    return builder.getOrCreate()
+    spark = builder.getOrCreate()
+
+    spark.sparkContext.addPyFile(cls.egg_path())
+    return spark
   
   @classmethod
   @contextmanager

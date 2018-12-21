@@ -125,6 +125,7 @@ RUN pip install scipy h5py wget Pillow six scikit-image
 # See docker/kubespray_requirements.txt for notes
 COPY docker/kubespray_requirements.txt /tmp/kubespray_requirements.txt
 RUN pip install -r /tmp/kubespray_requirements.txt
+ENV PATH $PATH:/opt/au/kubespray/inventory/default/artifacts/
 
 
 ## Gcloud

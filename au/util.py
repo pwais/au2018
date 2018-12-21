@@ -109,7 +109,22 @@ class ThruputObserver(object):
     if self.log_on_del:
       log = create_log()
       log.info('\n' + str(self) + '\n')
-    
+
+@contextmanager
+def quiet():
+  old_stdout = sys.stdout
+  old_stderr = sys.stderr
+  f = open(os.devnull, 'w')
+  new_stdout = sys.stdout = f
+  new_stderr = sys.stderr = f
+  try:
+    yield new_stdout, new_stderr
+  finally:
+    new_stdout.seek(0)
+    new_stderr.seek(0)
+    sys.stdout = old_stdout
+    sys.stderr = old_stderr
+
 
 ### I/O
 
