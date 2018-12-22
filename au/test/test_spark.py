@@ -12,6 +12,8 @@ def test_spark():
     testutils.LocalSpark.test_pi(spark)
 
 def test_spark_ships_local_src_in_egg(monkeypatch):
+  EXPECTED_EGG_NAME = 'au-0.0.0-py2.7.egg'
+
   def foo(_):
     # Normally, pytest puts the local source tree on the PYTHONPATH.  That
     # setting gets inherited when Spark forks a python subprocess to run
@@ -22,7 +24,21 @@ def test_spark_ships_local_src_in_egg(monkeypatch):
       sys.path.remove('/opt/au')
     if '' in sys.path:
       sys.path.remove('')
-    
+
+    ## Check for the egg, which Spark puts on the PYTHONPATH
+    egg_path = ''
+    for p in sys.path:
+      if EXPECTED_EGG_NAME in p:
+        egg_path = p
+    assert egg_path, 'Egg not found in sys.path %s' % (sys.path,)
+
+    ## Is the egg any good?
+    import zipfile
+    f = zipfile.ZipFile(egg_path)
+    egg_contents = f.namelist()
+    assert any('au' in fname for fname in egg_contents), egg_contents
+
+    ## Use the egg!
     from au import util
     s = util.ichunked([1, 2, 3], 3)
     assert list(s) == [(1, 2, 3)]
@@ -36,7 +52,7 @@ def test_spark_ships_local_src_in_egg(monkeypatch):
     res = rdd.map(foo).collect()
     assert len(res) == N
     paths = [info['filepath'] for info in res]
-    assert all('au_spark_temp-0.0.0-py2.7.egg' in p for p in paths)
+    assert all(EXPECTED_EGG_NAME in p for p in paths)
 
 # def test_spark_au_tensorflow():
 #   def foo(_):

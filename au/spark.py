@@ -83,28 +83,38 @@ class Spark(object):
       except Exception as e:
         log.info(
           "Failed to auto-resolve src root, "
-          "falling back to %s" % cls.PROJ_DIR)
+          "falling back to %s" % cls.SRC_ROOT)
         src_root = cls.SRC_ROOT
     
+    src_root = '/opt/au'
     log.info("Using source root %s " % src_root)
 
+    # Below is a programmatic way to run something like:
+    # $ cd /opt/au && python setup.py clearn bdist_egg
     # Based upon https://github.com/pypa/setuptools/blob/a94ccbf404a79d56f9b171024dee361de9a948da/setuptools/tests/test_bdist_egg.py#L30
-    # See also https://github.com/pypa/setuptools/blob/f52b3b1c976e54df7a70db42bf59ca283412b461/setuptools/dist.py
+    # See also: 
+    # * https://github.com/pypa/setuptools/blob/f52b3b1c976e54df7a70db42bf59ca283412b461/setuptools/dist.py
+    # * https://github.com/pypa/setuptools/blob/46af765c49f548523b8212f6e08e1edb12f22ab6/setuptools/tests/test_sdist.py#L123
+    # * https://github.com/pypa/setuptools/blob/566f3aadfa112b8d6b9a1ecf5178552f6e0f8c6c/setuptools/__init__.py#L51
     from setuptools.dist import Distribution
-    MODNAME = 'au_spark_temp'
+    from setuptools import PackageFinder
+    MODNAME = os.path.split(src_root)[-1]
     dist = Distribution(attrs=dict(
         script_name='setup.py',
         script_args=[
-          'bdist_clean',
-          'bdist_egg', '-q', '--dist-dir', tmp_path
+          'clean',
+          'bdist_egg', 
+            '--dist-dir', tmp_path,
+            '--bdist-dir', os.path.join(tmp_path, 'workdir'),
         ],
         name=MODNAME,
         src_root=src_root,
+        packages=PackageFinder.find(where=src_root),
     ))
     log.info("Generating egg to %s ..." % tmp_path)
-    # with util.quiet():
-    dist.parse_command_line()
-    dist.run_commands()
+    with util.quiet():
+      dist.parse_command_line()
+      dist.run_commands()
 
     egg_path = os.path.join(tmp_path, MODNAME + '-0.0.0-py2.7.egg')
     assert os.path.exists(egg_path)

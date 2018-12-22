@@ -8,6 +8,9 @@ kubespray/inventory/default/hosts.ini
 # Don't check in user's cluster artifacts
 kubespray/inventory/default/artifacts
 
+# Spark egg generation creates this dir, can't omit :P
+au.egg-info
+
 *.pyc
 *.DS_Store
 .ipynb_checkpoints

@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from contextlib import contextmanager
@@ -10,6 +11,7 @@ from contextlib import contextmanager
 ### Logging
 _LOGS = {}
 def create_log(name='au'):
+  global _LOGS
   if name not in _LOGS:
     import logging
     LOG_FORMAT = "%(asctime)s\t%(name)-4s %(process)d : %(message)s"
@@ -139,38 +141,40 @@ def run_cmd(cmd, collect=False):
   log.info("... done with %s " % cmd)
   return out
 
+_SYS_INFO_LOCK = threading.Lock()
 def get_sys_info():
+  global _SYS_INFO_LOCK
   log = create_log()
 
   log.info("Listing system info ...")
 
   info = {}
   info['filepath'] = os.path.abspath(__file__)
+  info['PYTHONPATH'] = ':'.join(sys.path)
   
   @contextmanager
-  def ignore_exceptions():
-    try:
-      yield
-    except Exception:
-      pass
+  def atomic_ignore_exceptions():
+    with _SYS_INFO_LOCK:
+      try:
+        yield
+      except Exception:
+        pass
 
   # Tensorflow Devices
-  with ignore_exceptions():
-    from tensorflow.python.client import device_lib
-    devs = device_lib.list_local_devices()
-    info['tensorflow_devices'] = [str(v) for v in devs]
+  # TODO this util can crash with 'failed to allocate 2.2K' :P
+  #with atomic_ignore_exceptions():
+  #  from tensorflow.python.client import device_lib
+  #  devs = device_lib.list_local_devices()
+  #  info['tensorflow_devices'] = [str(v) for v in devs]
 
-  # CPU
-  with ignore_exceptions():
-    info['cpuinfo'] = run_cmd('cat /proc/cpuinfo')
-  
-  # Disk
-  with ignore_exceptions():
-    info['disk_free'] = run_cmd('df -h')
-  
-  # Network
-  with ignore_exceptions():
-    info['ifconfig'] = run_cmd('ifconfig')
+  def safe_cmd(cmd):
+    with atomic_ignore_exceptions():
+      return run_cmd(cmd, collect=True) or ''
+
+  info['nvidia_smi'] = safe_cmd('nvidia-smi')
+  info['cpuinfo'] = safe_cmd('cat /proc/cpuinfo')
+  info['disk_free'] = safe_cmd('df -h')
+  info['ifconfig'] = safe_cmd('ifconfig')
   
   return info
 
