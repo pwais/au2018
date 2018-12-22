@@ -1,6 +1,7 @@
 import itertools
 import os
 import shutil
+import subprocess
 import sys
 import time
 
@@ -125,6 +126,54 @@ def quiet():
     sys.stdout = old_stdout
     sys.stderr = old_stderr
 
+def run_cmd(cmd, collect=False):
+  log = create_log()
+  
+  cmd = cmd.replace('\n', '').strip()
+  log.info("Running %s ..." % cmd)
+  if collect:
+    out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
+  else:
+    subprocess.check_call(cmd, shell=True)
+    out = None
+  log.info("... done with %s " % cmd)
+  return out
+
+def get_sys_info():
+  log = create_log()
+
+  log.info("Listing system info ...")
+
+  info = {}
+  info['filepath'] = os.path.abspath(__file__)
+  
+  @contextmanager
+  def ignore_exceptions():
+    try:
+      yield
+    except Exception:
+      pass
+
+  # Tensorflow Devices
+  with ignore_exceptions():
+    from tensorflow.python.client import device_lib
+    devs = device_lib.list_local_devices()
+    info['tensorflow_devices'] = [str(v) for v in devs]
+
+  # CPU
+  with ignore_exceptions():
+    info['cpuinfo'] = run_cmd('cat /proc/cpuinfo')
+  
+  # Disk
+  with ignore_exceptions():
+    info['disk_free'] = run_cmd('df -h')
+  
+  # Network
+  with ignore_exceptions():
+    info['ifconfig'] = run_cmd('ifconfig')
+  
+  return info
+
 
 ### I/O
 
@@ -139,6 +188,10 @@ def mkdir(path):
 
 def rm_rf(path):
   shutil.rmtree(path)
+
+def cleandir(path):
+  mkdir(path)
+  rm_rf(path)
 
 def download(uri, dest):
   """Fetch `uri`, which is a file or archive, and put in `dest`, which

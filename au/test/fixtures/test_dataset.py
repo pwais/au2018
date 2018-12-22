@@ -83,8 +83,7 @@ def test_imagerow_demo(monkeypatch):
     r.split = 'test'
   
   PQ_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'ImageRow_pq_demo')
-  util.mkdir(PQ_TEMPDIR)
-  util.rm_rf(PQ_TEMPDIR)
+  util.cleandir(PQ_TEMPDIR)
   
   ImageRow.write_to_parquet(train, PQ_TEMPDIR)
   ImageRow.write_to_parquet(test, PQ_TEMPDIR)
@@ -142,8 +141,7 @@ def test_imagetable_demo(monkeypatch):
   TABLE_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
                       'ImageTable_pq_demo')
-  util.mkdir(TABLE_TEMPDIR)
-  util.rm_rf(TABLE_TEMPDIR)
+  util.cleandir(TABLE_TEMPDIR)
   
   with monkeypatch.context() as m: 
     m.setattr(conf, 'AU_TABLE_CACHE', TABLE_TEMPDIR)

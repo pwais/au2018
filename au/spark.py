@@ -39,7 +39,7 @@ class Spark(object):
   SRC_ROOT = os.path.join(conf.AU_ROOT, 'au')
   
   @classmethod
-  def _create_egg(cls, src_root=None, tmp_path=None, quiet=True):
+  def _create_egg(cls, src_root=None, tmp_path=None):
     """Build a Python Egg from the current project and return a path
     to the artifact.  
 
@@ -68,7 +68,11 @@ class Spark(object):
 
     if tmp_path is None:
       import tempfile
-      tmp_path = tempfile.gettempdir()
+      tempdir = tempfile.gettempdir()
+
+      SUBDIR_NAME = 'au_eggs'
+      tmp_path = os.path.join(tempdir, SUBDIR_NAME)
+      util.cleandir(tmp_path)
 
     if src_root is None:
       log.info("Trying to auto-resolve path to src root ...")
@@ -90,14 +94,17 @@ class Spark(object):
     MODNAME = 'au_spark_temp'
     dist = Distribution(attrs=dict(
         script_name='setup.py',
-        script_args=['bdist_egg', '-q', '--dist-dir', tmp_path],
+        script_args=[
+          'bdist_clean',
+          'bdist_egg', '-q', '--dist-dir', tmp_path
+        ],
         name=MODNAME,
         src_root=src_root,
     ))
     log.info("Generating egg to %s ..." % tmp_path)
-    with util.quiet():
-      dist.parse_command_line()
-      dist.run_commands()
+    # with util.quiet():
+    dist.parse_command_line()
+    dist.run_commands()
 
     egg_path = os.path.join(tmp_path, MODNAME + '-0.0.0-py2.7.egg')
     assert os.path.exists(egg_path)

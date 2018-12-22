@@ -11,9 +11,12 @@ def test_spark():
   with testutils.LocalSpark.sess() as spark:
     testutils.LocalSpark.test_pi(spark)
 
-def test_spark_au(monkeypatch):
+def test_spark_ships_local_src_in_egg(monkeypatch):
   def foo(_):
-    # Force pyspark to read from the egg file
+    # Normally, pytest puts the local source tree on the PYTHONPATH.  That
+    # setting gets inherited when Spark forks a python subprocess to run
+    # this function.  Remove the source tree from the PYTHONPATH here
+    # in order to force pyspark to read from the egg file / SparkFiles.
     import sys
     if '/opt/au' in sys.path:
       sys.path.remove('/opt/au')
@@ -24,7 +27,7 @@ def test_spark_au(monkeypatch):
     s = util.ichunked([1, 2, 3], 3)
     assert list(s) == [(1, 2, 3)]
     
-    return os.path.abspath(util.__file__)
+    return util.get_sys_info()
   
   with testutils.LocalSpark.sess() as spark:
     sc = spark.sparkContext
@@ -32,7 +35,8 @@ def test_spark_au(monkeypatch):
     rdd = sc.parallelize(range(N))
     res = rdd.map(foo).collect()
     assert len(res) == N
-    assert all('au_spark_temp-0.0.0-py2.7.egg' in p for p in res)
+    paths = [info['filepath'] for info in res]
+    assert all('au_spark_temp-0.0.0-py2.7.egg' in p for p in paths)
 
 # def test_spark_au_tensorflow():
 #   def foo(_):
@@ -43,8 +47,7 @@ def test_spark_numpy_df():
   TEST_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
                       'spark_numpy_df')
-  util.mkdir(TEST_TEMPDIR)
-  util.rm_rf(TEST_TEMPDIR)
+  util.cleandir(TEST_TEMPDIR)
   
 
   import numpy as np

@@ -38,3 +38,7 @@ def test_thruput_observer():
   
   u = util.ThruputObserver.union((t1, t2))
   assert str(u) == str(t2)
+
+def test_sys_info():
+  info = util.get_sys_info()
+  assert 'au' in info['filepath']
