@@ -19,6 +19,8 @@ def test_spark_ships_local_src_in_egg(monkeypatch):
     # setting gets inherited when Spark forks a python subprocess to run
     # this function.  Remove the source tree from the PYTHONPATH here
     # in order to force pyspark to read from the egg file / SparkFiles.
+    # We may safely edit the PYTHONPATH here because this code is run in a
+    # child python process that will soon exit.
     import sys
     if '/opt/au' in sys.path:
       sys.path.remove('/opt/au')
@@ -54,10 +56,25 @@ def test_spark_ships_local_src_in_egg(monkeypatch):
     paths = [info['filepath'] for info in res]
     assert all(EXPECTED_EGG_NAME in p for p in paths)
 
-# def test_spark_au_tensorflow():
-#   def foo(_):
-#     from au import util
-#     sess = util.tf_create_session_config()
+def test_spark_tensorflow():
+  def foo(x):
+    import tensorflow as tf
+
+    a = tf.constant(x)
+    b = tf.constant(3)
+
+    from au import util
+    sess = util.tf_create_session()
+    res = sess.run(a * b)
+    return res == 3 * x
+  
+  with testutils.LocalSpark.sess() as spark:
+    sc = spark.sparkContext
+    N = 10
+    rdd = sc.parallelize(range(N))
+    res = rdd.map(foo).collect()
+    assert len(res) == N
+    assert all(res)
 
 def test_spark_numpy_df():
   TEST_TEMPDIR = os.path.join(
