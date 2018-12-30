@@ -7,10 +7,12 @@ import os
 
 import pytest
 
+@pytest.mark.slow
 def test_spark():
   with testutils.LocalSpark.sess() as spark:
     testutils.LocalSpark.test_pi(spark)
 
+@pytest.mark.slow
 def test_spark_ships_local_src_in_egg(monkeypatch):
   EXPECTED_EGG_NAME = 'au-0.0.0-py2.7.egg'
 
@@ -56,6 +58,7 @@ def test_spark_ships_local_src_in_egg(monkeypatch):
     paths = [info['filepath'] for info in res]
     assert all(EXPECTED_EGG_NAME in p for p in paths)
 
+@pytest.mark.slow
 def test_spark_tensorflow():
   def foo(x):
     import tensorflow as tf
@@ -76,6 +79,7 @@ def test_spark_tensorflow():
     assert len(res) == N
     assert all(res)
 
+@pytest.mark.slow
 def test_spark_numpy_df():
   TEST_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
@@ -128,3 +132,24 @@ def test_spark_numpy_df():
       return pprint.pformat(sorted(rowz, key=lambda row: row['id']))
     assert sorted_row_str(rows) == sorted_row_str(decoded_rows)
 
+@pytest.mark.slow
+def test_spark_archive_zip():
+  TEST_TEMPDIR = os.path.join(
+                      testconf.TEST_TEMPDIR_ROOT,
+                      'test_spark_archive_zip')
+  util.cleandir(TEST_TEMPDIR)
+  
+  # Create the fixture
+  ss = ['foo', 'bar', 'baz']
+  
+  fixture_path = os.path.join(TEST_TEMPDIR, 'test.zip')
+  
+  import zipfile
+  with zipfile.ZipFile(fixture_path, mode='w') as z:
+    for s in ss:
+      z.writestr(s, s)
+  
+  with testutils.LocalSpark.sess() as spark:
+    rdd = testutils.LocalSpark.archive_rdd(spark, fixture_path)
+    name_data = rdd.map(lambda entry: (entry.name, entry.data)).collect()
+    assert sorted(name_data) == sorted((s, s) for s in ss)

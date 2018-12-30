@@ -4,7 +4,7 @@ FROM tensorflow/tensorflow:1.11.0-gpu
 # up properly when deleting things and the cache gets stale.
 ENV PYTHONDONTWRITEBYTECODE 1
 
-COPY docker/sources.list /etc/apt/sources.list
+# COPY docker/sources.list /etc/apt/sources.list
 
 ## Required for installing things
 RUN apt-get update
@@ -90,6 +90,7 @@ RUN \
   apt-get install -y \
     curl \
     git \
+    gsutil \
     net-tools \
     screen \
     ssh \
@@ -104,6 +105,7 @@ RUN \
 ## AU Python
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
+RUN python -c 'import imageio; imageio.plugins.ffmpeg.download()'
 
 
 ## TF Models

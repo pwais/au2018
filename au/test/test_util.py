@@ -1,5 +1,8 @@
 from au import util
+from au.test import testconf
 from au.test import testutils
+
+import os
 
 def test_ichunked():
   
@@ -42,3 +45,24 @@ def test_thruput_observer():
 def test_sys_info():
   info = util.get_sys_info()
   assert 'au' in info['filepath']
+
+def test_archive_fliyweight_zip():
+  TEST_TEMPDIR = os.path.join(
+                      testconf.TEST_TEMPDIR_ROOT,
+                      'test_archive_flyweight_zip')
+  util.cleandir(TEST_TEMPDIR)
+  
+  # Create the fixture
+  ss = ['foo', 'bar', 'baz']
+  
+  fixture_path = os.path.join(TEST_TEMPDIR, 'test.zip')
+  
+  import zipfile
+  with zipfile.ZipFile(fixture_path, mode='w') as z:
+    for s in ss:
+      z.writestr(s, s)
+  
+  fws = util.ArchiveFileFlyweight.fws_from(fixture_path)
+  assert len(fws) == len(ss)
+  datas = [fw.data for fw in fws]
+  assert sorted(datas) == sorted(ss)

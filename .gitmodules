@@ -16,3 +16,6 @@
 [submodule "external/youtube-8m"]
 	path = external/youtube-8m
 	url = https://github.com/google/youtube-8m
+[submodule "external/bdd-data"]
+	path = external/bdd-data
+	url = git@github.com:pwais/bdd-data.git

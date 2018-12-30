@@ -141,6 +141,8 @@ def run_cmd(cmd, collect=False):
   log.info("... done with %s " % cmd)
   return out
 
+
+
 _SYS_INFO_LOCK = threading.Lock()
 def get_sys_info():
   global _SYS_INFO_LOCK
@@ -161,7 +163,8 @@ def get_sys_info():
         pass
 
   # Tensorflow Devices
-  # TODO this util can crash with 'failed to allocate 2.2K' :P
+  # TODO this util can crash with 'failed to allocate 2.2K' :P even with
+  # a lock? wat??
   #with atomic_ignore_exceptions():
   #  from tensorflow.python.client import device_lib
   #  devs = device_lib.list_local_devices()
@@ -177,6 +180,71 @@ def get_sys_info():
   info['ifconfig'] = safe_cmd('ifconfig')
   
   return info
+
+
+
+### ArchiveFileFlyweight
+
+class _IArchive(object):
+    __SLOTS__ = ('archive_path', 'thread_data')
+    
+    def __init__(self, path):
+      self.archive_path = path
+      self.thread_data = threading.local()
+
+    def _setup(self, archive_path):
+      pass
+
+    @classmethod
+    def list_names(cls, archive_path):
+      return []
+
+    def _archive_get(self, name):
+      raise KeyError("Interface stores no data")
+
+    def get(self, name):
+      self._setup(self.archive_path)
+      return self._archive_get(name)
+
+class _ZipArchive(_IArchive):
+  
+  def _setup(self, archive_path):
+    if not hasattr(self.thread_data, 'zipfile'):
+      import zipfile
+      self.thread_data.zipfile = zipfile.ZipFile(archive_path)
+  
+  def _archive_get(self, name):
+    return self.thread_data.zipfile.read(name)
+
+  @classmethod
+  def list_names(cls, archive_path):
+    import zipfile
+    return zipfile.ZipFile(archive_path).namelist()
+
+class ArchiveFileFlyweight(object):
+
+  __SLOTS__ = ('name', 'archive')
+
+  def __init__(self, name='', archive=None):
+    self.name = name
+    self.archive = archive
+
+  @staticmethod
+  def fws_from(archive_path):
+    if archive_path.endswith('zip'):
+        archive = _ZipArchive(archive_path)
+        names = _ZipArchive.list_names(archive_path)
+        return [
+          ArchiveFileFlyweight(name=name, archive=archive)
+          for name in names
+        ]
+    else:
+      raise ValueError("Don't know how to read %s" % archive_path)
+
+  @property
+  def data(self):
+    return self.archive.get(self.name)
+
 
 
 ### I/O
@@ -196,6 +264,7 @@ def rm_rf(path):
 def cleandir(path):
   mkdir(path)
   rm_rf(path)
+  mkdir(path)
 
 def download(uri, dest):
   """Fetch `uri`, which is a file or archive, and put in `dest`, which

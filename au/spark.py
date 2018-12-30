@@ -171,6 +171,11 @@ class Spark(object):
     yield spark
 
   @staticmethod
+  def archive_rdd(spark, path):
+    fws = util.ArchiveFileFlyweight.fws_from(path)
+    return spark.sparkContext.parallelize(fws)
+
+  @staticmethod
   def test_pi(spark):
     util.log.info("Running PI ...")
     sc = spark.sparkContext
