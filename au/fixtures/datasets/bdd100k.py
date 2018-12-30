@@ -4,6 +4,88 @@ from au import conf
 from au import spark
 from au import util
 
+class MutableTuple(object):
+  __SLOTS__ = tuple()
+
+  def __init__(self, **kwargs):
+    for k in self.__SLOTS__:
+      setattr(self, k, kwargs.get(k))
+
+class Meta(MutableTuple):
+  __SLOTS__ = (
+    'startTime',
+    'endTime',
+    'id',
+    'filename',
+    'timelapse',
+    'rideID',
+  )
+
+class GPSObs(MutableTuple):
+  __SLOTS__ = (
+    'altitude', 
+    'longitude', 
+    'vertical accuracy', 
+    'horizontal accuracy', 
+    'latitude', 
+    'speed',
+
+    'accuracy',
+    'course',
+  )
+
+class Point3(MutableTuple):
+  __SLOTS__ = ('x', 'y', 'z')
+  
+
+class TimeseriesRow(object):
+  __SLOTS__ = (
+    'namespace',
+    'timestamp',
+    'meta',
+    
+    'accelerometer',
+    'gyro',
+    'location',
+    'gps',
+  )
+
+def json_to_rows(jobj, namespace_prefix=''):
+  meta = Meta(**jobj)
+  namespace = namespace_prefix + '.' if namespace_prefix else ''
+  namespace = 'bdd100k.' + meta.filename
+  
+  for datum in jobj.get('gps', []):
+    yield TimeseriesRow(
+      namespace=namespace,
+      timestamp=datum['timestamp'],
+      meta=meta,
+      gps=GPSObs(**datum),
+    )
+  
+  for datum in jobj.get('location', []):
+    yield TimeseriesRow(
+      namespace=namespace,
+      timestamp=datum['timestamp'],
+      meta=meta,
+      location=GPSObs(**datum),
+    )
+  
+  for datum in jobj.get('accelerometer', []):
+    yield TimeseriesRow(
+      namespace=namespace,
+      timestamp=datum['timestamp'],
+      meta=meta,
+      accelerometer=Point3(**datum),
+    )
+  
+  for datum in jobj.get('gyro', []):
+    yield TimeseriesRow(
+      namespace=namespace,
+      timestamp=datum['timestamp'],
+      meta=meta,
+      gyro=Point3(**datum),
+    )
 
 class BDD100K(object):
 
@@ -20,45 +102,5 @@ class BDD100K(object):
 
     ### Transform telemetry into Parquet table
 
-    class Meta(object):
-      __SLOTS__ = (
-        'start_time',
-        'end_time',
-        'id',
-        'filename',
-        'timelapse',
-        'ride_id',
-      )
-
-    class GPSObs(object):
-      __SLOTS__ = (
-        'altitude', 
-        'longitude', 
-        'vertical accuracy', 
-        'horizontal accuracy', 
-        'latitude', 
-        'speed',
-
-        'accuracy',
-        'course',
-      )
-
-    class Point3(object):
-      __SLOTS__ = ('x', 'y', 'z')
-      def __init__(self, **kwargs):
-        self.x = kwargs.get('x')
-        self.y = kwargs.get('y')
-        self.z = kwargs.get('z')
     
-    class Row(object):
-      __SLOTS__ = (
-        'namespace',
-        'timestamp',
-        'meta',
-        
-        'accelerometer',
-        'gyro',
-        'location',
-        'gps',
-      )
     
