@@ -36,7 +36,8 @@ class BDD100kTests(unittest.TestCase):
       FIXTURES = self.fixtures
     
     with testutils.LocalSpark.sess() as spark:
-      ts_row_rdd = TestInfoDataset.ts_row_rdd(spark)
+      ts_row_rdd = TestInfoDataset._dataset_from_zip(spark)
       df = ts_row_rdd#spark.createDataFrame(ts_row_rdd)
       df.printSchema()
+      df.write.parquet('/tmp/yyyyyy', partitionBy=['split', 'video'], compression='gzip')
     

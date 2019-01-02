@@ -12,7 +12,7 @@ class BDD100KFixtures(object):
   TEST_FIXTURE_DIR = os.path.join(conf.AU_DY_TEST_FIXTURES, 'bdd100k')
 
   @classmethod
-  def telemetry(cls):
+  def telemetry_zip(cls):
     return os.path.join(cls.ROOT, 'zips', 'bdd100k_info.zip')
 
   # VIDEO_DIR = os.path.join(ROOT, 'videos')
@@ -28,7 +28,7 @@ class BDD100KFixtures(object):
 
     log.info("Creating bdd100k test fixtures ...")
     ZIPS_TO_COPY = (
-      cls.telemetry(),
+      cls.telemetry_zip(),
     )
 
     def _copy_n(src, dest, n):
@@ -182,9 +182,54 @@ class BDD100kInfoDataset(object):
       )
 
   @classmethod
+  def _dataset_from_zip(cls, spark):
+    archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
+
+    def get_filename_split(entry):
+      import json
+      
+      video_fname = ''
+      json_bytes = entry.data
+      if json_bytes:
+        jobj = json.loads(json_bytes)
+        video_fname = jobj.get('filename', '')
+
+      # Determine train / test split.  NB: Fisher has 20k info objects
+      # on the eval server and is not sharing (hehe)
+      if 'train' in video_fname:
+        split = 'train'
+      elif 'val' in video_fname:
+        split = 'val'
+      else:
+        split = ''
+      
+      return {'video': video_fname, 'split': split}
+
+    filename_split_rdd = archive_rdd.map(get_filename_split)
+    df = spark.createDataFrame(filename_split_rdd)
+    df.registerTempTable('bdd100k_info_video_split')
+
+    # Let Spark's json magic do schema deduction
+    jobj_df = spark.read.json(archive_rdd.map(lambda entry: entry.data))
+    jobj_df.registerTempTable('bdd100k_jobj')
+
+    # Join to create dataset
+    query = """
+              SELECT *
+              FROM
+                bdd100k_info_video_split INNER JOIN bdd100k_jobj
+              WHERE
+                bdd100k_info_video_split.video = bdd100k_jobj.filename AND
+                bdd100k_info_video_split.video != ''
+            """
+    return spark.sql(query)
+
+
+
+  @classmethod
   def ts_row_rdd(cls, spark):
     
-    archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry())
+    archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
 
     def to_rows(entry):
       import json
