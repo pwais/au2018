@@ -171,7 +171,8 @@ def setup_tf_models():
   #  bash object_detection/dataset_tools/download_and_preprocess_mscoco.sh /tmp
   #""")
 
-
+def setup_bdd100k():
+  assert os.path.exists('/opt/au/cache/data/bdd100k/zips/bdd100k_info.zip'), 'TODO: provide formal copy / audit mechanism'
 
 ## Services
 
@@ -307,9 +308,11 @@ def create_arg_parser():
   parser.add_argument(
     '--build-env', default=False, action='store_true',
     help='Build the dockerized dev env image %s' % DOCKER_IMAGE)
+  
   parser.add_argument(
     '--alluxio-local', default=False, action='store_true',
     help='Start Alluxio local node (e.g. for GFS access & caching)')
+  
   parser.add_argument(
     '--test-spark', default=False, action='store_true',
     help='Ensure Spark works locally')
@@ -318,6 +321,10 @@ def create_arg_parser():
     help='Run the full set of tests with the local source tree in a '
          'containerized environment')
   
+  parser.add_argument(
+    '--setup-external', default=False, action='store_true',
+    help='Set up external projects and datasets')
+
   return parser
 
 def main(args=None):
@@ -339,6 +346,9 @@ def main(args=None):
     DockerEnv.run_cmd(
       'pytest au -s --runslow',
       container_name='aucli_full_test')
+  elif args.setup_external:
+    setup_tf_models()
+    setup_bdd100k()
 
 if __name__ == '__main__':
   main()
