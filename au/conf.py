@@ -37,3 +37,7 @@ AU_IMAGENET_SAMPLE_IMGS_DIR = os.environ.get(
 AU_IMAGENET_SAMPLE_LABELS_PATH = os.environ.get(
                 'AU_IMAGENET_SAMPLE_LABELS_PATH',
                 os.path.join(AU_IMAGES_SAMPLE, 'imagenet_fname_to_label.json'))
+
+AU_DY_TEST_FIXTURES = os.environ.get(
+                    'AU_DY_TEST_FIXTURES',
+                    os.path.join(AU_CACHE, 'test'))
