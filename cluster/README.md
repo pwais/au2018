@@ -60,7 +60,7 @@ We use `kubespray` and k8s for the following reasons:
         test k8s via:
         ```
         cd /opt/au/kubespray/inventory/default/artifacts &&
-        kubectl.sh --kubeconfig admin.conf get pods --all-namespaces
+        ./kubectl --kubeconfig admin.conf get pods --all-namespaces
         ```
 
 #### Useful Links

@@ -182,7 +182,7 @@ class BDD100kInfoDataset(object):
       )
 
   @classmethod
-  def _dataset_from_zip(cls, spark):
+  def _info_table_from_zip(cls, spark):
     archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
 
     def get_filename_split(entry):
@@ -222,7 +222,93 @@ class BDD100kInfoDataset(object):
                 bdd100k_info_video_split.video = bdd100k_jobj.filename AND
                 bdd100k_info_video_split.video != ''
             """
-    return spark.sql(query)
+    info_table_df = spark.sql(query)
+    return info_table_df
+
+  @classmethod
+  def _ts_table_from_info_table(cls, spark, info_table_df):
+    INFO_TABLENAME = 'bdd100k_info'
+    info_table_df.registerTempTable(INFO_TABLENAME)
+    info_table_df.printSchema()
+
+    TS_QUERIES = (
+      # Accelerometer
+      """
+        SELECT 
+          video,
+          split,
+          a.timestamp as t,
+          a.x as accel_x,
+          a.y as accel_y,
+          a.z as accel_z
+        FROM 
+          (SELECT video, split, explode(accelerometer) a FROM {table})
+      """,
+
+      # Gyro
+      """
+        SELECT 
+          video,
+          split,
+          gyro.timestamp as t,
+          gyro.x as gyro_x,
+          gyro.y as gyro_y,
+          gyro.z as gyro_z
+        FROM 
+          (SELECT video, split, explode(gyro) gyro FROM {table})
+      """,
+
+      # Gps
+      """
+        SELECT 
+          video,
+          split,
+          
+          gps.timestamp as t,
+          gps.longitude as gps_long,
+          gps.latitude as gps_lat,
+          gps.altitude as gps_alt,
+          gps.speed as gps_v,
+
+          gps.`horizontal accuracy` as gps_herr,
+          gps.`vertical accuracy` as gps_verr
+        FROM 
+          (SELECT video, split, explode(gps) gps FROM {table})
+      """
+    )
+  
+    dfs = [
+      spark.sql(query.format(table=INFO_TABLENAME))
+      for query in TS_QUERIES
+    ]
+
+    all_cols = set(
+      itertools.chain.from_iterable(
+        df.schema.names for df in dfs))
+    
+    from pyspark.sql.functions import lit
+    for i in range(len(dfs)):
+      df = dfs[i]
+      df_missing_cols = all_cols - set(df.schema.names)
+      for colname in df_missing_cols:
+        df = df.withColumn(colname, lit(None))
+      dfs[i] = df
+    
+    ts_df = dfs[0]
+    for df in dfs[1:]:
+      ts_df = ts_df.union(df)
+
+
+    # # NB: we must use RDD union because the columns between queries
+    # # differ; Dataframe union uses SQL UNION, which requires each
+    # # query to have the same columns.
+    # ts_rdd = spark.sparkContext.union([df.rdd for df in dfs])
+    # ts_df = spark.createDataFrame(ts_rdd, samplingRatio=1)
+    return ts_df
+
+    
+
+
 
 
 

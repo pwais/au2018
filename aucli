@@ -19,6 +19,13 @@ Now develop!  Run tests locally:
 Outside of the dockerized environment, use:
   ./aucli --build-env
 
+
+Use the following env vars to override behavior:
+  * AU_ROOT - location of AU codebase
+  * AU_DOCKER_IMAGE - create a shell or push the au docker image with
+      this image name
+  * AU_CONTAINER_NAME - create or use a container with this name
+
 """
 
 import os
@@ -26,7 +33,7 @@ import subprocess
 import sys
 
 AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
-DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:v1.1')
+DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:v1.2')
 CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
 
 ## Logging
