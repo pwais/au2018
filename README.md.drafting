@@ -18,6 +18,15 @@ pytest au -s --runslow -k test_mnist_save_png
 lolololololol https://github.com/databricks/spark-deep-learning/blob/973e9da5216f69763f44da37d6039d205ddd5ade/python/sparkdl/estimators/keras_image_file_estimator.py#L194
 
 
+
+reverse ssh tunnel bastion 
+https://blog.trackets.com/2014/05/17/ssh-tunnel-local-and-remote-port-forwarding-explained-with-examples.html 
+https://www.youtube.com/watch?v=JmjqPpQdtW8
+
+
+
+
+
 for today:
  * get inferences for mnist, mobilenet, and deeplab and/or maskrcnn working
  * get the above running using sparkdl
