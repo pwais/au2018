@@ -41,27 +41,17 @@ We use `kubespray` and k8s for the following reasons:
 
 ### How?
 
- 1. Create and edit [hosts.ini](kubespray/inventory/default/hosts.ini) to suit
-        your needs.  See [the example](kubespray/inventory/default/hosts.ini.example).
- 2. Make sure you have submodules pulled in the `au` repo: 
-        `git submodule update --init`
- 3. Run `./aucli --shell` to drop into a dockerized shell.
- 4. Run setup:
-        ```
-        cd external/kubespray &&
-        ansible-playbook \
-            -v --become \
-            --key-file /outer_root/home/au/.ssh/your_key_file \
-            -i /opt/au/kubespray/inventory/default/hosts.ini \
-                cluster.yml 
-        ```
- 5. The inventory config in the `au` repo includes `kubectl_localhost: true`
-        and `kubeconfig_localhost: true` to allow local k8s access so you can
-        test k8s via:
-        ```
-        cd /opt/au/kubespray/inventory/default/artifacts &&
-        ./kubectl --kubeconfig admin.conf get pods --all-namespaces
-        ```
+ 1. Run `./aucli --shell` to drop into a dockerized shell.
+ 2. Use `./aucli --kube-init` to step through cluster configuation set-up.
+       You'll need a cluster ssh key and a [hosts.ini](kubespray/inventory/default/hosts.ini.example)
+       file to spec the cluster.
+ 3. Use `./aucli --kube-up` to bring up the cluster via kubespray.  Kubespray
+       may fail the first time or two, or you may have other bugs.  `aucli`
+       will print out the commands it runs, so try reviewing stdout in order
+       to debug.
+ 4. The inventory config in the `au` repo includes `kubectl_localhost: true`
+       and `kubeconfig_localhost: true` to allow local k8s access so you can
+       test k8s via `./aucli --kube-test`.
 
 #### Useful Links
  * https://github.com/kubernetes-sigs/kubespray/blob/master/docs/getting-started.md

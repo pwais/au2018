@@ -298,6 +298,76 @@ def alluxio_start_local():
         /opt/alluxio/bin/alluxio runTests --directory /gcs
   """ % ALLUXIO_HOST)
 
+
+## K8s-based Cluster
+
+class KubeCluster(object):
+
+  SSH_KEYFILE = os.path.join(AU_ROOT, 'kubespray/cluster_ssh_key')
+
+  HOSTS_INI = os.path.join(AU_ROOT, 'kubespray/inventory/default/hosts.ini')
+  HOSTS_INI_TEMPLATE = HOSTS_INI + '.example'
+
+  KUBESPRAY_SRC = os.path.join(AU_ROOT, 'external/kubespray')
+  KUBESPRAY_CLUSTER_UP = os.path.join(KUBESPRAY_SRC, 'cluster.yml')
+
+  ARTIFACTS = os.path.join(
+                AU_ROOT, 'kubespray/inventory/default/artifacts')
+  KUBECTL = os.path.join(ARTIFACTS, 'kubectl')
+  ADMIN_CONF = os.path.join(ARTIFACTS, 'admin.conf')
+
+  @classmethod
+  def init(cls):
+    assert os.path.exists(cls.HOSTS_INI_TEMPLATE), \
+      "Are you in an aucli --shell ?"
+    
+    if not os.path.exists(cls.SSH_KEYFILE):
+      print
+      print
+      print "\t\tPlease copy or symlink a cluster SSH private key to "
+      print "\t\t\t" + cls.SSH_KEYFILE
+      print "\t\t(e.g. ln -s /outer_root/home/au/.ssh/your_key_file "  + cls.SSH_KEYFILE + " )"
+      print "\t\tand run ./aucli --kube-init again."
+      print
+      sys.exit(1)
+    
+    if not os.path.exists(cls.HOSTS_INI):
+      run_cmd('cp -v ' + cls.HOSTS_INI_TEMPLATE + ' ' + cls.HOSTS_INI)
+    
+    print
+    print
+    print "\t\tNow please edit " + cls.HOSTS_INI + " to spec your cluster."
+    print "\t\tAfterwards, run $ aucli --kube-up"
+    print
+    print
+    sys.exit(0)
+  
+  @classmethod
+  def up(cls):
+    assert os.path.exists(cls.KUBESPRAY_CLUSTER_UP), (
+      "Do you have submodules pulled?  Use $ git submodule update --init "
+      "outside the AU dockerized shell")
+    
+    cmd = """
+      cd {KUBESPRAY_SRC} &&
+      ansible-playbook \
+        -v --become \
+        --key-file {SSH_KEYFILE} \
+        -i {HOSTS_INI} \
+                cluster.yml 
+    """.format(**cls.__dict__)
+    run_cmd(cmd)
+    
+  @classmethod
+  def test(cls):
+    assert os.path.exists(cls.ADMIN_CONF), "Did cluster bring-up succeed?"
+
+    cmd = """
+      {KUBECTL} --kubeconfig {ADMIN_CONF} get pods --all-namespaces
+    """.format(**cls.__dict__)
+    run_cmd(cmd)
+
+
 ## CLI
 
 def create_arg_parser():
@@ -329,6 +399,16 @@ def create_arg_parser():
          'containerized environment')
   
   parser.add_argument(
+    '--kube-init', default=False, action='store_true',
+    help='Prepare kubespray cluster launch')
+  parser.add_argument(
+    '--kube-up', default=False, action='store_true',
+    help='Bring up the k8s cluster via Kubespray')
+  parser.add_argument(
+    '--kube-test', default=False, action='store_true',
+    help='Show k8s pods and provide kubectl usage')
+
+  parser.add_argument(
     '--setup-external', default=False, action='store_true',
     help='Set up external projects and datasets')
 
@@ -345,14 +425,24 @@ def main(args=None):
     DockerEnv.shell()
   elif args.shell_rm:
     DockerEnv.rm_shell()
+  
   elif args.alluxio_local:
     alluxio_start_local()
+  
   elif args.test_spark:
     test_spark()
   elif args.test_full:
     DockerEnv.run_cmd(
       'pytest au -s --runslow',
       container_name='aucli_full_test')
+  
+  elif args.kube_init:
+    KubeCluster.init()
+  elif args.kube_up:
+    KubeCluster.up()
+  elif args.kube_test:
+    KubeCluster.test()
+
   elif args.setup_external:
     setup_tf_models()
     setup_bdd100k()
