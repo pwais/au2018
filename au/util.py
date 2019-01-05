@@ -141,6 +141,21 @@ def run_cmd(cmd, collect=False):
   log.info("... done with %s " % cmd)
   return out
 
+def get_non_loopback_iface():
+  # https://stackoverflow.com/a/1267524
+  import socket
+  non_loopbacks = [
+    ip for ip in socket.gethostbyname_ex(socket.gethostname())[2] if not ip.startswith("127.")
+  ]
+  if non_loopbacks:
+    return non_loopbacks[0]
+
+  # Get an iface that can connect to Google DNS ...
+  s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+  s.connect(("8.8.8.8", 80))
+  ifrace = s.getsockname()[0]
+  s.close()
+  return iface
 
 
 _SYS_INFO_LOCK = threading.Lock()
@@ -162,14 +177,6 @@ def get_sys_info():
       except Exception:
         pass
 
-  # Tensorflow Devices
-  # TODO this util can crash with 'failed to allocate 2.2K' :P even with
-  # a lock? wat??
-  #with atomic_ignore_exceptions():
-  #  from tensorflow.python.client import device_lib
-  #  devs = device_lib.list_local_devices()
-  #  info['tensorflow_devices'] = [str(v) for v in devs]
-
   def safe_cmd(cmd):
     with atomic_ignore_exceptions():
       return run_cmd(cmd, collect=True) or ''
@@ -178,10 +185,17 @@ def get_sys_info():
   info['cpuinfo'] = safe_cmd('cat /proc/cpuinfo')
   info['disk_free'] = safe_cmd('df -h')
   info['ifconfig'] = safe_cmd('ifconfig')
+
+  import socket
+  info['hostname'] = socket.gethostname()
+  info['host'] = get_non_loopback_iface()
+
+  import multiprocessing
+  info['n_cpus'] = multiprocessing.cpu_count()
   
+  log.info("... got all system info.")
+
   return info
-
-
 
 ### ArchiveFileFlyweight
 

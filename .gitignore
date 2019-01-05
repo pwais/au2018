@@ -14,6 +14,7 @@ au.egg-info
 # A symlink only used for k8s cluster utils in aucli
 kubespray/cluster_ssh_key
 
+build
 *.pyc
 *.DS_Store
 .ipynb_checkpoints

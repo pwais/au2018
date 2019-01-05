@@ -102,6 +102,7 @@ RUN \
     dnsutils \
     git \
     gsutil \
+    net-tools \
     screen \
     ssh \
     sudo \

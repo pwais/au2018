@@ -8,76 +8,8 @@ import os
 import pytest
 
 @pytest.mark.slow
-def test_spark():
-  with testutils.LocalSpark.sess() as spark:
-    testutils.LocalSpark.test_pi(spark)
-
-@pytest.mark.slow
-def test_spark_ships_local_src_in_egg(monkeypatch):
-  EXPECTED_EGG_NAME = 'au-0.0.0-py2.7.egg'
-
-  def foo(_):
-    # Normally, pytest puts the local source tree on the PYTHONPATH.  That
-    # setting gets inherited when Spark forks a python subprocess to run
-    # this function.  Remove the source tree from the PYTHONPATH here
-    # in order to force pyspark to read from the egg file / SparkFiles.
-    # We may safely edit the PYTHONPATH here because this code is run in a
-    # child python process that will soon exit.
-    import sys
-    if '/opt/au' in sys.path:
-      sys.path.remove('/opt/au')
-    if '' in sys.path:
-      sys.path.remove('')
-
-    ## Check for the egg, which Spark puts on the PYTHONPATH
-    egg_path = ''
-    for p in sys.path:
-      if EXPECTED_EGG_NAME in p:
-        egg_path = p
-    assert egg_path, 'Egg not found in sys.path %s' % (sys.path,)
-
-    ## Is the egg any good?
-    import zipfile
-    f = zipfile.ZipFile(egg_path)
-    egg_contents = f.namelist()
-    assert any('au' in fname for fname in egg_contents), egg_contents
-
-    ## Use the egg!
-    from au import util
-    s = util.ichunked([1, 2, 3], 3)
-    assert list(s) == [(1, 2, 3)]
-    
-    return util.get_sys_info()
-  
-  with testutils.LocalSpark.sess() as spark:
-    sc = spark.sparkContext
-    N = 10
-    rdd = sc.parallelize(range(N))
-    res = rdd.map(foo).collect()
-    assert len(res) == N
-    paths = [info['filepath'] for info in res]
-    assert all(EXPECTED_EGG_NAME in p for p in paths)
-
-@pytest.mark.slow
-def test_spark_tensorflow():
-  def foo(x):
-    import tensorflow as tf
-
-    a = tf.constant(x)
-    b = tf.constant(3)
-
-    from au import util
-    sess = util.tf_create_session()
-    res = sess.run(a * b)
-    return res == 3 * x
-  
-  with testutils.LocalSpark.sess() as spark:
-    sc = spark.sparkContext
-    N = 10
-    rdd = sc.parallelize(range(N))
-    res = rdd.map(foo).collect()
-    assert len(res) == N
-    assert all(res)
+def test_spark_selftest():
+  testutils.LocalSpark.selftest()
 
 @pytest.mark.slow
 def test_spark_numpy_df():

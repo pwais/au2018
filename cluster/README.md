@@ -50,8 +50,10 @@ We use `kubespray` and k8s for the following reasons:
        will print out the commands it runs, so try reviewing stdout in order
        to debug.
  4. The inventory config in the `au` repo includes `kubectl_localhost: true`
-       and `kubeconfig_localhost: true` to allow local k8s access so you can
-       test k8s via `./aucli --kube-test`.
+       and `kubeconfig_localhost: true` to allow local k8s access.  To test
+       your cluster as well as get the path to `kubectl`, use:
+              ```./aucli --kube-test```
+       inside the shell and look for "Path to kubectl".
 
 #### Useful Links
  * https://github.com/kubernetes-sigs/kubespray/blob/master/docs/getting-started.md
