@@ -35,7 +35,7 @@ import subprocess
 import sys
 
 AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
-DOCKER_IMAGE_VERSION = 'v1.3.test'
+DOCKER_IMAGE_VERSION = 'v1.3'
 DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:' + DOCKER_IMAGE_VERSION)
 CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
 
@@ -483,7 +483,7 @@ def main(args=None):
     args = parser.parse_args()
   
   if args.build_env:
-    # DockerEnv.build()
+    DockerEnv.build()
     KubeCluster.build_spark_env()
   elif args.shell:
     DockerEnv.shell()
@@ -497,7 +497,7 @@ def main(args=None):
     alluxio_start_local()
   
   elif args.test_spark:
-    test_spark()
+    test_spark_local()
   elif args.test_full:
     DockerEnv.run_cmd(
       'pytest au -s --runslow',
