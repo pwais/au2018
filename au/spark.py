@@ -9,6 +9,7 @@ from contextlib import contextmanager
 
 import numpy as np
 
+# Try to provide a helpful error message if we can't find Spark / Java
 try:
   import findspark
   findspark.init()
@@ -30,6 +31,7 @@ except Exception as e:
 
 
 class Spark(object):
+  # Default to local Spark master
   MASTER = None
   CONF = None
   CONF_KV = None
@@ -138,7 +140,6 @@ class Spark(object):
   def _setup(cls):
     # Warm the cache
     egg_path = cls.egg_path()
-    # os.environ['PYSPARK_SUBMIT_ARGS'] = '--py-files %s' % egg_path
 
   @classmethod
   def getOrCreate(cls):
@@ -176,6 +177,22 @@ class Spark(object):
     return spark.sparkContext.parallelize(fws)
 
   @staticmethod
+  def num_executors(spark):
+    # NB: Not a public API! But likely stable.
+    # https://stackoverflow.com/a/42064557
+    return spark.sparkContext._jsc.sc().getExecutorMemoryStatus().size()
+
+  ### Test Utilities (for unit tests and more!)
+
+  @classmethod
+  def selftest(cls):
+    with cls.sess() as spark:
+      spark.sparkContext.setLogLevel("INFO")
+      cls.test_pi(spark)
+      cls.test_egg(spark)
+      cls.test_tensorflow(spark)
+
+  @staticmethod
   def test_pi(spark):
     util.log.info("Running PI ...")
     sc = spark.sparkContext
@@ -189,7 +206,131 @@ class Spark(object):
     util.log.info("Pi estimate: %s" % pi)
     assert abs(pi - 3.14) < 0.1, "Spark program had an error?"
 
+  @staticmethod
+  def test_egg(spark):
+    EXPECTED_EGG_NAME = 'au-0.0.0-py2.7.egg'
 
+    def worker_test(_):
+      # Normally, pytest puts the local source tree on the PYTHONPATH.  That
+      # setting gets inherited when Spark forks a python subprocess to run
+      # this function.  Remove the source tree from the PYTHONPATH here
+      # in order to force pyspark to read from the egg file / SparkFiles.
+      # We may safely edit the PYTHONPATH here because this code is run in a
+      # child python process that will soon exit.
+      import sys
+      if '/opt/au' in sys.path:
+        sys.path.remove('/opt/au')
+      if '' in sys.path:
+        sys.path.remove('')
+
+      ## Check for the egg, which Spark puts on the PYTHONPATH
+      egg_path = ''
+      for p in sys.path:
+        if EXPECTED_EGG_NAME in p:
+          egg_path = p
+      assert egg_path, 'Egg not found in sys.path %s' % (sys.path,)
+
+      ## Is the egg any good?
+      import zipfile
+      f = zipfile.ZipFile(egg_path)
+      egg_contents = f.namelist()
+      assert any('au' in fname for fname in egg_contents), egg_contents
+
+      ## Use the egg!
+      from au import util
+      s = util.ichunked([1, 2, 3], 3)
+      assert list(s) == [(1, 2, 3)]
+      
+      return util.get_sys_info()
+  
+    util.log.info("Testing egg ...")
+    
+    sc = spark.sparkContext
+    N = max(1, Spark.num_executors(spark)) # Try to test all executors
+    rdd = sc.parallelize(range(N), numSlices=N)
+    res = rdd.map(worker_test).collect()
+    assert len(res) == N
+    paths = [info['filepath'] for info in res]
+    assert all(EXPECTED_EGG_NAME in p for p in paths)
+
+    util.log.info("Test success!  Worker info:")
+    def format_info(info):
+      s = """
+        Host: {hostname} {host}
+        Num CPUs: {n_cpus}
+        Egg: {filepath}
+        
+        PYTHONPATH:
+        {PYTHONPATH}
+
+        nvidia-smi:
+        {nvidia_smi}
+        
+        Disk:
+        {disk_free}
+        """.format(**info)
+      return '\n'.join(l.lstrip() for l in s.split('\n'))
+    info_str = '\n\n'.join(format_info(info) for info in res)
+    util.log.info('\n\n' + info_str)
+  
+  @staticmethod
+  def test_tensorflow(spark):
+
+    # Tensorflow Devices
+    # TODO this util can crash with 'failed to allocate 2.2K' :P even with
+    # a lock? wat??
+    #with atomic_ignore_exceptions():
+    #  from tensorflow.python.client import device_lib
+    #  devs = device_lib.list_local_devices()
+    #  info['tensorflow_devices'] = [str(v) for v in devs]
+
+    def foo(x):
+      import tensorflow as tf
+
+      a = tf.constant(x)
+      b = tf.constant(3)
+
+      from au import util
+      sess = util.tf_create_session()
+      res = sess.run(a * b)
+
+      assert res == 3 * x
+      
+      import socket
+      info = {
+        'hostname': socket.gethostname(),
+        'gpu': tf.test.gpu_device_name(),
+      }
+      return info
+
+    util.log.info("Testing Tensorflow ...")
+    
+    sc = spark.sparkContext
+    N = max(1, Spark.num_executors(spark)) # Try to test all executors
+    y = range(N)
+    rdd = sc.parallelize(y)
+    res = rdd.map(foo).collect()
+    assert len(res) == N
+
+    util.log.info("... Tensorflow success!  Info:")
+    import pprint
+    util.log.info('\n\n' + pprint.pformat(res) + '\n\n')
+
+
+class K8SSpark(Spark):
+  MASTER = conf.AU_K8S_SPARK_MASTER
+  CONF_KV = {
+    'spark.kubernetes.container.image':
+      conf.AU_SPARK_WORKER_IMAGE,
+
+    # In practice, we need to set this explicitly in order to get the
+    # proper driver IP address to the workers.  This choice may break
+    # cluster mode where the driver process will run in the cluster
+    # instead of locally.  This choice may also break in certain networking
+    # setups.  Spark networking is a pain :(
+    'spark.driver.host':
+      os.environ.get('SPARK_LOCAL_IP', util.get_non_loopback_iface()),
+  }
 
 ## Spark UDTs
 # These utils are based upon Spark's DenseVector:
