@@ -11,6 +11,9 @@ kubespray/inventory/default/artifacts
 # Spark egg generation creates this dir, can't omit :P
 au.egg-info
 
+# A symlink only used for k8s cluster utils in aucli
+kubespray/cluster_ssh_key
+
 *.pyc
 *.DS_Store
 .ipynb_checkpoints

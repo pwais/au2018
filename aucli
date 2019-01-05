@@ -33,8 +33,13 @@ import subprocess
 import sys
 
 AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
-DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:v1.2')
+DOCKER_IMAGE_VERSION = 'v1.3.test'
+DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:' + DOCKER_IMAGE_VERSION)
 CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
+
+SPARK_WORKER_IMAGE = os.environ.get(
+                          'AU_SPARK_WORKER_IMAGE',
+                          'au2018/spark:' + DOCKER_IMAGE_VERSION)
 
 ## Logging
 import logging
@@ -60,7 +65,7 @@ class DockerEnv(object):
   @classmethod
   def build(cls, image=DOCKER_IMAGE, and_push=True):
     run_cmd(
-      'docker build -t ' + image + ' -f ' + AU_ROOT + '/docker/Dockerfile ' + AU_ROOT)
+      'docker build --network=host -t ' + image + ' -f ' + AU_ROOT + '/docker/Dockerfile ' + AU_ROOT)
     if and_push:
       run_cmd(
         'docker push ' + image)
@@ -363,10 +368,20 @@ class KubeCluster(object):
     assert os.path.exists(cls.ADMIN_CONF), "Did cluster bring-up succeed?"
 
     cmd = """
-      {KUBECTL} --kubeconfig {ADMIN_CONF} get pods --all-namespaces
+      {KUBECTL} --kubeconfig {ADMIN_CONF} get all --all-namespaces && \
+      echo && echo && \
+      {KUBECTL} --kubeconfig {ADMIN_CONF} cluster-info
     """.format(**cls.__dict__)
     run_cmd(cmd)
 
+  @classmethod
+  def build_spark_env(cls, image=SPARK_WORKER_IMAGE, and_push=True):
+    run_cmd(
+      'cd ' + os.path.join(AU_ROOT, 'cluster/spark') + ' && '
+      'docker build --network=host  --build-arg base_img=' + DOCKER_IMAGE + ' -t ' + image + ' .')
+    if and_push:
+      run_cmd(
+        'docker push ' + image)
 
 ## CLI
 
@@ -420,7 +435,8 @@ def main(args=None):
     args = parser.parse_args()
   
   if args.build_env:
-    DockerEnv.build()
+    # DockerEnv.build()
+    KubeCluster.build_spark_env()
   elif args.shell:
     DockerEnv.shell()
   elif args.shell_rm:
