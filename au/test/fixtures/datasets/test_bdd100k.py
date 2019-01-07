@@ -22,6 +22,7 @@ class BDD100kTests(unittest.TestCase):
 
       class TestFixtures(bdd100k.Fixtures):
         ROOT = bdd100k.Fixtures.TEST_FIXTURE_DIR
+      
       cls.fixtures = TestFixtures
     except Exception as e:
       print "Failed to create test fixtures: %s" % (e,)
@@ -36,12 +37,17 @@ class BDD100kTests(unittest.TestCase):
       FIXTURES = self.fixtures
     
     with testutils.LocalSpark.sess() as spark:
-      ts_row_rdd = TestInfoDataset._info_table_from_zip(spark)
-      # df = ts_row_rdd#spark.createDataFrame(ts_row_rdd)
-      # import ipdb; ipdb.set_trace()
-      df = TestInfoDataset._ts_table_from_info_table(spark, ts_row_rdd)
-      df.printSchema()
-      df.registerTempTable('moof')
-      spark.sql('select * from moof').show()
-      # spark.sql('select * from moof').write.parquet('/tmp/yyyyyy', partitionBy=['split', 'video'], compression='gzip')
+      meta_rdd = TestInfoDataset.create_meta_rdd(spark)
+      metas = meta_rdd.collect()
+      fnames = set(meta.filename for meta in metas)
+      assert 'b2bc828b-a4d0-4ed4-8727-352806316bcb.mov' in fnames
+
+    #   ts_row_rdd = TestInfoDataset._info_table_from_zip(spark)
+    #   # df = ts_row_rdd#spark.createDataFrame(ts_row_rdd)
+    #   # import ipdb; ipdb.set_trace()
+    #   df = TestInfoDataset._ts_table_from_info_table(spark, ts_row_rdd)
+    #   df.printSchema()
+    #   df.registerTempTable('moof')
+    #   spark.sql('select * from moof').show()
+    #   # spark.sql('select * from moof').write.parquet('/tmp/yyyyyy', partitionBy=['split', 'video'], compression='gzip')
     
