@@ -26,7 +26,7 @@ add-apt-repository \
    $(lsb_release -cs) \
    stable"
 apt-get update
-apt-get install -y docker-ce=18.06.1~ce~3-0~ubuntu
+apt-get install -y docker-ce=5:18.09.0~3-0~ubuntu-xenial
 usermod -aG docker au
 
 ## nvidia-docker
@@ -38,6 +38,12 @@ curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.li
 apt-get update
 apt-get install -y nvidia-docker2
 pkill -SIGHUP dockerd
+
+# TODO only make nvidia default for cloud machines.  This might break if
+# machine does not have GPUs (I forget)
+# https://github.com/NVIDIA/k8s-device-plugin#preparing-your-gpu-nodes
+python -c 'import json; s = json.load(open("/etc/docker/daemon.json")); s["default-runtime"] = "nvidia"; json.dump(s, open("/etc/docker/daemon.json", "w"), indent=4)'
+cat /etc/docker/daemon.json
 
 # Passwordless sudo
 echo "au ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers

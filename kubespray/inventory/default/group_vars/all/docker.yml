@@ -1,6 +1,10 @@
 ## Uncomment this if you want to force overlay/overlay2 as docker storage driver
 ## Please note that overlay2 is only supported on newer kernels
-#docker_storage_options: -s overlay2
+# docker_storage_options: -s overlay2
+
+# The following packages have unmet dependencies:
+#  nvidia-docker2 : Depends: docker-ce (= 5:18.09.0~3-0~ubuntu-xenial) but 18.06.1~ce~3-0~ubuntu is to be installed or
+#                            docker-ee (= 5:18.09.0~3-0~ubuntu-xenial) but it is not installable
 
 ## Enable docker_container_storage_setup, it will configure devicemapper driver on Centos7 or RedHat7.
 docker_container_storage_setup: false
