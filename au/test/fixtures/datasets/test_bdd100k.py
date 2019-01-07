@@ -18,10 +18,10 @@ class BDD100kTests(unittest.TestCase):
   def setUpClass(cls):
     cls.fixtures = None
     try:
-      bdd100k.BDD100KFixtures.create_test_fixtures()
+      bdd100k.Fixtures.create_test_fixtures()
 
-      class TestFixtures(bdd100k.BDD100KFixtures):
-        ROOT = bdd100k.BDD100KFixtures.TEST_FIXTURE_DIR
+      class TestFixtures(bdd100k.Fixtures):
+        ROOT = bdd100k.Fixtures.TEST_FIXTURE_DIR
       cls.fixtures = TestFixtures
     except Exception as e:
       print "Failed to create test fixtures: %s" % (e,)
@@ -31,7 +31,7 @@ class BDD100kTests(unittest.TestCase):
     if not self.fixtures:
       return
     
-    class TestInfoDataset(bdd100k.BDD100kInfoDataset):
+    class TestInfoDataset(bdd100k.InfoDataset):
       NAMESPACE_PREFIX = 'test'
       FIXTURES = self.fixtures
     

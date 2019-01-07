@@ -10,6 +10,7 @@ from au.fixtures.dataset import FillNormalized
 from au.fixtures.dataset import ImageRow
 from au.fixtures.dataset import ImageTable
 from au.test import testconf
+from au.test import testutils
 
 
 
@@ -198,3 +199,23 @@ class TestFillNormalized(unittest.TestCase):
     expected = row.as_numpy() - 10
     np.testing.assert_array_equal(expected, row.attrs['normalized'])
   
+def test_create_video():
+  fps = 29.97
+  n = 50
+  h = 64
+  w = 128
+  vid_bytes = testutils.create_video(n=n, h=h, w=w, format='mov', fps=fps)
+  
+  VID_TEMPDIR = os.path.join(
+                      testconf.TEST_TEMPDIR_ROOT,
+                      'test_create_video')
+  util.cleandir(VID_TEMPDIR)
+  path = os.path.join(VID_TEMPDIR, 'test_video.mov')
+  with open(path, 'wc') as f:
+    f.write(vid_bytes)
+  
+  import imageio
+  reader = imageio.get_reader(path)
+  meta = reader.get_meta_data()
+  assert meta['fps'] == fps
+  assert meta['nframes'] == n

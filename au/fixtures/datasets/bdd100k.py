@@ -1,11 +1,13 @@
 import itertools
 import os
+import threading
 
 from au import conf
 from au import util
+from au.fixtures import dataset
 from au.spark import Spark
 
-class BDD100KFixtures(object):
+class Fixtures(object):
 
   ROOT = os.path.join(conf.AU_DATA_CACHE, 'bdd100k')
 
@@ -14,8 +16,14 @@ class BDD100KFixtures(object):
   @classmethod
   def telemetry_zip(cls):
     return os.path.join(cls.ROOT, 'zips', 'bdd100k_info.zip')
+  
+  @classmethod
+  def video_zip(cls):
+    return os.path.join(cls.ROOT, 'zips', 'bdd100k_videos.zip')
 
-  # VIDEO_DIR = os.path.join(ROOT, 'videos')
+  @classmethod
+  def video_dir(cls):
+    return os.path.join(cls.ROOT, 'videos')
 
   @classmethod
   def test_fixture(cls, path):
@@ -135,11 +143,28 @@ class TimeseriesRow(object):
 
 ### Interface
 
-class BDD100kInfoDataset(object):
+class InfoDataset(object):
 
   NAMESPACE_PREFIX = ''
 
-  FIXTURES = BDD100KFixtures
+  FIXTURES = Fixtures
+
+  @classmethod
+  def video_to_meta(cls):
+    if not hasattr(cls, '_video_to_meta'):
+      path = cls.FIXTURES.telemetry_zip()
+      fws = util.ArchiveFileFlyweight.fws_from(path)
+
+      import json
+      video_to_meta = {}
+      for fw in fws:
+        jobj = json.load(fw.data)
+        meta = Meta(**jobj)
+        video_to_meta[meta.filename] = meta
+
+      # Single assignment is thread-robust
+      self._video_to_meta = video_to_meta 
+    return cls._video_to_meta
 
   @classmethod
   def info_json_to_rows(cls, jobj):
@@ -348,5 +373,181 @@ class BDD100kInfoDataset(object):
 
 
 
+class VideoDataset(dataset.ImageTable):
+
+  TABLE_NAME = 'bdd100k_videos'
+
+  FIXTURES = Fixtures
+
+  INFO = InfoDataset
+  
+  @classmethod
+  def setup(cls):
+    util.log.info("User must manually set up files.  TODO instructions.")
     
+  ## Utils
+
+  class Video(object):
+    __slots__ = ('name', 'info_meta', '_data', '_local')
+
+    def __init__(self, name='', meta=None, data=None):
+      self.name = Video.videoname(name)
+      self.info_meta = info_meta
+      self._data = data
+      self._local = threading.local()
+    
+    def get_video_meta(self):
+      return self.reader.get_meta_data()
+
+    def get_frame(self, i):
+      """Get the image frame at offset `i`"""
+      return self.reader.get_data(i)
+
+    @property
+    def reader(self):
+      """Return a thread-local imageio reader for the video"""
+      if not hasattr(self._local, 'reader'):
+        import imageio
+        video_type = name.split('.')[-1]
+        self._local.reader = imageio.get_reader(self.data, format='mov')
+      return self._local.reader
+
+    @property
+    def data(self):
+      """Return raw video bytes"""
+      assert self._data is not None
+      if instanceof(self._data, util.ArchiveFileFlyweight):
+        return self._data.data
+      elif instanceof(self._data, basestring):
+        # Read the whole movie file
+        return open(self._data).read()
+      else:
+        raise ValueError("No idea what to do with %s" % (self._data,))
+
+    def iter_imagerows(self):
+      start_time = self.info_meta.startTime
+      
+      video_meta = self.get_video_meta()
+      frame_period_ms = (1. / video_meta['fps']) * 1e3
+      n_frames = video_meta['nframes']
+
+      for i in range(n_frames):
+        frame_timestamp_ms = int(start_time + frame_period_ms)
+        yield ImageRow(
+                dataset='bdd100k.video',
+                # TODO split
+                uri='bdd100k.video:' + self.name + ':' + frame_timestamp_ms,
+                _arr_factory=lambda: self.get_frame(i),
+                attrs={
+                  'nanostamp': frame_timestamp_ms * 1e6,
+                  'bdd100k': {
+                    'video': self.name,
+                    'offset': i,
+                    'meta': video_meta,
+                    'frame_timestamp_ms': frame_timestamp_ms,
+                  }
+                }
+        )
+
+
+
+
+  @classmethod
+  def videos(cls):
+    """Return a cached map of video -> `Video` instances"""
+    
+    class VideoFlyweight(object):
+      __slots__ = ('_data')
+
+      def __init__(self, data=None):
+        self._data = data
+
+      
+
+    def videoname(path):
+      return os.path.split(path)[-1] if os.path.sep in name else name
+
+    # Load flyweights to videos
+    if not hasattr(cls, '_videos'):
+      util.log.info("Finding videos ...")
+      if os.path.exists(cls.FIXTURES.video_zip()):
+        path = cls.FIXTURES.video_zip()
+        util.log.info("Using zipfile: %s" % path)
+        fws = util.ArchiveFileFlyweight.fws_from(path)
+        self._videos = dict(
+          (videoname(fw.name), VideoFlyweight(data=fw))
+          for fw in fws
+        )
+      
+      elif os.path.exists(cls.FIXTURES.video_dir()):
+        video_dir = cls.FIXTURES.video_dir()
+        util.log.info("Using expanded dir of videos: %s" % video_dir)
+        
+        import pathlib2 as pathlib
+        paths = pathlib.Path(video_dir).glob('*')
+        paths = [str(p) for p in paths] # pathlib uses PosixPath thingies ...
+        self._videos = dict(
+          (videoname(p), VideoFlyweight(data=p)) for p in paths
+        )
+        log.info("... found %s total videos." % len(self._videos))
+    
+    return cls._videos
+
+  # @staticmethod
+  # def _video_to_rows(vidname, vidfw):
+    
+  #   # class LazyFrame(object):
+  #   #   __slots__ = ('n', 'vidfw', '_reader')
+  #   #   def __init__(self, n=-1, vidfw=None):
+  #   #     self.n = n
+  #   #     self.vidfw = vidfw
+  #   #     self._reader = None
+      
+  #   #   @property
+  #   #   def reader(self):
+  #   #     if self._reader is None:
+  #   #       import imageio
+  #   #       self._reader = 
+  #   #   def __call__(self):
+  #   #     import imageio
+
+
+
+
+  ## ImageTable API
+
+  @classmethod
+  def save_to_image_table(cls, rows):
+    raise ValueError("The BDD100k Video Dataset is read-only")
+
+  @classmethod
+  def get_rows_by_uris(cls, uris):
+    pass
+    # import pandas as pd
+    # import pyarrow.parquet as pq
+    
+    # pa_table = pq.read_table(cls.table_root())
+    # df = pa_table.to_pandas()
+    # matching = df[df.uri.isin(uris)]
+    # return list(ImageRow.from_pandas(matching))
+
+  @classmethod
+  def iter_all_rows(cls):
+    pass
+    # """Convenience method (mainly for testing) using Pandas"""
+    # import pandas as pd
+    # import pyarrow.parquet as pq
+    
+    # pa_table = pq.read_table(cls.table_root())
+    # df = pa_table.to_pandas()
+    # for row in ImageRow.from_pandas(df):
+    #   yield row
+  
+  @classmethod
+  def as_imagerow_rdd(cls, spark):
+    pass
+    # df = spark.read.parquet(cls.table_root())
+    # row_rdd = df.rdd.map(lambda row: ImageRow(**row.asDict()))
+    # return row_rdd
+ 
     
