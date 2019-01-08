@@ -27,6 +27,16 @@ class BDD100kTests(unittest.TestCase):
     except Exception as e:
       print "Failed to create test fixtures: %s" % (e,)
   
+  INFO_FIXTURE_VIDEOS = set((
+    'b9d24e81-a9679e2a.mov',
+    'c2bc5a4c-b2bc828b.mov',
+    'c6a4abc9-e999da65.mov',
+    'b7f75fad-1c1c419b.mov',
+    'b2752cd6-12ba5588.mov',
+    'be986afd-f734d33e.mov',
+    'c53c9807-1eadf674.mov'
+  ))
+
   @pytest.mark.slow
   def test_info_dataset(self):
     if not self.fixtures:
@@ -39,8 +49,43 @@ class BDD100kTests(unittest.TestCase):
     with testutils.LocalSpark.sess() as spark:
       meta_rdd = TestInfoDataset.create_meta_rdd(spark)
       metas = meta_rdd.collect()
-      fnames = set(meta.filename for meta in metas)
-      assert 'b2bc828b-a4d0-4ed4-8727-352806316bcb.mov' in fnames
+      videos = set(meta.video for meta in metas)
+      videos = self.INFO_FIXTURE_VIDEOS
+
+  @pytest.mark.slow
+  def test_video_datset(self):
+    if not self.fixtures:
+      return
+    
+    class TestInfoDataset(bdd100k.InfoDataset):
+      NAMESPACE_PREFIX = 'test'
+      FIXTURES = self.fixtures
+
+    class TestVideoDataset(bdd100k.VideoDataset):
+      FIXTURES = self.fixtures
+      INFO = TestInfoDataset
+
+    EXPECTED_VIDEOS = set(self.INFO_FIXTURE_VIDEOS)
+    EXPECTED_VIDEOS.add('video_with_no_info.mov')
+
+    with testutils.LocalSpark.sess() as spark:
+      videometa_df = TestVideoDataset.load_videometa_df(spark)
+      videometa_df.show()
+
+      rows = videometa_df.collect()
+      assert set(r.video for r in rows) == EXPECTED_VIDEOS
+
+      for row in rows:
+        if row.video == 'video_with_no_info.mov':
+          # We don't know the epoch time of this video (no BDD100k info) ...
+          assert row.startTime == -1
+          assert row.endTime == -1
+          
+          # ... but we can glean some data from the video itself.
+          assert row.duration != float('nan')
+          assert row.nframes > 0
+          assert row.width > 0 and row.height > 0
+
 
     #   ts_row_rdd = TestInfoDataset._info_table_from_zip(spark)
     #   # df = ts_row_rdd#spark.createDataFrame(ts_row_rdd)

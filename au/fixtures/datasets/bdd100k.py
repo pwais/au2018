@@ -66,13 +66,9 @@ class Fixtures(object):
     fws = util.ArchiveFileFlyweight.fws_from(
                   cls.test_fixture(cls.telemetry_zip()))
     def get_video_fname(fw):
-      import json
-      data = fw.data
-      if data:
-        jobj = json.loads(fw.data)
-        return jobj['filename']
-      else:
+      if 'json' not in fw.name:
         return None
+      return InfoDataset.json_fname_to_video_fname(fw.name)
 
     video_fnames = [get_video_fname(fw) for fw in fws]
     video_fnames = [f for f in video_fnames if f]
@@ -110,20 +106,27 @@ class Fixtures(object):
 #     for k in self.__slots__:
 #       setattr(self, k, kwargs.get(k))
 
+# These defaults help explicitly define attribute types
+_Meta_DEFAULTS = {
+  'startTime': -1,
+  'endTime': -1,
+  'id': '',
+  #'filename': '', -- this attribute is misleading; Fisher deprecated it
+  'timelapse': False,
+  'rideID': '',
+  'split': '',
+  'video': '',
+}
 class Meta(object):
-  __slots__ = (
-    'startTime',
-    'endTime',
-    'id',
-    'filename',
-    'timelapse',
-    'rideID',
-    'split',
-  )
+  __slots__ = _Meta_DEFAULTS.keys()
 
   def __init__(self, **kwargs):
     for k in self.__slots__:
-      setattr(self, k, kwargs.get(k))
+      setattr(self, k, kwargs.get(k, _Meta_DEFAULTS[k]))
+
+  @property
+  def __dict__(self):
+    return dict((k, getattr(self, k, None)) for k in self.__slots__)
 
 class GPSObs(object):
   __slots__ = (
@@ -176,7 +179,7 @@ class TimeseriesRow(object):
   
   @property
   def __dict__(self):
-    return dict((k, getattr(self, k)) for k in self.__slots__)
+    return dict((k, getattr(self, k, None)) for k in self.__slots__)
 
 
 
@@ -187,6 +190,18 @@ class InfoDataset(object):
   NAMESPACE_PREFIX = ''
 
   FIXTURES = Fixtures
+
+  @staticmethod
+  def json_fname_to_video_fname(fname):
+    """Unfortunately, the 'filename' attribute in the Info JSON files
+    is complete bunk.  Fisher simply named the json and video files using
+    the same hashes.  E.g.
+      7b2a9ec9-7f4dd1a6.mov <-> 7b2a9ec9-7f4dd1a6.json
+    """
+    assert 'json' in fname
+    if os.path.sep in fname:
+      fname = os.path.split(fname)[-1]
+    return fname.replace('.json', '.mov')
 
   @classmethod
   def create_meta_rdd(cls, spark):
@@ -202,7 +217,7 @@ class InfoDataset(object):
         return None
       
       jobj = json.loads(json_bytes)
-      video_fname = jobj.get('filename', '')
+      video = InfoDataset.json_fname_to_video_fname(entry.name)
 
       # Determine train / test split.  NB: Fisher has 20k info objects
       # on the eval server and is not sharing (hehe)
@@ -212,7 +227,7 @@ class InfoDataset(object):
         split = 'val'
       else:
         split = ''
-      return Meta(split=split, **jobj)
+      return Meta(video=video, split=split, **jobj)
     
     meta_rdd = archive_rdd.map(get_meta).filter(lambda m: m is not None)
     return meta_rdd
@@ -460,25 +475,28 @@ class InfoDataset(object):
 
 
 
-
-
+# These defaults help explicitly define attribute types
+_VideoMeta_DEFAULTS = dict(
+  duration=float('nan'),
+  fps=float('nan'),
+  nframes=0,
+  width=0,
+  height=0,
+  **_Meta_DEFAULTS
+)
 class VideoMeta(object):
   """A row in the index/bdd100k_videos table.  Designed to speed up Spark jobs
   against raw BDD100k videos"""
 
-  VIDEO_INFO = (
-    'duration',
-    'fps',
-    'nframes',
-    'width',
-    'height',
-  )
-
-  __slots__ = tuple(list(Meta.__slots__) + list(VIDEO_INFO))
+  __slots__ = _VideoMeta_DEFAULTS.keys()
     
   def __init__(self, **kwargs):
     for k in self.__slots__:
-      setattr(self, k, kwargs.get(k))
+      setattr(self, k, kwargs.get(k, _VideoMeta_DEFAULTS[k]))
+  
+  @property
+  def __dict__(self):
+    return dict((k, getattr(self, k, None)) for k in self.__slots__)
 
 class Video(object):
   """Flyweight for a single BDD100k video file"""
@@ -493,7 +511,7 @@ class Video(object):
 
   @staticmethod
   def videoname(path):
-    return os.path.split(path)[-1] if os.path.sep in name else name
+    return os.path.split(path)[-1] if os.path.sep in path else path
 
   def get_frame(self, i):
     """Get the image frame at offset `i`"""
@@ -501,7 +519,12 @@ class Video(object):
   
   def get_video_meta(self):
     imageio_meta = self.reader.get_meta_data()
-    video_meta = self.video_meta or {}
+    imageio_meta.update({
+      'width': imageio_meta['size'][0],
+      'height': imageio_meta['size'][1],
+      'video': self.name,
+    })
+    video_meta = self.video_meta.__dict__ if self.video_meta else {}
     video_meta.update(**imageio_meta)
     return VideoMeta(**video_meta)
 
@@ -510,7 +533,7 @@ class Video(object):
     """Return a thread-local imageio reader for the video"""
     if not hasattr(self._local, 'reader'):
       import imageio
-      format = name.split('.')[-1]
+      format = self.name.split('.')[-1]
       self._local.reader = imageio.get_reader(self.data, format=format)
     return self._local.reader
 
@@ -518,9 +541,9 @@ class Video(object):
   def data(self):
     """Return raw video bytes"""
     assert self._data is not None
-    if instanceof(self._data, util.ArchiveFileFlyweight):
+    if isinstance(self._data, util.ArchiveFileFlyweight):
       return self._data.data
-    elif instanceof(self._data, basestring):
+    elif isinstance(self._data, basestring):
       # Read the whole movie file
       return open(self._data).read()
     else:
@@ -563,22 +586,22 @@ class VideoDataset(object):
     util.log.info("Finding videos ...")
     if os.path.exists(cls.FIXTURES.video_zip()):
 
-      path = cls.FIXTURES.video_zip()
-      archive_rdd = Spark.archive_rdd(spark, path)
-      video_rdd = archive_rdd.map(
-        lambda fw: \
-          Video(name=Video.videoname(fw.name), data=fw))
-      return video_rdd
+      assert False, "TODO require zipfile be decompressed for better caching"
+
+      # path = cls.FIXTURES.video_zip()
+      # archive_rdd = Spark.archive_rdd(spark, path)
+      # video_rdd = archive_rdd.map(
+      #   lambda fw: \
+      #     Video(name=Video.videoname(fw.name), data=fw))
+      # return video_rdd
     
     elif os.path.exists(cls.FIXTURES.video_dir()):
 
       video_dir = cls.FIXTURES.video_dir()
       util.log.info("Using expanded dir of videos: %s" % video_dir)
       
-      import pathlib2 as pathlib
-      paths = pathlib.Path(video_dir).glob('*')
-      paths = [str(p) for p in paths] # pathlib uses PosixPath thingies ...
-      log.info("... found %s total videos." % len(videos))
+      paths = list(util.all_files_recursive(video_dir))
+      util.log.info("... found %s total videos." % len(paths))
       
       videos = [Video(name=Video.videoname(p), data=p) for p in paths]
       video_rdd = spark.sparkContext.parallelize(videos)
@@ -593,12 +616,14 @@ class VideoDataset(object):
     meta_rdd = cls.INFO.create_meta_rdd(spark)
     video_rdd = cls.create_video_rdd(spark)
 
-    filename_meta = meta_rdd.map(lambda m: (m.filename, m)).cache()
+    filename_meta = meta_rdd.map(lambda m: (m.video, m)).cache()
     filename_video = video_rdd.map(lambda v: (v.name, v)).cache()
     joined = filename_meta.fullOuterJoin(filename_video)
 
     def to_video_meta(k_lr):
       key, (meta, video) = k_lr
+      if not video:
+        return VideoMeta(**meta.__dict__)
       video.video_meta = meta
       return video.get_video_meta()
 
@@ -608,6 +633,8 @@ class VideoDataset(object):
   @classmethod
   def load_videometa_df(cls, spark):
     cls.setup(spark)
+
+    import pandas as pd
     df = spark.read.parquet(cls.FIXTURES.video_index_root())
     return df
 
@@ -616,8 +643,10 @@ class VideoDataset(object):
     if not os.path.exists(cls.FIXTURES.video_index_root()):
       util.log.info("Creating video meta index ...")
       videometa_rdd = cls._create_videometa_rdd(spark)
-      dict_rdd = videometa_rdd.map(lambda vm: vm.__dict__)
-      df = spark.createDataFrame(dict_rdd, samplingRatio=1)
+      
+      from pyspark.sql import Row
+      row_rdd = videometa_rdd.map(lambda vm: Row(**vm.__dict__))
+      df = spark.createDataFrame(row_rdd)
       
       dest = cls.FIXTURES.video_index_root()
       df.write.parquet(dest, compression='gzip')

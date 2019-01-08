@@ -275,6 +275,12 @@ def mkdir(path):
 def rm_rf(path):
   shutil.rmtree(path)
 
+def all_files_recursive(root_dir):
+  for path in pathlib.Path(root_dir).glob('**/*'):
+    path = str(path) # pathlib uses PosixPath thingies ...
+    if os.path.isfile(path):
+      yield path
+
 def cleandir(path):
   mkdir(path)
   rm_rf(path)

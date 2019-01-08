@@ -24,6 +24,7 @@ class ImageRow(object):
     '_image_bytes',  # NB: see property image_bytes
     '_cached_image_arr', # TODO: use __ for privates .. idk 
     '_cached_image_fobj',
+    '_arr_factory',
     
     'label',
     'attrs',
@@ -52,6 +53,7 @@ class ImageRow(object):
     return tuple(getattr(self, k) for k in self.__slots__)
 
   def __lt__(self, other):
+    # Important! Otherwise Python might break ties in unexpected ways
     return self.astuple() < other.astuple()
 
   @staticmethod
@@ -90,12 +92,15 @@ class ImageRow(object):
   
   def as_numpy(self):
     if self._cached_image_arr is '':
-      image_bytes = self.image_bytes
-      if image_bytes is '':
-        # Can't make an array
-        return np.array([])
-      
-      self._cached_image_arr = imageio.imread(io.BytesIO(image_bytes))
+      if self._arr_factory is not '':
+        self._cached_image_arr = self.__arr_factory()
+      else:
+        image_bytes = self.image_bytes
+        if image_bytes is '':
+          # Can't make an array
+          return np.array([])
+        
+        self._cached_image_arr = imageio.imread(io.BytesIO(image_bytes))
     return self._cached_image_arr
   
   @property
