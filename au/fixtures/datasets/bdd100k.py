@@ -1,3 +1,10 @@
+"""
+
+Notes:
+ * Expanding bdd100k_videos.zip can take days.
+
+"""
+
 import itertools
 import os
 import threading
@@ -29,6 +36,10 @@ class Fixtures(object):
   @classmethod
   def video_dir(cls):
     return os.path.join(cls.ROOT, 'videos')
+
+  @classmethod
+  def video_debug_dir(cls):
+    return os.path.join(cls.ROOT, 'debug', 'video')
 
   @classmethod
   def test_fixture(cls, path):
@@ -145,6 +156,10 @@ class GPSObs(object):
         kwk = k
       setattr(self, k, kwargs.get(kwk))
 
+  @property
+  def __dict__(self):
+    return dict((k, getattr(self, k, None)) for k in self.__slots__)
+
 class Point3(object):
   __slots__ = ('x', 'y', 'z')
 
@@ -164,6 +179,42 @@ class TimeseriesRow(object):
   def __init__(self, **kwargs):
     for k in self.__slots__:
       setattr(self, k, kwargs.get(k))
+  
+  @staticmethod
+  def get_series(path, ts):
+    
+    def rgetattr(v, path):
+      if not path:
+        return v
+      else:
+        i = path.find('.')
+        if i == -1:
+          i = len(path)
+        name = path[:i]
+        subv = getattr(v, name, None)
+        if subv:
+          return rgetattr(subv, path[i+1:])
+        else:
+          return None
+
+    vt = []
+    for t in ts:
+      v = rgetattr(t, path)
+      if v is not None:
+        vt.append((t.t, v))
+    return vt
+
+  # @staticmethod
+  # def get_vt(path, ts):
+  #   return [(p.t, getattr(p, name)) for p in pts]
+  
+  # @staticmethod
+  # def get_all_ts(pts):
+  # return {
+  #     'x(t)': Point3.to_ts('x', pts),
+  #     'y(t)': Point3.to_ts('y', pts),
+  #     'z(t)': Point3.to_ts('z', pts),
+  #   }
 
   # TODO: convert into a matrix row
 
@@ -197,8 +248,6 @@ class TimeseriesRow(object):
 ### Interface
 
 class InfoDataset(object):
-
-  NAMESPACE_PREFIX = ''
 
   FIXTURES = Fixtures
 
@@ -250,7 +299,9 @@ class InfoDataset(object):
     
     if not hasattr(cls._local, 'video_to_fw_cache'):
       fws = util.ArchiveFileFlyweight.fws_from(cls.FIXTURES.telemetry_zip())
-      vidname = lambda fw: Video.videoname(fw.name).replace('.json', '.mov')
+      fws = [fw for fw in fws if 'json' in fw.name]
+      vidname = lambda fw: \
+        InfoDataset.json_fname_to_video_fname(Video.videoname(fw.name))
       video_to_fw_cache = dict((vidname(fw), fw) for fw in fws)
       cls._local.video_to_fw_cache = video_to_fw_cache
     
@@ -466,39 +517,39 @@ class InfoDataset(object):
 
 
 
-  @classmethod
-  def ts_row_rdd(cls, spark):
+  # @classmethod
+  # def ts_row_rdd(cls, spark):
     
-    archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
+  #   archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
 
-    def to_rows(entry):
-      import json
-      from pyspark.sql import Row
+  #   def to_rows(entry):
+  #     import json
+  #     from pyspark.sql import Row
       
-      fname = entry.name
-      if 'json' not in fname:
-        return
+  #     fname = entry.name
+  #     if 'json' not in fname:
+  #       return
       
-      # Determine train / test split.  NB: Fisher has 20k info objects
-      # on the eval server and is not sharing (hehe)
-      if 'train' in fname:
-        split = 'train'
-      elif 'val' in fname:
-        split = 'val'
-      else:
-        split = ''
+  #     # Determine train / test split.  NB: Fisher has 20k info objects
+  #     # on the eval server and is not sharing (hehe)
+  #     if 'train' in fname:
+  #       split = 'train'
+  #     elif 'val' in fname:
+  #       split = 'val'
+  #     else:
+  #       split = ''
       
-      json_bytes = entry.data
-      jobj = json.loads(json_bytes)
-      for row in cls.info_json_to_rows(jobj):
-        yield Row(
-                split=split,
-                fname=fname,
-                **row.__dict__)
+  #     json_bytes = entry.data
+  #     jobj = json.loads(json_bytes)
+  #     for row in cls.info_json_to_rows(jobj):
+  #       yield Row(
+  #               split=split,
+  #               fname=fname,
+  #               **row.__dict__)
     
-    # ts_row_rdd = archive_rdd.flatMap(to_rows)
-    ts_row_rdd = spark.read.json(archive_rdd.map(lambda entry: entry.data))
-    return ts_row_rdd
+  #   # ts_row_rdd = archive_rdd.flatMap(to_rows)
+  #   ts_row_rdd = spark.read.json(archive_rdd.map(lambda entry: entry.data))
+  #   return ts_row_rdd
 
 
 
@@ -630,13 +681,131 @@ class Video(object):
               attrs={
                 'nanostamp': int(frame_timestamp_ms * 1e6),
                 'bdd100k': {
-                  'video': self.name,
+                  'video': self,
                   'offset': i,
                   'video_meta': video_meta,
                   'frame_timestamp_ms': frame_timestamp_ms,
                 }
               }
       )
+  
+  def save_debug_html(self, dest=None):
+    if not dest:
+      fname = self.name + '.html'
+      dest = os.path.join(self.info.FIXTURES.video_debug_dir(), fname)
+      util.mkdir(self.info.FIXTURES.video_debug_dir())
+
+    VID_TEMPLATE = """
+    <video controls src="{path}"></video>
+    """
+    meta = self.get_video_meta()
+    path = os.path.relpath(meta.path, self.info.FIXTURES.video_debug_dir())
+    html = VID_TEMPLATE.format(path=path)
+    
+    map_html = ''
+    ts = self.timeseries
+    if ts:
+      import numpy as np
+      import gmplot
+
+      gps = TimeseriesRow.get_series('gps', ts)
+      locs = TimeseriesRow.get_series('location', ts)
+      
+      gps_lats = [v for t, v in TimeseriesRow.get_series('gps.latitude', ts)]
+      gps_lons = [v for t, v in TimeseriesRow.get_series('gps.longitude', ts)]
+      loc_lats = [v for t, v in TimeseriesRow.get_series('location.latitude', ts)]
+      loc_lons = [v for t, v in TimeseriesRow.get_series('location.longitude', ts)]
+      # loc_lats = [l.latitude for t, l in locs]
+      # loc_lons = [l.longitude for t, l in locs]
+
+      center_lat = np.mean(gps_lats or loc_lats)
+      center_lon = np.mean(gps_lons or loc_lons)
+      zoom_level = 17 # approx 1m/pixel https://groups.google.com/forum/#!topic/google-maps-js-api-v3/hDRO4oHVSeM
+      gmap = gmplot.GoogleMapPlotter(center_lat, center_lon, zoom_level)
+
+      # By default, gmplot references images in the local filesytem
+      # https://ezgif.com/image-to-datauri
+      # https://images.emojiterra.com/twitter/v11/512px/1f3ce.png
+      gmap.coloricon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA8AAAAPCAYAAAA71pVKAAAAAXNSR0IArs4c6QAAAAlwSFlzAADR7AAA0ewB+NcmSwAAActpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDUuNC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIgogICAgICAgICAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyI+CiAgICAgICAgIDx4bXA6Q3JlYXRvclRvb2w+d3d3Lmlua3NjYXBlLm9yZzwveG1wOkNyZWF0b3JUb29sPgogICAgICAgICA8dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPgogICAgICA8L3JkZjpEZXNjcmlwdGlvbj4KICAgPC9yZGY6UkRGPgo8L3g6eG1wbWV0YT4KGMtVWAAAAlRJREFUKBXVUUtIVGEUPv9j7vU6Y8OMFk422gjj5CvSosiMEkKIAmvRLAyiVW3bRkVSRLSpgRatDNqFrWoXZA+KaMiQNMVsLHF0GN/MnUd37tz/P/0TGATVvgMf5/Wdw3kA/JdC/jY1DgBVOYXDSr0EaAEkURDK+bfg0Cn2J0a5ISKQkXO7Xcrmv3EQgOCLgV9B5WsKvKw3iOXiDfsnEYeAwaRCy5AgPVFHkTfND166GK/u7ihxI0uk45ldf5ds+Hz5CiGwaMYiESIWdvJyJxUo76IQBbwJ278EY3eT4ejxOW8ApAQoqiUiyQKIRXCv3Q49HE8b16s9/gRXhbgMUMVv1O5xedL7chL667RMe3z2K976XiwGsMR0zkQ6V6VH+YX+EI0dbarZ5rNsbZHjx5NbnKX1+yKVOuIypU71JcjPXRXE3gx9QaMiXOnA4xnLda3gkn1eg1Rq4GMkK+lMpJfnx6Y73X7jGK8oQX6VSzcFmcz1Mr27h5wJeRAyC4T666HrwzhtxEcoBQgHvAy9JnC+nmgvrtgwnAhbk6sedqI5xb7hXlyBSjTAAtMpok4RAnYSnk4lSJa2st6wibXBKck5Fd3LeR+cHwtXzHMqk6U6anTsguGJNRAmArpqIJVKQ9XsJ3i2cACeW3X4gE3Q0x1c/ZCwxow6Z5PuQBsv0VeiBRmptqCQp4MTNowSD9zT53CrPkLi3K2rzxONOsIWkOHoyLP1/iJrkOnWJ9PZyKGuztcFt3tJsy1NEMTRvEV2+NdEc+A93nnbdhDMrBHen3tjaM7yD5X8Bi3hKS9JAAAAAElFTkSuQmCC%s'
+      #'http://maps.google.com/mapfiles/ms/icons/red-dot.png?foo=%s'
+
+      # Plot 'locations'
+      gmap.plot(loc_lats, loc_lons, '#edc169', edge_width=1)
+      for t, l in TimeseriesRow.get_series('location', ts):
+        gmap.marker(l.latitude, l.longitude, title='loc')
+      
+      # Plot GPS readings
+      gmap.plot(gps_lats, gps_lons, '#6495ed', edge_width=4)
+      for t, g in TimeseriesRow.get_series('gps', ts):
+        title = "\\n".join(k + ' = ' + str(v) for k , v in sorted(g.__dict__.iteritems()) if v)
+        gmap.marker(g.latitude, g.longitude, title=title)
+
+      # Sadly gmplot can only target files for output
+      # import tempfile
+      # f = tempfile.NamedTemporaryFile()
+      d = dest + '.map.html'
+      # d = os.path.relpath(d, self.info.FIXTURES.video_debug_dir())
+      gmap.draw(d)#f.name)
+      # map_html = f.read()
+
+      TVs = {
+        'accel x(t)': TimeseriesRow.get_series('accel.x', ts),
+        'accel y(t)': TimeseriesRow.get_series('accel.y', ts),
+        'accel z(t)': TimeseriesRow.get_series('accel.z', ts),
+
+        'gryo x(t)': TimeseriesRow.get_series('gyro.x', ts),
+        'gryo y(t)': TimeseriesRow.get_series('gyro.y', ts),
+        'gryo z(t)': TimeseriesRow.get_series('gyro.z', ts),
+
+        'gps v(t)': TimeseriesRow.get_series('gps.speed', ts),
+        'location course(t)': TimeseriesRow.get_series('gps.course', ts),
+      }
+
+      import matplotlib
+      matplotlib.use('Agg')
+      import matplotlib.pyplot as plt
+      tv_paths = []
+      for title, vts in TVs.iteritems():
+
+        def slugify(value):
+          """
+          https://stackoverflow.com/a/295466
+          Normalizes string, converts to lowercase, removes non-alpha characters,
+          and converts spaces to hyphens.
+          """
+          import unicodedata
+          import re
+          value = unicode(value)
+          value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore')
+          value = unicode(re.sub('[^\w\s-]', '', value).strip().lower())
+          value = unicode(re.sub('[-\s]+', '-', value))
+          return value
+
+        d = dest + '.' + slugify(title) + '.png'
+
+        fig = plt.figure()
+        ts = [vt[0] for vt in vts]
+        vs = [vt[1] for vt in vts]
+        plt.plot(ts, vs)
+        plt.title(title)
+        plt.savefig(d)
+        print d
+        tv_paths.append(d)
+
+
+
+    d = os.path.split(dest)[-1] + '.map.html'
+    imgs = ''.join('<img src="%s" />' % os.path.split(p)[-1] for p in tv_paths)
+    html = '<html><head></head><body> ' + html + '<iframe height=400 width=400 src="' + d + '"></iframe>' + imgs +'</body></html>'
+    
+    
+    
+    
+    
+    
+    with open(dest, 'wc') as f:
+      f.write(html)
+    print dest
 
 
 class VideoDataset(object):

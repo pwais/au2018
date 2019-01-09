@@ -99,6 +99,8 @@ class BDD100kTests(unittest.TestCase):
           assert ts[0].gyro.y == 0.19210000000000002
           assert ts[0].gyro.z == 0.0012000000000000001
 
+          video.save_debug_html()
+
     #   ts_row_rdd = TestInfoDataset._info_table_from_zip(spark)
     #   # df = ts_row_rdd#spark.createDataFrame(ts_row_rdd)
     #   # import ipdb; ipdb.set_trace()
