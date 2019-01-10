@@ -13,13 +13,13 @@ class TestInfoDataset(bdd100k.InfoDataset):
   FIXTURES = TestFixtures
 
   VIDEOS = set((
-    'b9d24e81-a9679e2a.mov',
-    'c2bc5a4c-b2bc828b.mov',
-    'c6a4abc9-e999da65.mov',
-    'b7f75fad-1c1c419b.mov',
-    'b2752cd6-12ba5588.mov',
-    'be986afd-f734d33e.mov',
-    'c53c9807-1eadf674.mov'
+    '0000f77c-6257be58.mov',
+    '0000f77c-62c2a288.mov',
+    '0000f77c-cb820c98.mov',
+    '0001542f-5ce3cf52.mov',
+    '0001542f-7c670be8.mov',
+    '0001542f-ec815219.mov',
+    '0004974f-05e1c285.mov'
   ))
 
 class TestVideoDataset(bdd100k.VideoDataset):
@@ -90,16 +90,17 @@ class BDD100kTests(unittest.TestCase):
       videos = video_rdd.collect()
       for video in videos:
         if video.name == 'video_with_no_info.mov':
-          assert video.timeseries == []
-        elif video.name == 'b9d24e81-a9679e2a.mov':
+          assert video.timeseries == [] # No info!
+        elif video.name == '0000f77c-cb820c98.mov':
+          # Smoke test!
           ts = video.timeseries
-          assert len(ts) == 4059
-          assert ts[0].t == 1506800843701
-          assert ts[0].gyro.x == -0.36110000000000003
-          assert ts[0].gyro.y == 0.19210000000000002
-          assert ts[0].gyro.z == 0.0012000000000000001
+          assert len(ts) == 4076
+          assert ts[0].t == 1503828163000
+          assert ts[0].location.latitude == 40.67684291865739
+          assert ts[0].location.longitude == -73.83530301048778
 
-          video.save_debug_html()
+        w = bdd100k.VideoDebugWebpage(video)
+        w.save()
 
     #   ts_row_rdd = TestInfoDataset._info_table_from_zip(spark)
     #   # df = ts_row_rdd#spark.createDataFrame(ts_row_rdd)
