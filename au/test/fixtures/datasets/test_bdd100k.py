@@ -91,6 +91,12 @@ class BDD100kTests(unittest.TestCase):
       for video in videos:
         if video.name == 'video_with_no_info.mov':
           assert video.timeseries == [] # No info!
+
+          # Test smoke since we know how many frames to expect
+          rows = list(video.iter_imagerows())
+          assert len(rows) == 30
+          assert all(row.as_numpy().shape == (32, 32, 3) for row in rows)
+
         elif video.name == '0000f77c-cb820c98.mov':
           # Smoke test!
           ts = video.timeseries
@@ -99,8 +105,9 @@ class BDD100kTests(unittest.TestCase):
           assert ts[0].location.latitude == 40.67684291865739
           assert ts[0].location.longitude == -73.83530301048778
 
-        w = bdd100k.VideoDebugWebpage(video)
-        w.save()
+          # Smoke test!
+          w = bdd100k.VideoDebugWebpage(video)
+          w.save()
 
     #   ts_row_rdd = TestInfoDataset._info_table_from_zip(spark)
     #   # df = ts_row_rdd#spark.createDataFrame(ts_row_rdd)

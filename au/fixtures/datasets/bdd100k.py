@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 
 Notes:
@@ -93,10 +94,118 @@ class Fixtures(object):
     dest = cls.test_fixture(
               os.path.join(
                 cls.video_dir(), '100k', 'train', 'video_with_no_info.mov'))
-    video_bytes = testutils.VideoFixture().get_bytes()
+    codec = 'h264' # Chrome will not play `png` movies
+    video_bytes = testutils.VideoFixture(codec=codec).get_bytes()
     with open(dest, 'wc') as f:
-        f.write(video_bytes)
+      f.write(video_bytes)
     log.info("Wrote synth video to %s ..." % dest)
+
+  @classmethod
+  def run_import(cls, spark=None):
+    import argparse
+    import pprint
+  
+    parser = argparse.ArgumentParser(
+                    description=(
+                      "Help import and set up the bdd100k dataset. "
+                      "FMI see /docs/bdd100k.md"))
+    parser.add_argument(
+      '--src', default='/outer_root/tmp',
+      help='Find zips in this dir [default %(default)s]')
+    parser.add_argument(
+      '--dest', default=cls.ROOT,
+      help='Place files in this dir [default %(default)s]')
+    parser.add_argument(
+      '--num-videos', default=1000,
+      help='Expand only this many video files [default %(default)s]; ')
+    parser.add_argument(
+      '--all-videos', default=False, action='store_true',
+      help='Expand all videos (equivalent to --num-videos=-1)')
+    parser.add_argument(
+      '--dry-run', default=False, action='store_true',
+      help='Only show what would happen')
+
+    args = parser.parse_args()
+
+    EXPECTED_FILE_TO_DEST = {
+      'bdd100k_info.zip': cls.telemetry_zip(),
+      'bdd100k_videos.zip': cls.video_zip(),
+      # 'bdd100k_drivable_maps.zip': ?,
+      # 'bdd100k_images.zip': ?,
+      # 'bdd100k_labels_release.zip': ?,
+      # 'bdd100k_seg.zip': ?,
+    }
+
+    src_paths = list(util.all_files_recursive(args.src))
+    found = (
+        set(EXPECTED_FILE_TO_DEST.keys())
+        & set(os.path.dirname(p) for p in src_paths))
+    print "Found the following files, which we will import:"
+    pprint.pprint(list(found))
+    if not found:
+      print "Nothing to do"
+      return
+
+    spark = spark or Spark.getOrCreate()
+
+    def get_path(fname, paths):
+      for p in paths:
+        if fname in path:
+          return p
+    
+    def run_safe(cmd):
+      if args.dry_run:
+        print "DRY RUN SKIPPED: " + cmd
+      else:
+        util.run_cmd(cmd)
+
+    for fname, dest in sorted(EXPECTED_FILE_TO_DEST.iteritems()):
+      src_path = get_path(fname, src_paths)
+      if not src_path:
+        continue
+      
+      if fname == 'bdd100k_videos.zip':
+        cmd = 'ln -s %s %s' % (src_path, dest)
+        run_safe(cmd)
+
+        archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.video_zip())
+        archive_rdd = archive_rdd.filter(lambda fw: 'mov' in fw.name)
+        n_vids = archive_rdd.count()
+        print "Found %s videos in %s ..." % (n_vids, src_path)
+        
+        if args.all_videos:
+          max_videos = n_vids
+        else:
+          max_videos = min(n_vids, args.num_videes)
+        
+        vids = sorted(archive_rdd.map(lambda fw: fw.name).collect())
+        vids = set(vids[:max_videos])
+        vids_to_import = archive_rdd.filter(lambda fw: fw.name in vids)
+        print "... importing %s videos ..." % len(vids_to_import.count())
+        
+        dry_run = args.dry_run
+        dest_dir = cls.video_dir()
+        def copy_vid(fw):
+          vid_dest = os.path.join(dest_dir, fw.name)
+          util.mkdir(os.path.dirname(vid_dest))
+          if dry_run:
+            print "DRY RUN SKIPPED: " + f.name
+          else:
+            with open(vid_dest, 'wc') as f:
+              f.write(fw.data)
+        vids_to_import.foreach(copy_vid)
+
+        print "... import complete! Imported to %s ." % dest_dir  
+
+      else:
+        cmd = 'cp -v %s %s' % (src_path, dest)
+        run_safe(cmd)
+
+
+
+
+
+    
 
   # @classmethod
   # def setup(cls, spark=None):
@@ -679,10 +788,10 @@ class Video(object):
     start_time = max(0, video_meta.startTime)
     for i in range(video_meta.nframes):
       frame_timestamp_ms = int(start_time + frame_period_ms)
-      yield ImageRow(
+      yield dataset.ImageRow(
               dataset='bdd100k.video',
               split=video_meta.split,
-              uri='bdd100k.video:' + self.name + ':' + frame_timestamp_ms,
+              uri='bdd100k.video:' + self.name + ':' + str(frame_timestamp_ms),
               _arr_factory=lambda: self.get_frame(i),
               attrs={
                 'nanostamp': int(frame_timestamp_ms * 1e6),
@@ -943,61 +1052,11 @@ class VideoFrameTable(dataset.ImageTable):
 
   TABLE_NAME = 'bdd100k_videos'
 
-  FIXTURES = Fixtures
-
-  INFO = InfoDataset
+  VIDEO = VideoDataset
   
   @classmethod
   def setup(cls):
     util.log.info("User must manually set up files.  TODO instructions.")
-    
-  ## Utils
-
-  
-
-
-
-
-  # @classmethod
-  # def videos(cls):
-  #   """Return a cached map of video -> `Video` instances"""
-    
-  #   class VideoFlyweight(object):
-  #     __slots__ = ('_data')
-
-  #     def __init__(self, data=None):
-  #       self._data = data
-
-      
-
-    
-
-  #   # Load flyweights to videos
-  #   if not hasattr(cls, '_videos'):
-      
-    
-  #   return cls._videos
-
-  # @staticmethod
-  # def _video_to_rows(vidname, vidfw):
-    
-  #   # class LazyFrame(object):
-  #   #   __slots__ = ('n', 'vidfw', '_reader')
-  #   #   def __init__(self, n=-1, vidfw=None):
-  #   #     self.n = n
-  #   #     self.vidfw = vidfw
-  #   #     self._reader = None
-      
-  #   #   @property
-  #   #   def reader(self):
-  #   #     if self._reader is None:
-  #   #       import imageio
-  #   #       self._reader = 
-  #   #   def __call__(self):
-  #   #     import imageio
-
-
-
 
   ## ImageTable API
 
@@ -1036,3 +1095,5 @@ class VideoFrameTable(dataset.ImageTable):
     # return row_rdd
  
     
+if __name__ == '__main__':
+  Fixtures.run_import()

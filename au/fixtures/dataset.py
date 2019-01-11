@@ -93,7 +93,7 @@ class ImageRow(object):
   def as_numpy(self):
     if self._cached_image_arr is '':
       if self._arr_factory is not '':
-        self._cached_image_arr = self.__arr_factory()
+        self._cached_image_arr = self._arr_factory()
       else:
         image_bytes = self.image_bytes
         if image_bytes is '':
