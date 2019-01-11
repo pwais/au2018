@@ -64,6 +64,12 @@ class ImageRow(object):
     return row
   
   @staticmethod
+  def wrap_factory(np_img_factory, **kwargs):
+    row = ImageRow(**kwargs)
+    row._arr_factory = np_img_factory
+    return row
+
+  @staticmethod
   def from_path(path, **kwargs):
     # NB: The ImageRow instance will be a flyweight for the image data
     row = ImageRow(uri=path, **kwargs)
@@ -107,6 +113,9 @@ class ImageRow(object):
   def image_bytes(self):
     if self._image_bytes is '':
       # Read lazily
+      if self._arr_factory is not '' and self._cached_image_arr is '':
+        self._cached_image_arr = self._arr_factory()
+
       if self._cached_image_arr is not '':
         buf = io.BytesIO()
         imageio.imwrite(buf, self._cached_image_arr, format='png')
@@ -114,6 +123,7 @@ class ImageRow(object):
       elif self._cached_image_fobj is not '':
         self._image_bytes = self._cached_image_fobj.read()
         self._cached_image_fobj = ''
+    
     return self._image_bytes
 
 #   @property

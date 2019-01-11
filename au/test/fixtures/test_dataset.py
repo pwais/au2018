@@ -43,13 +43,19 @@ def test_imagerow_demo(monkeypatch):
   }
   assert ImageRow().to_dict() == empty_row_as_dict
   
+  ## We can wrap a closure that geneates an image
+  def gen_img():
+    return np.zeros((32, 32))
+  row = ImageRow.wrap_factory(gen_img)
+  assert len(row.image_bytes) == 75
+  assert row.as_numpy().shape == (32, 32)
   
   ## We can instantiate from a file on disk
   row = ImageRow.from_path(testconf.MNIST_TEST_IMG_PATH, dataset='test2')
   assert row.dataset == 'test2'
   assert len(row.image_bytes) == 250
   assert row.as_numpy().shape == (28, 28)
-  
+
   ## We can dump a row to disk for quick inspection
   with monkeypatch.context() as m: 
     m.setattr(conf, 'AU_CACHE_TMP', testconf.TEST_TEMPDIR_ROOT)
