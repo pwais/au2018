@@ -102,6 +102,7 @@ class DockerEnv(object):
         -d -it -P
         --net=host
         -v `pwd`:/opt/au:z
+        --device /dev/fuse --privileged
         -v {ivy2_persisted_cache}:/root/.ivy2:z
         -v /:/outer_root:z
         -w /opt/au
