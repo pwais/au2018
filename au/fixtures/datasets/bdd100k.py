@@ -231,7 +231,7 @@ class Fixtures(object):
       util.cleandir(cls.video_debug_dir())
       
       print "Running video setup ..."
-      VideoDataset.setup(spark)
+      VideoDataset.setup(spark, all_videos=args.all_videos)
 
 
 
@@ -1044,7 +1044,7 @@ class VideoDebugWebpage(object):
     # NB: sadly gmplot can only target files for output
     dest = dest_base + '.map.html'
     gmap.draw(dest)
-    util.log.info("Saved map to %s" % dest)
+    util.log.debug("Saved map to %s" % dest)
     return dest
 
   def _save_plots(self, dest_base):
@@ -1091,8 +1091,9 @@ class VideoDebugWebpage(object):
 
       dest = dest_base + '.' + to_filename(title) + '.png'
       plt.savefig(dest)
-      util.log.info("Saved plot %s" % dest)
+      util.log.debug("Saved plot %s" % dest)
       paths.append(dest)
+      plt.close(fig) # Important! else python process will OOM
     return paths
 
 _setup_thruput = None
@@ -1231,16 +1232,17 @@ class VideoDataset(object):
     return video_rdd
 
   @classmethod
-  def setup(cls, spark):
-    VIDS_PER_PARTITION = 10
-
+  def setup(cls, spark, all_videos=True):
     video_index_dir = cls.FIXTURES.video_index_root()
     if util.missing_or_empty(video_index_dir):
       util.log.info("Creating video meta index ...")
 
-      vids_with_info = cls.INFO.videonames()[:50]
-      vids_with_movs = cls.videonames()[:50]
-      all_vids = set(vids_with_info).union(set(vids_with_movs))
+      vids_with_movs = cls.videonames()
+      vids_with_info = cls.INFO.videonames()
+      if all_videos:
+        all_vids = set(vids_with_info).union(set(vids_with_movs))
+      else:
+        all_vids = vids_with_movs
       util.log.info("... have %s total videos to index ..." % len(all_vids))
 
       # Use mapPartitions below to limit json / imageio memory usage
@@ -1249,20 +1251,23 @@ class VideoDataset(object):
       _setup_thruput = Spark.thruput_accumulator(spark)
       def gen_videometas(vidnames):
         t = util.ThruputObserver()
-        for vidname in vidnames:
-          with t.observe(n=1):
+        with t.observe():
+          for vidname in vidnames:
             meta = cls.INFO.get_meta_for_video(vidname)
             videometa = VideoMeta.from_meta(meta)
             video = cls.get_video(vidname)
             if video:
               video.fill_video_meta(videometa)
             yield videometa
+            t.update_tallies(n=1)
+        
         global _setup_thruput
         _setup_thruput += t
       
       vids_rdd = spark.sparkContext.parallelize(all_vids)
   
-      n_partitions = max(1, int(len(all_vids) / VIDS_PER_PARTITION))
+      VIDS_PER_PARTITION = 1000
+      n_partitions = max(20, int(len(all_vids) / VIDS_PER_PARTITION))
       vids_rdd = vids_rdd.repartition(n_partitions)
       videometa_rdd = vids_rdd.mapPartitions(gen_videometas)
       
@@ -1287,10 +1292,23 @@ class VideoDataset(object):
       util.log.info("Creating video debug webpages ...")
       video_rdd = cls.load_video_rdd(spark)
 
-      # Don't OOM creating webpages
-      n_partitions = max(1, int(video_rdd.count() / VIDS_PER_PARTITION))
-      video_rdd = video_rdd.repartition(n_partitions)
+      # Protect against plotters from OOMing; also get better progress printout
+      video_rdd = video_rdd.repartition(
+                    max(10, int(video_rdd.count() / 10)))
       video_rdd.foreach(lambda v: VideoDebugWebpage(v).save())
+
+      # # Don't OOM creating webpages
+      # VIDS_PER_PARTITION = 10
+      # n_partitions = max(1, int(video_rdd.count() / VIDS_PER_PARTITION))
+      # video_rdd = video_rdd.repartition(n_partitions)
+      # def save(videos):
+      #   for v in videos:
+      #     try:
+      #       VideoDebugWebpage(v).save()
+      #     except Exception as e:
+      #       for _ in range(10):
+      #         print "wat", e
+      # video_rdd.foreachPartition(save)
 
     
 class VideoFrameTable(dataset.ImageTable):
