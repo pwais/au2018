@@ -146,6 +146,7 @@ class Spark(object):
     cls._setup()
 
     import pyspark
+    
     from pyspark import sql
     builder = sql.SparkSession.builder
     if cls.MASTER is not None:
@@ -162,6 +163,8 @@ class Spark(object):
       builder = builder.enableHiveSupport()
     spark = builder.getOrCreate()
 
+    # spark.sparkContext.setLogLevel('INFO')
+
     spark.sparkContext.addPyFile(cls.egg_path())
     return spark
   
@@ -175,6 +178,21 @@ class Spark(object):
   def archive_rdd(spark, path):
     fws = util.ArchiveFileFlyweight.fws_from(path)
     return spark.sparkContext.parallelize(fws)
+
+  @staticmethod
+  def thruput_accumulator(spark, **thruputKwargs):
+    from pyspark.accumulators import AccumulatorParam
+    class ThruputObsAccumulator(AccumulatorParam):
+      def zero(self, v):
+        return v or util.ThruputObserver()
+      def addInPlace(self, value1, value2):
+        value1 += value2
+        return value1
+    
+    return spark.sparkContext.accumulator(
+                util.ThruputObserver(**thruputKwargs),
+                ThruputObsAccumulator())
+
 
   @staticmethod
   def num_executors(spark):

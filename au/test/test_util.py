@@ -66,3 +66,8 @@ def test_archive_fliyweight_zip():
   assert len(fws) == len(ss)
   datas = [fw.data for fw in fws]
   assert sorted(datas) == sorted(ss)
+
+def test_ds_store_is_stupid():
+  assert util.is_stupid_mac_file('/yay/.DS_Store')
+  assert util.is_stupid_mac_file('.DS_Store')
+  assert util.is_stupid_mac_file('._.DS_Store')

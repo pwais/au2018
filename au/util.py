@@ -42,12 +42,13 @@ def ichunked(seq, n):
 
 class ThruputObserver(object):
   
-  def __init__(self, name='', log_on_del=False):
+  def __init__(self, name='', log_on_del=False, only_stats=None):
     self.n = 0
     self.num_bytes = 0
     self.ts = []
     self.name = name
     self.log_on_del = log_on_del
+    self.only_stats = only_stats or []
     self._start = None
   
   @contextmanager
@@ -78,11 +79,15 @@ class ThruputObserver(object):
   def union(thruputs):
     u = ThruputObserver()
     for t in thruputs:
-      u.n += t.n
-      u.num_bytes += t.num_bytes
-      u.ts.extend(t.ts)
+      u += t
     return u
   
+  def __iadd__(self, other):
+    self.n += other.n
+    self.num_bytes += other.num_bytes
+    self.ts.extend(other.ts)
+    return self
+
   def __str__(self):
     import numpy as np
     import tabulate
@@ -103,6 +108,13 @@ class ThruputObserver(object):
       ('p95 (sec)', np.percentile(self.ts, 95) if self.ts else '-'),
       ('p99 (sec)', np.percentile(self.ts, 99) if self.ts else '-'),
     )
+    if self.only_stats:
+      stats = tuple(
+        (name, value)
+        for name, value in stats
+        if name in self.only_stats
+      )
+
     summary = tabulate.tabulate(stats)
     if self.name:
       summary = self.name + '\n' + summary
@@ -127,6 +139,19 @@ def quiet():
     new_stderr.seek(0)
     sys.stdout = old_stdout
     sys.stderr = old_stderr
+
+@contextmanager
+def imageio_ignore_warnings():
+  # Imageio needs some fix: https://github.com/imageio/imageio/issues/376
+  import imageio.core.util
+  def silence_imageio_warning(*args, **kwargs):
+    pass
+  old = imageio.core.util._precision_warn
+  imageio.core.util._precision_warn = silence_imageio_warning
+  try:
+    yield
+  finally:
+    imageio.core.util._precision_warn = old
 
 def run_cmd(cmd, collect=False):
   log = create_log()
@@ -285,6 +310,18 @@ def cleandir(path):
   mkdir(path)
   rm_rf(path)
   mkdir(path)
+
+def missing_or_empty(path):
+  if not os.path.exists(path):
+    return True
+  else:
+    for p in all_files_recursive(path):
+      return False
+    return True
+
+def is_stupid_mac_file(path):
+  fname = os.path.basename(path)
+  return fname.startswith('._') or fname in ('.DS_Store',)
 
 def download(uri, dest):
   """Fetch `uri`, which is a file or archive, and put in `dest`, which
