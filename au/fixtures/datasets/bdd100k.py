@@ -474,7 +474,6 @@ class InfoDataset(object):
   def _video_to_fw_cache(cls):
     if not hasattr(cls, '_local'):
       cls._local = threading.local()
-    
     if not hasattr(cls._local, 'video_to_fw_cache'):
       fws = util.ArchiveFileFlyweight.fws_from(cls.FIXTURES.telemetry_zip())
       vidname = lambda fw: InfoDataset.json_path_to_video_fname(fw.name)
@@ -816,21 +815,21 @@ class VideoMeta(object):
 class Video(object):
   """Flyweight for a single BDD100k video file"""
 
-  __slots__ = ('name', 'path', 'info', '_data', '_local')
+  __slots__ = ('name', 'path', 'viddataset', '_data', '_local')
 
-  def __init__(self, name='', data=None, path='', info=None):
+  def __init__(self, name='', data=None, path='', viddataset=None):
     self.name = name
     self.path = path
     self._data = data
     self._local = threading.local()
-    self.info = info or InfoDataset
+    self.viddataset = viddataset or VideoDataset
 
   @staticmethod
-  def from_videometa(meta, info=None):
+  def from_videometa(meta, viddataset=None):
     return Video(
       name=meta.video,
       path=meta.path,
-      info=info)
+      viddataset=viddataset)
 
   @staticmethod
   def from_path(path, **kwargs):
@@ -846,6 +845,9 @@ class Video(object):
   
   def fill_video_meta(self, videometa):
     imageio_meta = {}
+    if not videometa.path:
+      videometa.path = self.path or self.viddataset.get_path_for_video(self.name)
+
     if self.data:
       imageio_meta = self.reader.get_meta_data()    
       imageio_meta.update({
@@ -853,11 +855,12 @@ class Video(object):
         'height': imageio_meta['size'][1],
       })
       self._local.reader = None
+
     videometa.update(**imageio_meta)
   
   def get_video_meta(self):
     videometa = VideoMeta()
-    meta = self.info.get_meta_for_video(self.name)
+    meta = self.viddataset.INFO.get_meta_for_video(self.name)
     videometa.update(**meta.to_dict())
     self.fill_video_meta(videometa)
     return videometa
@@ -908,7 +911,7 @@ class Video(object):
 
   @property
   def timeseries(self):
-    return self.info.get_timeseries_for_video(self.name)
+    return self.viddataset.INFO.get_timeseries_for_video(self.name)
 
   def iter_imagerows(self):
     video_meta = self.get_video_meta()    
@@ -944,8 +947,8 @@ class VideoDebugWebpage(object):
   def save(self, dest=None):
     if not dest:
       fname = self.video.name + '.html'
-      dest = os.path.join(self.video.info.FIXTURES.video_debug_dir(), fname)
-      util.mkdir(self.video.info.FIXTURES.video_debug_dir())
+      dest = os.path.join(self.video.viddataset.FIXTURES.video_debug_dir(), fname)
+      util.mkdir(self.video.viddataset.FIXTURES.video_debug_dir())
     
     video = self._gen_video_html()
     map_path = self._save_map_html(dest)
@@ -992,7 +995,7 @@ class VideoDebugWebpage(object):
       return '(no video for %s)' % (meta.to_dict(),)
     path = os.path.relpath(
               meta.path,
-              self.video.info.FIXTURES.video_debug_dir())
+              self.video.viddataset.FIXTURES.video_debug_dir())
     util.log.info("Saving page for video at %s" % path)
     return VIDEO.format(path=path)
 
@@ -1103,11 +1106,14 @@ class VideoDataset(object):
   INFO = InfoDataset
 
   @classmethod
+  def _local(cls):
+    if not hasattr(cls, '_llocal'):
+      cls._llocal = threading.local()
+    return cls._llocal
+
+  @classmethod
   def _videoname_to_video(cls):
-    if not hasattr(cls, '_local'):
-      cls._local = threading.local()
-    
-    if not hasattr(cls._local, 'videoname_to_reader_cache'):
+    if not hasattr(cls._local(), 'videoname_to_reader_cache'):
       util.log.info("Finding videos ...")
       videoname_to_reader_cache = {}
       if os.path.exists(cls.FIXTURES.video_zip()):
@@ -1126,20 +1132,27 @@ class VideoDataset(object):
         util.log.info("Using expanded dir of videos: %s" % video_dir)
       
         paths = list(util.all_files_recursive(video_dir))
-        util.log.info("... found %s total video files." % len(paths))
         videoname_to_reader_cache.update(
           dict(
-            (Video.videoname(p), Video.from_path(p))
+            (Video.videoname(p), Video.from_path(p, viddataset=cls))
             for p in paths
             if (
               '.mov' in p and # Skip directories
               not util.is_stupid_mac_file(p))
         ))
       
-      cls._local.videoname_to_reader_cache = videoname_to_reader_cache
+      cls._local().videoname_to_reader_cache = videoname_to_reader_cache
       util.log.info(
         "... have %s total videos." % len(videoname_to_reader_cache))
-    return cls._local.videoname_to_reader_cache
+    return cls._local().videoname_to_reader_cache
+
+  @classmethod
+  def get_path_for_video(cls, videoname):
+    videoname_to_video = cls._videoname_to_video()
+    video = videoname_to_video.get(videoname)
+    if video:
+      return video.path
+    return ''    
 
   @classmethod
   def videonames(cls):
@@ -1228,7 +1241,7 @@ class VideoDataset(object):
     df = cls.load_videometa_df(spark)
     video_rdd = df.rdd.map(
       lambda meta: \
-        Video.from_videometa(meta, info=cls.INFO))
+        Video.from_videometa(meta, viddataset=cls))
     return video_rdd
 
   @classmethod

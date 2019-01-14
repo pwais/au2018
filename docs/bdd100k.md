@@ -23,7 +23,7 @@ Suppose you downloaded the zip files to `/home/aurie/bdd100k`.  Now, drop
 into an `au` shell (`aucli --shell`), and then use the provided import tool
 to emplace the zip files into the `au` data cache and to run basic setup:
     ```
-    /opt/au % au/fixtures/datasets/bdd100k.py --src /outer_root/home/aurie/bdd100k
+    /opt/au % au/tools/bdd100k.py --src /outer_root/home/aurie/bdd100k
     ```
 
 ## Video Dataset
