@@ -112,7 +112,6 @@ class FillActivationsBase(object):
       row['activations'] = row.get('activations', [])
       yield row
 
-
 class Activations(object):
   """A pyspark-SQL-friendly wrapper for a set of activations"""
 
@@ -206,11 +205,10 @@ class FillActivationsTFDataset(FillActivationsBase):
         
 #         import pprint
 #         log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(final_graph)))
-        
         while not sess.should_stop():
           with self.tf_thruput.observe():
             result = sess.run(tensors_to_eval)
-              # NB: processes batch_size rows in one run()
+              # NB: above will processes `batch_size` rows in one run()
           
           assert len(result) >= 1
           batch_size = result[0].shape[0]
@@ -271,24 +269,26 @@ class ActivationsTable(object):
     activated = img_rdd.mapPartitions(filler)
 
     def to_activation_rows(imagerows):
+      from pyspark.sql import Row
       for row in imagerows:
         if row.attrs is '':
           continue
 
-        activation_to_val = row.attrs.get('activation_to_val')
-        if not activation_to_val:
+        activations = row.attrs.get('activations')
+        if not activations:
           continue
         
-        import pickle
-        yield {
-          'model_name': model.params.MODEL_NAME,
-          'dataset': row.dataset,
-          'split': row.split,
-          'uri': row.uri,
-          'activations': dict(
-            (k, pickle.dumps(v))
-            for k, v in activation_to_val.iteritems()),
-        }
+        for act in activations:
+          for tensor_name, value in act._tensor_to_value.iteritems():
+            yield Row(
+              model_name=model.params.MODEL_NAME,
+              tensor=tensor_name,
+              value=value,
+              
+              dataset=row.dataset,
+              split=row.split,
+              uri=row.uri,
+            )
     
     activation_row_rdd = activated.mapPartitions(to_activation_rows)
     

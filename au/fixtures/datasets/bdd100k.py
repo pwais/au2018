@@ -113,7 +113,7 @@ class Fixtures(object):
     log.info("Wrote synth video to %s ..." % dest)
 
   @classmethod
-  def run_import(cls, spark=None):
+  def run_import(cls):
     import argparse
     import pprint
   
@@ -159,7 +159,7 @@ class Fixtures(object):
       print "Found the following files, which we will import:"
       pprint.pprint(list(found))
 
-    spark = spark or Spark.getOrCreate()
+    spark = Spark.getOrCreate()
 
 
     ### Emplace Data
@@ -811,11 +811,34 @@ class VideoMeta(object):
   #   for k in self.__slots__:
   #     setattr(self, k, d.get(k, _Meta_DEFAULTS[k]))
 
+class VideoURI(object):
+    __slots__ = ('videoname', 'frame_i', 'frame_t')
+
+    PREFIX = 'bdd100k.video://'
+
+    def to_str(self):
+      return PREFIX + ':'.join(
+        self.videoname,
+        self.frame_i,
+        self.frame_t
+      )
+    
+    def __str__(self):
+      return self.to_str()
+
+    @staticmethod
+    def from_uri(s):
+      toks_s = s[len(VideoURI.PREFIX):]
+      toks = toks_s.split(':')
+      assert len(toks) == 3
+      vu = VideoURI()
+      vu.videoname, vu.frame_i, vu.frame_t = toks
+      return vu
 
 class Video(object):
   """Flyweight for a single BDD100k video file"""
 
-  __slots__ = ('name', 'path', 'viddataset', '_data', '_local')
+  __slots__ = ('name', 'path', 'viddataset', '_data', '_local', '_videometa')
 
   def __init__(self, name='', data=None, path='', viddataset=None):
     self.name = name
@@ -823,6 +846,7 @@ class Video(object):
     self._data = data
     self._local = threading.local()
     self.viddataset = viddataset or VideoDataset
+    self._videometa = None
 
   @staticmethod
   def from_videometa(meta, viddataset=None):
@@ -843,7 +867,7 @@ class Video(object):
     """Get the image frame at offset `i`"""
     return self.reader.get_data(i)
   
-  def fill_video_meta(self, videometa):
+  def _fill_video_meta(self, videometa):
     imageio_meta = {}
     if not videometa.path:
       videometa.path = self.path or self.viddataset.get_path_for_video(self.name)
@@ -858,12 +882,19 @@ class Video(object):
 
     videometa.update(**imageio_meta)
   
-  def get_video_meta(self):
-    videometa = VideoMeta()
-    meta = self.viddataset.INFO.get_meta_for_video(self.name)
-    videometa.update(**meta.to_dict())
-    self.fill_video_meta(videometa)
-    return videometa
+  @property
+  def video_meta(self):
+    if self._videometa is None:
+      videometa = VideoMeta()
+      meta = self.viddataset.INFO.get_meta_for_video(self.name)
+      videometa.update(**meta.to_dict())
+      self._fill_video_meta(videometa)
+      self._videometa = videometa
+    return self._videometa
+
+  # def get_video_meta(self):
+    
+  #   return videometa
     
     # assert self.meta is not None, (self.name, self.path)
     # video_meta = self.meta.to_dict() if self.meta else {}
@@ -913,30 +944,36 @@ class Video(object):
   def timeseries(self):
     return self.viddataset.INFO.get_timeseries_for_video(self.name)
 
-  def iter_imagerows(self):
-    video_meta = self.get_video_meta()    
+  def get_frame_as_row(self, i):
+    video_meta = self.video_meta
     frame_period_ms = (1. / video_meta.fps) * 1e3
-    
+
     # If we know nothing about when this video was recorded, assume it
     # started at epoch 0 rather than the VideoMeta default.
     start_time = max(0, video_meta.startTime)
+
+    frame_timestamp_ms = int(start_time + (i * frame_period_ms))
+    vu = VideoURI(self.name, i, frame_timestamp_ms)
+    yield dataset.ImageRow(
+      dataset='bdd100k.video',
+      split=video_meta.split,
+      uri=str(vu),
+      _arr_factory=lambda: self.get_frame(i),
+      attrs={
+        'nanostamp': int(frame_timestamp_ms * 1e6),
+        'bdd100k': {
+          'video': self,
+          'uri': VideoURI(self.name, i, frame_timestamp_ms),
+          'video_meta': video_meta,
+          'frame_timestamp_ms': frame_timestamp_ms,
+        }
+      }
+  )
+
+  def iter_imagerows(self):
+    video_meta = self.video_meta
     for i in range(video_meta.nframes):
-      frame_timestamp_ms = int(start_time + frame_period_ms)
-      yield dataset.ImageRow(
-              dataset='bdd100k.video',
-              split=video_meta.split,
-              uri='bdd100k.video:' + self.name + ':' + str(frame_timestamp_ms),
-              _arr_factory=lambda: self.get_frame(i),
-              attrs={
-                'nanostamp': int(frame_timestamp_ms * 1e6),
-                'bdd100k': {
-                  'video': self,
-                  'offset': i,
-                  'video_meta': video_meta,
-                  'frame_timestamp_ms': frame_timestamp_ms,
-                }
-              }
-      )
+      yield self.get_frame_as_row(i)
   
 
 class VideoDebugWebpage(object):
@@ -990,7 +1027,7 @@ class VideoDebugWebpage(object):
     VIDEO = """
     <video controls src="{path}" width="50%" object-fit="cover"></video>
     """
-    meta = self.video.get_video_meta()
+    meta = self.video.video_meta
     if not meta.path:
       return '(no video for %s)' % (meta.to_dict(),)
     path = os.path.relpath(
@@ -1264,11 +1301,13 @@ class VideoDataset(object):
         t = util.ThruputObserver()
         with t.observe():
           for vidname in vidnames:
-            meta = cls.INFO.get_meta_for_video(vidname)
-            videometa = VideoMeta.from_meta(meta)
             video = cls.get_video(vidname)
             if video:
-              video.fill_video_meta(videometa)
+              videometa = video.video_meta
+            else:
+              # Just use the meta info in the telemetry dataset
+              meta = cls.INFO.get_meta_for_video(vidname)
+              videometa = VideoMeta.from_meta(meta)
             yield videometa
             t.update_tallies(n=1)
         
@@ -1324,48 +1363,48 @@ class VideoDataset(object):
     
 class VideoFrameTable(dataset.ImageTable):
 
-  TABLE_NAME = 'bdd100k_videos'
+  TABLE_NAME = 'bdd100k_video_frames'
 
   VIDEO = VideoDataset
   
   @classmethod
-  def setup(cls):
-    util.log.info("User must manually set up files.  TODO instructions.")
+  def setup(cls, spark=None):
+    spark = spark or Spark.getOrCreate()
+    cls.VIDEO.setup(spark)
 
   ## ImageTable API
 
   @classmethod
   def save_to_image_table(cls, rows):
-    raise ValueError("The BDD100k Video Dataset is read-only")
+    raise ValueError(
+      "The BDD100k Video Dataset is read-only; this class is an adapter")
 
   @classmethod
   def get_rows_by_uris(cls, uris):
-    pass
-    # import pandas as pd
-    # import pyarrow.parquet as pq
+    vus = [VideoURI.from_uri(uri) for uri in uris]
     
-    # pa_table = pq.read_table(cls.table_root())
-    # df = pa_table.to_pandas()
-    # matching = df[df.uri.isin(uris)]
-    # return list(ImageRow.from_pandas(matching))
+    rows = []
+    for vu in vus:
+      video = cls.VIDEO.get_video(vu.videoname)
+      row = video.get_frame_as_row(vu.frame_i)
+      rows.append(row)
+    return rows
 
   @classmethod
   def iter_all_rows(cls):
-    pass
-    # """Convenience method (mainly for testing) using Pandas"""
-    # import pandas as pd
-    # import pyarrow.parquet as pq
-    
-    # pa_table = pq.read_table(cls.table_root())
-    # df = pa_table.to_pandas()
-    # for row in ImageRow.from_pandas(df):
-    #   yield row
+    vids = sorted(cls.VIDEO.videonames())
+    for vid in vids:
+      video = cls.VIDEO.get_video(vu.videoname)
+      for row in video.iter_imagerows():
+        yield row
   
   @classmethod
   def as_imagerow_rdd(cls, spark):
-    pass
-    # df = spark.read.parquet(cls.table_root())
-    # row_rdd = df.rdd.map(lambda row: ImageRow(**row.asDict()))
-    # return row_rdd
- 
-    
+    video_rdd = cls.VIDEO.load_video_rdd(spark)
+
+    # User will probably map over images, so re-parition by video in
+    # order to help avoid OOM (too many videos in memory)
+    video_rdd = video_rdd.repartition(video_rdd.count())
+
+    row_rdd = video_rdd.flatMap(lambda v: v.iter_imagerows())
+    return row_rdd

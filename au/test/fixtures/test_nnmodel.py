@@ -139,19 +139,19 @@ def test_activations_sobel_spark(monkeypatch):
     filled = rdd.collect()
     _check_rows(fixture, filled)
 
-# @pytest.mark.slow
-# def test_fill_activations_table(monkeypatch):
-#   fixture = _create_fixture(monkeypatch)
+@pytest.mark.slow
+def test_fill_activations_table(monkeypatch):
+  fixture = _create_fixture(monkeypatch)
 
-#   class TestActivationsTable(nnmodel.ActivationsTable):
-#     TABLE_NAME = 'sobel_fill_activations_test'
-#     NNMODEL_CLS = Sobel
-#     IMAGE_TABLE_CLS = dataset.ImageTable
+  class TestActivationsTable(nnmodel.ActivationsTable):
+    TABLE_NAME = 'sobel_fill_activations_test'
+    NNMODEL_CLS = Sobel
+    IMAGE_TABLE_CLS = dataset.ImageTable
 
-#   with testutils.LocalSpark.sess() as spark:
-#     TestActivationsTable.setup(spark=spark)
+  with testutils.LocalSpark.sess() as spark:
+    TestActivationsTable.setup(spark=spark)
 
-#     df = spark.read.parquet(TestActivationsTable.table_root())
-#     df.registerTempTable("sobel_activations")
-#     spark.sql("SELECT * FROM sobel_activations").show()
+    df = spark.read.parquet(TestActivationsTable.table_root())
+    df.registerTempTable("sobel_activations")
+    spark.sql("SELECT * FROM sobel_activations").show()
 
