@@ -48,11 +48,12 @@ class BDD100kTests(unittest.TestCase):
     if not self.have_fixtures:
       return
     
-    with testutils.LocalSpark.sess() as spark:
-      meta_rdd = TestInfoDataset.create_meta_rdd(spark)
-      metas = meta_rdd.collect()
-      videos = set(meta.video for meta in metas)
-      assert videos == TestInfoDataset.VIDEOS
+    # Test smoke
+    meta = TestInfoDataset.get_meta_for_video('0000f77c-6257be58.mov')
+    assert meta.video == '0000f77c-6257be58.mov'
+    assert meta.startTime == 1503833985934
+
+    assert set(TestInfoDataset.videonames()) == TestInfoDataset.VIDEOS
 
   @pytest.mark.slow
   def test_video_datset(self):
@@ -63,6 +64,11 @@ class BDD100kTests(unittest.TestCase):
     EXPECTED_VIDEOS.add('video_with_no_info.mov')
 
     with testutils.LocalSpark.sess() as spark:
+
+      ### Test Setup
+      TestVideoDataset.setup(spark)
+
+      assert set(TestVideoDataset.videonames()) == EXPECTED_VIDEOS
 
       ### Test VideoMeta
       videometa_df = TestVideoDataset.load_videometa_df(spark)

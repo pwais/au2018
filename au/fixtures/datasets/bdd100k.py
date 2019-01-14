@@ -1231,13 +1231,11 @@ class VideoDataset(object):
 
   @classmethod
   def load_videometa_df(cls, spark):
-    # cls.setup(spark)
     df = spark.read.parquet(cls.FIXTURES.video_index_root())
     return df
 
   @classmethod
   def load_video_rdd(cls, spark):
-    # cls.setup(spark)
     df = cls.load_videometa_df(spark)
     video_rdd = df.rdd.map(
       lambda meta: \
@@ -1286,8 +1284,8 @@ class VideoDataset(object):
       
       from pyspark.sql import Row
       row_rdd = videometa_rdd.map(lambda vm: Row(**vm.to_dict()))
-      util.log.info("Video meta index:")
-      spark.createDataFrame(row_rdd.sample(False, 0.1, 0)).show()
+      util.log.info("Video meta index sample:")
+      spark.createDataFrame(row_rdd.take(10)).show()
       
       util.log.info("Writing meta index to %s ..." % video_index_dir)
       df = spark.createDataFrame(row_rdd)
