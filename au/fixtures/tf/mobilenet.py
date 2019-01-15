@@ -23,31 +23,76 @@ class Mobilenet(nnmodel.INNModel):
       super(Mobilenet.Params, self).__init__(model_name=model_name)
       
       self.CHECKPOINT = mobilenet_version
+      self.INPUT_TENSOR_SHAPE = [None, self.IMG_SIZE, self.IMG_SIZE, 3]
 
   class Small(Params):
-    CHECKPOINT_TARBALL_URI = 'https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_0.35_96.tgz'
+    CHECKPOINT_TARBALL_URI = \
+      'https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_0.35_96.tgz'
     IMG_SIZE = 96
     DEPTH_MULTIPLIER = 0.35
     FINE = True
   
   class Medium(Params):
-    CHECKPOINT_TARBALL_URI = 'https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_0.5_224.tgz'
+    CHECKPOINT_TARBALL_URI = \
+      'https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_0.5_224.tgz'
     IMG_SIZE = 224
     DEPTH_MULTIPLIER = 0.5
     FINE = True
     
   class Large(Params):
-    CHECKPOINT_TARBALL_URI = 'https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_1.0_224.tgz'
+    CHECKPOINT_TARBALL_URI = \
+      'https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_1.0_224.tgz'
     IMG_SIZE = 224
     DEPTH_MULTIPLIER = 1.0
     FINE = False
   
   class XLarge(Params):
-    CHECKPOINT_TARBALL_URI = 'https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_1.4_224.tgz'
+    CHECKPOINT_TARBALL_URI = \
+      'https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_1.4_224.tgz'
     IMG_SIZE = 224
     DEPTH_MULTIPLIER = 1.4
     FINE = False
+  
+  class GraphFactory(nnmodel.TFInferenceGraphFactory):
+    def create_inference_graph(self, input_image, base_graph):
+      util.download(self.params.CHECKPOINT_TARBALL_URI, self.params.MODEL_BASEDIR)
+      
+      self.graph = base_graph
+      with self.graph.as_default():
+        
+
+        # tf_sess = util.tf_create_session()
+        # saver = tf.train.Saver()#vs)
+        # saver.restore(
+        #   tf_sess,
+        #   os.path.join(
+        #     self.params.MODEL_BASEDIR,
+        #     self.params.CHECKPOINT + '.ckpt'))
+        
+        input_image = tf.cast(input_image, tf.float32) / 128. - 1
+        input_image.set_shape(self.params.INPUT_TENSOR_SHAPE)
+        # input_image = tf.reshape(input_image, tuple(self.params.INPUT_TENSOR_SHAPE))
+
+        from nets.mobilenet import mobilenet_v2
+        with tf.contrib.slim.arg_scope(mobilenet_v2.training_scope(is_training=False)):
+          # See also e.g. mobilenet_v2_035
+          self.logits, self.endpoints = mobilenet_v2.mobilenet(
+                                input_image,
+                                is_training=False,
+                                depth_multiplier=self.params.DEPTH_MULTIPLIER,
+                                finegrain_classification_mode=self.params.FINE)
+
+          root = tf.train.Checkpoint()#model=self.tf_model)
+          root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
+          util.log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
+
+                
+      return self.graph
     
+    @property
+    def output_names(self):
+      return ('MobilenetV2/Logits/output:0',)#self.endpoints.keys()
+
   def __init__(self):
     self.sess = None
     self.predictor = None
@@ -56,40 +101,39 @@ class Mobilenet(nnmodel.INNModel):
   def load_or_train(cls, params=None):
     model = cls()
     model.params = params or model.params
-    
-    util.download(params.CHECKPOINT_TARBALL_URI, model.params.MODEL_BASEDIR) 
-    
-    tf.reset_default_graph()
-    images = tf.placeholder(
-                  tf.float32,
-                  # Channels last format!
-                  (None, model.params.IMG_SIZE, model.params.IMG_SIZE, 3),
-                  name='images')
-    
-    images = tf.cast(images, tf.float32) / 128. - 1
-    from nets.mobilenet import mobilenet_v2
-#     with tf.Graph().as_default():
-#       with tf.variable_scope('MobilenetV2', reuse=True) as scope:
-    with tf.contrib.slim.arg_scope(mobilenet_v2.training_scope(is_training=False)):
-      # See also e.g. mobilenet_v2_035
-      model.logits, model.endpoints = mobilenet_v2.mobilenet(
-                                        images,
-                                        is_training=False,
-                                        depth_multiplier=model.params.DEPTH_MULTIPLIER,
-                                        finegrain_classification_mode=model.params.FINE)
-    
-    # Restore using exponential moving average since it produces (1.5-2%)
-    # higher accuracy
-    #ema = tf.train.ExponentialMovingAverage(0.999)
-    #vs = ema.variables_to_restore()
-    
-    tf_sess = util.tf_create_session()
-    saver = tf.train.Saver()#vs)
-    saver.restore(
-        tf_sess,
-        os.path.join(model.params.MODEL_BASEDIR, model.params.CHECKPOINT + '.ckpt'))
+    model.igraph = Mobilenet.GraphFactory(params)
     return model
+     
+  def get_inference_graph(self):
+    return self.igraph
+
+
+#     tf.reset_default_graph()
+#     images = tf.placeholder(
+#                   tf.float32,
+#                   # Channels last format!
+#                   (None, model.params.IMG_SIZE, model.params.IMG_SIZE, 3),
+#                   name='images')
     
-  def iter_activations(self):
-    yield 1
+#     images = tf.cast(images, tf.float32) / 128. - 1
+#     from nets.mobilenet import mobilenet_v2
+# #     with tf.Graph().as_default():
+# #       with tf.variable_scope('MobilenetV2', reuse=True) as scope:
+#     with tf.contrib.slim.arg_scope(mobilenet_v2.training_scope(is_training=False)):
+      
+    
+#     # Restore using exponential moving average since it produces (1.5-2%)
+#     # higher accuracy
+#     #ema = tf.train.ExponentialMovingAverage(0.999)
+#     #vs = ema.variables_to_restore()
+    
+#     tf_sess = util.tf_create_session()
+#     saver = tf.train.Saver()#vs)
+#     saver.restore(
+#         tf_sess,
+#         os.path.join(model.params.MODEL_BASEDIR, model.params.CHECKPOINT + '.ckpt'))
+#     return model
+    
+#   def iter_activations(self):
+#     yield 1
 

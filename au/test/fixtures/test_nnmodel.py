@@ -127,7 +127,7 @@ def test_activations_sobel(monkeypatch):
 def test_activations_sobel_spark(monkeypatch):
   fixture = _create_fixture(monkeypatch)
 
-  rows = dataset.ImageTable.iter_all_rows()
+  # rows = dataset.ImageTable.iter_all_rows()
   with testutils.LocalSpark.sess() as spark:
     sc = spark.sparkContext
     rdd = sc.parallelize(fixture.rows)
@@ -152,6 +152,6 @@ def test_fill_activations_table(monkeypatch):
     TestActivationsTable.setup(spark=spark)
 
     df = spark.read.parquet(TestActivationsTable.table_root())
-    df.registerTempTable("sobel_activations")
+    df.createOrReplaceTempView("sobel_activations")
     spark.sql("SELECT * FROM sobel_activations").show()
 

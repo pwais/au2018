@@ -240,8 +240,6 @@ class FillActivationsTFDataset(FillActivationsBase):
 
 
 
-
-
 class ActivationsTable(object):
 
   TABLE_NAME = 'default'
@@ -282,8 +280,8 @@ class ActivationsTable(object):
           for tensor_name, value in act._tensor_to_value.iteritems():
             yield Row(
               model_name=model.params.MODEL_NAME,
-              tensor=tensor_name,
-              value=value,
+              tensor_name=tensor_name,
+              tensor_value=value,
               
               dataset=row.dataset,
               split=row.split,
@@ -297,7 +295,7 @@ class ActivationsTable(object):
     writer = df.write.parquet(
                 path=cls.table_root(),
                 mode='overwrite',
-                compression='snappy',
+                compression='gzip',
                 partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
     log.info("... wrote to %s ." % cls.table_root())
 
