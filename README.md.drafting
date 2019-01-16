@@ -11,10 +11,6 @@ See [the `cluster` module](cluster/README.md) about setting up a cluster.
 
 
 
-recent papers:
-https://arxiv.org/pdf/1811.10742.pdf
-https://arxiv.org/pdf/1812.00452.pdf
-
 
 
 pytest au -s --runslow -k test_mnist_save_png
