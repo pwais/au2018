@@ -82,20 +82,67 @@ class Mobilenet(nnmodel.INNModel):
                                 depth_multiplier=self.params.DEPTH_MULTIPLIER,
                                 finegrain_classification_mode=self.params.FINE)
 
-          root = tf.train.Checkpoint()#model=self.tf_model)
-          root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
-          util.log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
+        # Per authors: Restore using exponential moving average since it produces
+        # (1.5-2%) higher accuracy
+        ema = tf.train.ExponentialMovingAverage(0.999)
+        vs = ema.variables_to_restore()
+        
+      saver = tf.train.Saver(vs)
+      checkpoint = os.path.join(
+        self.params.MODEL_BASEDIR,
+        self.params.CHECKPOINT + '.ckpt')
+      nodes = list(self.output_names) + [input_image]
+      self.graph = util.give_me_frozen_graph(
+                              checkpoint,
+                              nodes=self.output_names,#['MobilenetV2/Predictions/Reshape_1'],
+                              # blacklist=[input_image.name.split(':')[0]],
+                              base_graph=self.graph,
+                              saver=saver)
 
-                
+
+          
+          # saver.restore(sess,  checkpoint)
+
+          # # import ipdb;ipdb.set_trace()
+          
+          # import imageio
+          # im = imageio.imread('https://upload.wikimedia.org/wikipedia/commons/f/fe/Giant_Panda_in_Beijing_Zoo_1.JPG')
+          # import cv2
+          # imr = cv2.resize(im, (96, 96))
+          # print imr
+          # y = self.endpoints['Predictions'].eval(feed_dict={input_image:[imr]})
+          # print y, y.max()
+          
+          
+          
+          # saver.restore(sess, checkpoint)
+
+        #   root = tf.train.Checkpoint()
+        #   root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
+        #   util.log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
+          
+          # import pdb;pdb.set_trace()
+
+        # import pprint
+        # util.log.info("Loaded graph:")
+        # util.log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(self.graph)))
+
+          
+
       return self.graph
     
     @property
     def output_names(self):
-      return ('MobilenetV2/Logits/output:0',)#self.endpoints.keys()
+      return (
+        'MobilenetV2/Logits/output:0',
+        'MobilenetV2/embedding:0',
+        'MobilenetV2/expanded_conv_16/output:0',
+        'MobilenetV2/Predictions/Reshape_1:0',
+      )
 
-  def __init__(self):
-    self.sess = None
-    self.predictor = None
+  # def __init__(self):
+  #   self.sess = None
+  #   self.predictor = None
   
   @classmethod
   def load_or_train(cls, params=None):
@@ -107,6 +154,8 @@ class Mobilenet(nnmodel.INNModel):
   def get_inference_graph(self):
     return self.igraph
 
+# class MobilenetActivationsTable(ActivationsTable):
+#   TABLE_NAME = ''
 
 #     tf.reset_default_graph()
 #     images = tf.placeholder(

@@ -140,6 +140,7 @@ def quiet():
     sys.stdout = old_stdout
     sys.stderr = old_stderr
 
+
 @contextmanager
 def imageio_ignore_warnings():
   # Imageio needs some fix: https://github.com/imageio/imageio/issues/376
@@ -153,6 +154,7 @@ def imageio_ignore_warnings():
   finally:
     imageio.core.util._precision_warn = old
 
+
 def run_cmd(cmd, collect=False):
   log = create_log()
   
@@ -165,6 +167,7 @@ def run_cmd(cmd, collect=False):
     out = None
   log.info("... done with %s " % cmd)
   return out
+
 
 def get_non_loopback_iface():
   # https://stackoverflow.com/a/1267524
@@ -433,3 +436,66 @@ def tf_data_session(dataset, sess=None, config=None):
       while not sess.should_stop():
         yield sess.run(next_element)
     yield sess, iter_dataset
+
+def give_me_frozen_graph(
+          checkpoint,
+          nodes=None,
+          blacklist=None,
+          base_graph=None,
+          sess=None,
+          saver=None):
+  """
+  Tensorflow has several ways to load checkpoints / graph artifacts.
+  It's impossible to know if some API is stable or if tomorrow somebody
+  will invent something new and break everything (e.g. TF Eager).  
+  Sam Abrahams wrote a book on Tensorflow
+  ( https://www.amazon.com/TensorFlow-Machine-Intelligence-hands--introduction-ebook/dp/B01IZ43JV4/ )
+  and one time couldn't tell me definitively which API to use.  What's more is
+  that freeze_graph.py is an optional script instead of a module in
+  Tensorflow.  Chaos!!
+
+  So, based upon spark-dl's `strip_and_freeze_until()`
+  ( https://github.com/databricks/spark-deep-learning/blob/4daa1179f498df4627310afea291133539ce7001/python/sparkdl/graph/utils.py#L199 ),
+  here's a utility for getting a frozen, serializable, pyspark-friendly
+  graph from a checkpoint artifact metagraph thingy.
+  """
+
+  def op_name(v):
+    name = v
+    if hasattr(v, 'name'):
+      name = v.name
+    if ':' not in name:
+      return name
+    toks = name.split(':')
+    assert len(toks) <= 2, (toks, v, name)
+    return toks[0]
+
+  import tensorflow as tf
+  graph = base_graph or tf.Graph()
+  if nodes:
+    ops = [graph.get_operation_by_name(op_name(n)) for n in nodes]
+  else:
+    ops = graph.get_operations()
+  # if blacklist:
+  #   for n in blacklist:
+  #     ops.remove(graph.get_operation_by_name(op_name(n)))
+
+  with graph.as_default():
+    with (sess or tf_create_session()) as sess:
+
+      saver = saver or tf.Saver()
+      log.info("Reading from checkpoint %s ..." % checkpoint)
+      saver.restore(sess, checkpoint)
+      log.info("... done.")
+
+      gdef_frozen = tf.graph_util.convert_variables_to_constants(
+        sess,
+        graph.as_graph_def(add_shapes=True)
+        [op.name for op in ops])
+        # variable_names_blacklist=blacklist)
+  
+  g = tf.Graph()
+  with g.as_default():
+    tf.import_graph_def(gdef_frozen, name='')
+  return g
+  

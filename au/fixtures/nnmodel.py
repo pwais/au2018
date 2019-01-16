@@ -156,6 +156,10 @@ class FillActivationsTFDataset(FillActivationsBase):
     graph = tf.Graph()
     total_rows_bytes = [0, 0]
     processed_rows = Queue.Queue()
+
+    import imageio
+    im = imageio.imread('https://upload.wikimedia.org/wikipedia/commons/f/fe/Giant_Panda_in_Beijing_Zoo_1.JPG')
+
     def iter_normalized_np_images():
       normalize = self.tigraph_factory.make_normalize_ftor()
       for row in iter_imagerows:
@@ -164,7 +168,7 @@ class FillActivationsTFDataset(FillActivationsBase):
         processed_rows.put(row, block=True)
         total_rows_bytes[0] += 1
         total_rows_bytes[1] += row.attrs['normalized'].nbytes
-        
+
         yield row.attrs['normalized']
     
     # We'll use the tf.Dataset.from_generator facility to read ImageRows
