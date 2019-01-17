@@ -3,6 +3,7 @@ from au.fixtures import dataset
 from au.fixtures import nnmodel
 from au.fixtures.tf import mobilenet
 from au.test import testconf
+from au.test import testutils
 
 import os
 
@@ -11,7 +12,7 @@ import pytest
 
 # MODEL_BASEDIR = '/tmp/au_test/test_mobilenet'
 
-TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mobilenet') 
+TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mobilenet')
 
 @pytest.mark.slow
 def test_mobilenet_inference_graph(monkeypatch):
@@ -53,25 +54,31 @@ def test_mobilenet_inference_graph(monkeypatch):
 
 
 
+    # For debugging, this is a Panda that the model predicts corectly per
+    # https://colab.research.google.com/github/tensorflow/models/blob/master/research/slim/nets/mobilenet/mobilenet_example.ipynb
+    # import imageio
+    # im = imageio.imread('https://upload.wikimedia.org/wikipedia/commons/f/fe/Giant_Panda_in_Beijing_Zoo_1.JPG')
+    # import cv2
+    # imr = cv2.resize(im, (96, 96))
+    # print imr
+    # y = self.endpoints['Predictions'].eval(feed_dict={input_image:[imr]})
+    # print y, y.max()
 
-
-      #   print tensor_to_value[tensor_name], max(tensor_to_value[tensor_name])
-      # # if tensor_name == 'MobilenetV2/embedding:0':
-      # #   print tensor_to_value[tensor_name]#, max(tensor_to_value[tensor_name])
-      
-      # 
-      # 
-
-
-#   util.mkdir(MODEL_BASEDIR)
-#   util.rm_rf(MODEL_BASEDIR)
+@pytest.mark.slow
+def test_mobilenet_activation_tables(monkeypatch):
+  testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+  dataset.ImageTable.setup()
   
-#   params = mobilenet.Mobilenet.Small()
-#   params.MODEL_BASEDIR = MODEL_BASEDIR
-#   model = mobilenet.Mobilenet.load_or_train(params)
-  
-#   model2 = mobilenet.Mobilenet.load_or_train(params)
-  
-#   print list(model.iter_activations())
-# #   label_map = imagenet.create_readable_names_for_imagenet_labels()  
-# #   print("Top 1 prediction: ", x.argmax(),label_map[x.argmax()], x.max())
+  with testutils.LocalSpark.sess() as spark:
+    for params_cls in mobilenet.Mobilenet.ALL_PARAMS_CLSS:
+      params = params_cls()
+
+      class TestTable(nnmodel.ActivationsTable):
+        TABLE_NAME = 'Mobilenet_test_' + params_cls.__name__
+        NNMODEL_CLS = mobilenet.Mobilenet
+        MODEL_PARAMS = params
+        IMAGE_TABLE_CLS = dataset.ImageTable
+    
+      TestTable.setup(spark=spark)
+
+

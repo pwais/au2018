@@ -326,24 +326,28 @@ class FillNormalized(object):
                             log_on_del=True)
   
   def __call__(self, row):
-    with self.thruput.observe(n=1, num_bytes=len(row.image_bytes)):
-      normalized = row.as_numpy()
-      
-      if self.target_hw is not None:
-        h, w = self.target_hw
-        normalized = cv2.resize(normalized, (w, h)) # Sneaky, opencv!
-      
-      if self.target_nchan is not None:
-        normalized = _make_have_target_chan(normalized, self.target_nchan)
-      
-      if self.norm_func is not None:
-        normalized = self.norm_func(normalized)
-      
-      row.attrs = row.attrs or {}
-      
-      row.attrs.update({
-        'normalized': normalized,
-      })
+    self.thruput.start_block()
+    
+    normalized = row.as_numpy()
+    bytes_in = normalized.nbytes
+
+    if self.target_hw is not None:
+      h, w = self.target_hw
+      normalized = cv2.resize(normalized, (w, h)) # Sneaky, opencv!
+    
+    if self.target_nchan is not None:
+      normalized = _make_have_target_chan(normalized, self.target_nchan)
+    
+    if self.norm_func is not None:
+      normalized = self.norm_func(normalized)
+    
+    row.attrs = row.attrs or {}
+    
+    row.attrs.update({
+      'normalized': normalized,
+    })
+    
+    self.thruput.stop_block(n=1, num_bytes=bytes_in)
     return row
 
 ##

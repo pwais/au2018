@@ -1,3 +1,4 @@
+from au.test import testconf
 from au.test import testutils
 from au.fixtures.datasets import bdd100k
 
@@ -5,6 +6,10 @@ import unittest
 import os
 
 import pytest
+
+
+
+## Fixtures
 
 class TestFixtures(bdd100k.Fixtures):
   ROOT = bdd100k.Fixtures.TEST_FIXTURE_DIR
@@ -25,6 +30,30 @@ class TestInfoDataset(bdd100k.InfoDataset):
 class TestVideoDataset(bdd100k.VideoDataset):
   FIXTURES = TestFixtures
   INFO = TestInfoDataset
+
+class TestVideoFrameTable(bdd100k.VideoFrameTable):
+  VIDEO = TestVideoDataset
+
+  TARGET_VID = '0000f77c-6257be58.mov'
+  N_FRAMES = 200
+
+  @classmethod
+  def as_imagerow_rdd(cls, spark):
+    # While the test set is a small number of vidoes, those videos still
+    # contain ~12k frames.  So here we restrict to a small subset.
+
+    row_rdd = super(TestVideoFrameTable, cls).as_imagerow_rdd(spark)
+
+    # class IsTargetVideo(object):
+    #   def __call__(self, row):
+    #     return '0000f77c-6257be58.mov' in row.uri
+
+    video_rows = row_rdd.filter(lambda row: cls.TARGET_VID in row.uri) #IsTargetVideo())
+    rows = video_rows.take(cls.N_FRAMES)
+    test_rdd = spark.sparkContext.parallelize(rows, numSlices=10)
+    return test_rdd
+
+## Tests
 
 class BDD100kTests(unittest.TestCase):
   """Exercise utiltiies in the bdd100k module.  Allow soft failures
@@ -124,3 +153,62 @@ class BDD100kTests(unittest.TestCase):
     #   spark.sql('select * from moof').show()
     #   # spark.sql('select * from moof').write.parquet('/tmp/yyyyyy', partitionBy=['split', 'video'], compression='gzip')
     
+  @pytest.mark.slow
+  def test_video_activations(self):
+    if not self.have_fixtures:
+      return
+
+    # Use /tmp for test fixtures
+    from _pytest.monkeypatch import MonkeyPatch
+    monkeypatch = MonkeyPatch()
+    TEST_TEMPDIR = os.path.join(
+                        testconf.TEST_TEMPDIR_ROOT,
+                        'test_bdd100k_mobilenet')
+    testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+    
+
+    from au.fixtures import nnmodel
+    from au.fixtures.tf import mobilenet
+
+    with testutils.LocalSpark.sess() as spark:
+      TestVideoFrameTable.setup(spark=spark)
+
+      class TestTable(nnmodel.ActivationsTable):
+        TABLE_NAME = 'bdd100k_mobilenet_test'
+        NNMODEL_CLS = mobilenet.Mobilenet
+        MODEL_PARAMS = mobilenet.Mobilenet.Small()
+        IMAGE_TABLE_CLS = TestVideoFrameTable
+      
+      TestTable.MODEL_PARAMS.INFERENCE_BATCH_SIZE = 10
+      TestTable.setup(spark=spark)
+
+
+"""
+ 'MobilenetV2/Logits/output:0',
+        'MobilenetV2/embedding:0',
+         'MobilenetV2/expanded_conv_16/output:0',
+        'MobilenetV2/Predictions/Reshape_1:0',
+root@au1:/opt/au# du -sh /tmp/au_test/test_bdd100k_mobilenet/tables/bdd100k_mobilenet_test/dataset\=bdd100k.video/split\=train/*
+128M    /tmp/au_test/test_bdd100k_mobilenet/tables/bdd100k_mobilenet_test/dataset=bdd100k.video/split=train/part-00002-f4bf9899-3b64-4f2c-814d-335e24f1487c.c000.gz.parquet
+34M     /tmp/au_test/test_bdd100k_mobilenet/tables/bdd100k_mobilenet_test/dataset=bdd100k.video/split=train/part-00003-f4bf9899-3b64-4f2c-814d-335e24f1487c.c000.gz.parquet
+62M     /tmp/au_test/test_bdd100k_mobilenet/tables/bdd100k_mobilenet_test/dataset=bdd100k.video/split=train/part-00006-f4bf9899-3b64-4f2c-814d-335e24f1487c.c000.gz.parquet
+95M     /tmp/au_test/test_bdd100k_mobilenet/tables/bdd100k_mobilenet_test/dataset=bdd100k.video/split=train/part-00007-f4bf9899-3b64-4f2c-814d-335e24f1487c.c000.gz.parquet
+root@au1:/opt/au# du -sh /tmp/au_test/test_bdd100k_mobilenet/
+models/ tables/ 
+root@au1:/opt/au# du -sh /tmp/au_test/test_                                                                            
+test_bdd100k_mobilenet/ test_mobilenet/         
+root@au1:/opt/au# du -sh cache/test/         
+bdd100k/     yaymap.html  
+root@au1:/opt/au# du -sh cache/test/bdd100k/
+debug/  index/  videos/ zips/   
+root@au1:/opt/au# du -sh cache/test/bdd100k/videos/*
+136M    cache/test/bdd100k/videos/100k
+root@au1:/opt/au# du -sh cache/test/bdd100k/videos/100k/train/*
+20M     cache/test/bdd100k/videos/100k/train/0000f77c-6257be58.mov
+20M     cache/test/bdd100k/videos/100k/train/0000f77c-62c2a288.mov
+20M     cache/test/bdd100k/videos/100k/train/0000f77c-cb820c98.mov
+20M     cache/test/bdd100k/videos/100k/train/0001542f-5ce3cf52.mov
+19M     cache/test/bdd100k/videos/100k/train/0001542f-7c670be8.mov
+20M     cache/test/bdd100k/videos/100k/train/0001542f-ec815219.mov
+20M     cache/test/bdd100k/videos/100k/train/0004974f-05e1c285.mov
+"""

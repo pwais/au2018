@@ -11,7 +11,7 @@ See [the `cluster` module](cluster/README.md) about setting up a cluster.
 
 
 
-
+https://www.cs.cmu.edu/~tom/10701_sp11/recitations/Recitation_9.pdf
 
 pytest au -s --runslow -k test_mnist_save_png
 

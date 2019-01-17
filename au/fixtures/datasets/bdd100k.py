@@ -816,12 +816,18 @@ class VideoURI(object):
 
     PREFIX = 'bdd100k.video://'
 
+    def __init__(self, **kwargs):
+      self.videoname = kwargs['videoname']
+      self.frame_i = kwargs.get('frame_i', -1)
+      self.frame_t = kwargs.get('frame_t', -1)
+      assert self.frame_i >= 0 or frame_t >= 0
+
     def to_str(self):
-      return PREFIX + ':'.join(
+      return self.PREFIX + '|'.join((
         self.videoname,
-        self.frame_i,
-        self.frame_t
-      )
+        str(self.frame_i),
+        str(self.frame_t),
+      ))
     
     def __str__(self):
       return self.to_str()
@@ -829,11 +835,46 @@ class VideoURI(object):
     @staticmethod
     def from_uri(s):
       toks_s = s[len(VideoURI.PREFIX):]
-      toks = toks_s.split(':')
+      toks = toks_s.split('|')
       assert len(toks) == 3
       vu = VideoURI()
       vu.videoname, vu.frame_i, vu.frame_t = toks
       return vu
+
+class _VideoReaderCache(object):
+  lock = threading.Lock()
+  cache = {}
+  thruput = util.ThruputObserver(name='_VideoReaderCache', log_on_del=True)
+  local = None
+
+  @classmethod
+  def get_frame(cls, name, frame_i, reader_f):
+    # print threading.current_thread(), threading.active_count()
+    # if cls.local is None:
+    #   cls.local = threading.local()
+    #   print 'new local'
+    if name not in cls.cache:
+      with cls.lock:
+        cls.cache[name] = reader_f()
+        print 'new reader', name
+
+    with cls.lock:
+      cls.thruput.start_block()
+      d = cls.cache[name].get_data(frame_i)
+      cls.thruput.stop_block()
+
+      cls.thruput.update_tallies(n=1, num_bytes=d.nbytes)
+      # print str(cls.thruput)
+      return d
+
+# NB: add some docs .. http://apache-spark-user-list.1001560.n3.nabble.com/pyspark-serializer-can-t-handle-functions-td7650.html
+# https://github.com/apache/spark/blob/master/python/pyspark/worker.py#L50
+class _ArrFactory(object):
+  def __init__(self, parent, i):
+    self.parent = parent
+    self.i = i
+  def __call__(self):
+    return self.parent.get_frame(self.i)
 
 class Video(object):
   """Flyweight for a single BDD100k video file"""
@@ -844,9 +885,9 @@ class Video(object):
     self.name = name
     self.path = path
     self._data = data
-    self._local = threading.local()
     self.viddataset = viddataset or VideoDataset
     self._videometa = None
+    # self._local = threading.local()
 
   @staticmethod
   def from_videometa(meta, viddataset=None):
@@ -865,7 +906,35 @@ class Video(object):
 
   def get_frame(self, i):
     """Get the image frame at offset `i`"""
-    return self.reader.get_data(i)
+    # if self._local is None:
+    #   self._local = threading.local()
+    #   print 'new local'
+    # if not hasattr(self._local, 'reader'):
+    #   self._local.reader = self.get_reader()
+    #   print 'new reader', threading.current_thread(), threading.active_count()
+    # return self._local.reader.get_data(i)
+    return _VideoReaderCache.get_frame(self.name, i, lambda: self.get_reader())
+
+    # # Use a thread-local, cached imageio reader for the video.  Designed
+    # # so that a Spark worker thread will open a video only once
+    # # (e.g. once per Spark partition)
+    # if self._local is None:
+    #   local = threading.local()
+    #   local.reader = self.get_reader()
+    #   self._local = local
+    #   print 'new local', self._local, dir(self._local)
+    #   print threading.current_thread()
+    # else:
+    #   print 're-use local', self._local, dir(self._local)
+    #   print threading.current_thread()
+    
+    # if not hasattr(self._local, 'reader'):
+    #   self._local.reader = self.get_reader()
+    #   print 'new reader'
+    # else:
+    #   print 're-use reader'
+
+    # return self._local.reader.get_data(i)
   
   def _fill_video_meta(self, videometa):
     imageio_meta = {}
@@ -873,12 +942,11 @@ class Video(object):
       videometa.path = self.path or self.viddataset.get_path_for_video(self.name)
 
     if self.data:
-      imageio_meta = self.reader.get_meta_data()    
+      imageio_meta = self.get_reader().get_meta_data()    
       imageio_meta.update({
         'width': imageio_meta['size'][0],
         'height': imageio_meta['size'][1],
       })
-      self._local.reader = None
 
     videometa.update(**imageio_meta)
   
@@ -906,25 +974,14 @@ class Video(object):
     # # self._local.reader = None
     # return VideoMeta(**video_meta)
 
-  @property
-  def reader(self):
-    """Return a thread-local imageio reader for the video.  Designed so 
-    that Spark worker threads get individual readers to the same
-    process video memory buffer."""
-    if not hasattr(self._local, 'reader') or self._local.reader is None:
-      format = self.name.split('.')[-1]
-
-      # bdd100k videos have some odd dimension issue, so we silence:
-      # "the frame size for reading (1280, 720) is different from the source frame size (720, 1280)"
-      # import logging
-      # logging.getLogger().setLevel(logging.FATAL)
-      # with util.imageio_ignore_warnings():
-      import imageio
-      import imageio.plugins.ffmpeg
-      imageio.plugins.ffmpeg.logging.warning = lambda m: True
-      self._local.reader = imageio.get_reader(self.data, format=format)
-      # logging.getLogger().setLevel(logging.INFO)
-    return self._local.reader
+  def get_reader(self):
+    format = self.name.split('.')[-1]
+    # bdd100k videos have some odd dimension issue, so we silence:
+    # "the frame size for reading (1280, 720) is different from the source frame size (720, 1280)"
+    import imageio
+    import imageio.plugins.ffmpeg
+    imageio.plugins.ffmpeg.logging.warning = lambda m: True
+    return imageio.get_reader(self.data, format=format)
 
   @property
   def data(self):
@@ -953,22 +1010,26 @@ class Video(object):
     start_time = max(0, video_meta.startTime)
 
     frame_timestamp_ms = int(start_time + (i * frame_period_ms))
-    vu = VideoURI(self.name, i, frame_timestamp_ms)
-    yield dataset.ImageRow(
+    vu = VideoURI(
+            videoname=self.name,
+            frame_i=i,
+            frame_t=frame_timestamp_ms)
+    
+    return dataset.ImageRow(
       dataset='bdd100k.video',
       split=video_meta.split,
       uri=str(vu),
-      _arr_factory=lambda: self.get_frame(i),
+      _arr_factory=_ArrFactory(self, i),#lambda: self.get_frame(i),
       attrs={
         'nanostamp': int(frame_timestamp_ms * 1e6),
         'bdd100k': {
           'video': self,
-          'uri': VideoURI(self.name, i, frame_timestamp_ms),
+          'uri': vu,
           'video_meta': video_meta,
           'frame_timestamp_ms': frame_timestamp_ms,
         }
       }
-  )
+    )
 
   def iter_imagerows(self):
     video_meta = self.video_meta
@@ -1136,6 +1197,15 @@ class VideoDebugWebpage(object):
       plt.close(fig) # Important! else python process will OOM
     return paths
 
+
+# NB: add some docs .. http://apache-spark-user-list.1001560.n3.nabble.com/pyspark-serializer-can-t-handle-functions-td7650.html
+# https://github.com/apache/spark/blob/master/python/pyspark/worker.py#L50
+# class _LoadFromMeta(object):
+#   def __init__(self, viddataset):
+#     self.viddataset = viddataset
+#   def __call__(self, meta):
+#     return Video.from_videometa(meta, viddataset=self.viddataset)
+
 _setup_thruput = None
 class VideoDataset(object):
   FIXTURES = Fixtures
@@ -1274,9 +1344,10 @@ class VideoDataset(object):
   @classmethod
   def load_video_rdd(cls, spark):
     df = cls.load_videometa_df(spark)
-    video_rdd = df.rdd.map(
-      lambda meta: \
-        Video.from_videometa(meta, viddataset=cls))
+
+    
+
+    video_rdd = df.rdd.map(lambda meta: Video.from_videometa(meta))# _LoadFromMeta(cls))
     return video_rdd
 
   @classmethod
@@ -1359,7 +1430,10 @@ class VideoDataset(object):
       #       for _ in range(10):
       #         print "wat", e
       # video_rdd.foreachPartition(save)
-
+# class _ToRows(object):
+#       def __call__(self, vid):
+#         for r in vid.iter_imagerows():
+#           yield r
     
 class VideoFrameTable(dataset.ImageTable):
 
@@ -1394,17 +1468,26 @@ class VideoFrameTable(dataset.ImageTable):
   def iter_all_rows(cls):
     vids = sorted(cls.VIDEO.videonames())
     for vid in vids:
-      video = cls.VIDEO.get_video(vu.videoname)
+      video = cls.VIDEO.get_video(vid)
       for row in video.iter_imagerows():
         yield row
-  
+
   @classmethod
   def as_imagerow_rdd(cls, spark):
     video_rdd = cls.VIDEO.load_video_rdd(spark)
 
-    # User will probably map over images, so re-parition by video in
+    # The user will probably map over images, so pre-reparition by video in
     # order to help avoid OOM (too many videos in memory)
     video_rdd = video_rdd.repartition(video_rdd.count())
+    
 
-    row_rdd = video_rdd.flatMap(lambda v: v.iter_imagerows())
+    def to_rows(vid):
+      for r in vid.iter_imagerows():
+        yield r
+      # for chunk in util.ichunked(vid.iter_imagerows(), 50):
+      #   for r in chunk:
+      #     x = r.as_numpy()
+      #   for r in chunk:
+      #     yield r
+    row_rdd = video_rdd.flatMap(to_rows)#_ToRows())
     return row_rdd

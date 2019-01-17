@@ -154,22 +154,18 @@ class FillActivationsTFDataset(FillActivationsBase):
       "Filling activations for %s ..." % self.tigraph_factory.model_name)
     
     graph = tf.Graph()
-    total_rows_bytes = [0, 0]
     processed_rows = Queue.Queue()
-
-    import imageio
-    im = imageio.imread('https://upload.wikimedia.org/wikipedia/commons/f/fe/Giant_Panda_in_Beijing_Zoo_1.JPG')
 
     def iter_normalized_np_images():
       normalize = self.tigraph_factory.make_normalize_ftor()
       for row in iter_imagerows:
-        row = normalize(row)
-        
+        row = normalize(row)        
         processed_rows.put(row, block=True)
-        total_rows_bytes[0] += 1
-        total_rows_bytes[1] += row.attrs['normalized'].nbytes
-
-        yield row.attrs['normalized']
+        arr = row.attrs['normalized']
+        yield arr
+        
+        self.tf_thruput.update_tallies(num_bytes=arr.nbytes)
+        self.overall_thruput.update_tallies(num_bytes=arr.nbytes)
     
     # We'll use the tf.Dataset.from_generator facility to read ImageRows
     # (which have the image bytes in Python memory) into the graph.  The use
@@ -180,7 +176,9 @@ class FillActivationsTFDataset(FillActivationsBase):
     # additional subclass).  Using tf.Dataset here should at least allow
     # Tensorflow to push reading into a background thread so that Spark and/or
     # Python execution won't block inference if inference dominates. To achieve
-    # multi-threaded I/O, we lean on Spark. 
+    # multi-threaded I/O, we lean on Spark, which will typically run one
+    # instance of this functor per core (thus providing some
+    # cache-friendliness).
     with graph.as_default():
       # Hack: let us handle batch size here ...
       input_shape = list(self.tigraph_factory.input_tensor_shape)
@@ -192,26 +190,35 @@ class FillActivationsTFDataset(FillActivationsBase):
       d = d.batch(self.tigraph_factory.batch_size)
       input_image = d.make_one_shot_iterator().get_next()
     
+    print 'create inf graph'
     final_graph = self.tigraph_factory.create_inference_graph(
                                               input_image,
                                               graph)
+    print 'done create inf graph'
 
     with final_graph.as_default():
-      config = util.tf_create_session_config()
-      
+      g = self.pool.get_free_gpu()
+      print 'ggggggggggggggggggggggg', g
+      if g:
+        restrict_gpus = [g.gpu_num]
+        self.tf_thruput.name = self.tf_thruput.name + '.gpu=' + str(g.gpu_num)
+      else:
+        restrict_gpus = []
+        self.tf_thruput.name = self.tf_thruput.name + '.cpu'
+      config = util.tf_create_session_config(restrict_gpus=restrict_gpus)
+
       # TODO: can we just use vanilla Session? & handle a tf.Dataset Stop?
       with tf.train.MonitoredTrainingSession(config=config) as sess:
-#         log.info("Session devices: %s" % ','.join(
-#                                   (d.name for d in sess.list_devices())))
+        # log.info("Session devices: %s" % ','.join(
+        #                           (d.name for d in sess.list_devices())))
         
         tensors_to_eval = self.tigraph_factory.output_names
         assert tensors_to_eval
         
-#         import pprint
-#         log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(final_graph)))
         while not sess.should_stop():
-          with self.tf_thruput.observe():
-            result = sess.run(tensors_to_eval)
+          self.tf_thruput.start_block()
+          result = sess.run(tensors_to_eval)
+          self.tf_thruput.stop_block()
               # NB: above will processes `batch_size` rows in one run()
           
           assert len(result) >= 1
@@ -236,9 +243,9 @@ class FillActivationsTFDataset(FillActivationsBase):
             row.attrs['activations'].append(act)
             yield row
     
-    total_rows, total_bytes = total_rows_bytes
-    self.tf_thruput.update_tallies(n=total_rows, num_bytes=total_bytes)
-    self.overall_thruput.stop_block(n=total_rows, num_bytes=total_bytes)
+            self.tf_thruput.update_tallies(n=1)
+            self.overall_thruput.update_tallies(n=1)
+    self.overall_thruput.stop_block()
 
 
 
@@ -261,13 +268,13 @@ class ActivationsTable(object):
     log.info("Building table %s ..." % cls.TABLE_NAME)
 
     spark = spark or util.Spark.getOrCreate()
-
-    img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
     
+    img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
+
     model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
     filler = FillActivationsTFDataset(model=model)
+    filler.pool = util.GPUPool()
 
-    # img_rdd = img_rdd.repartition(parallel)
     activated = img_rdd.mapPartitions(filler)
 
     def to_activation_rows(imagerows):

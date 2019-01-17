@@ -53,6 +53,8 @@ class Mobilenet(nnmodel.INNModel):
     DEPTH_MULTIPLIER = 1.4
     FINE = False
   
+  ALL_PARAMS_CLSS = (Small, Medium, Large, XLarge)
+
   class GraphFactory(nnmodel.TFInferenceGraphFactory):
     def create_inference_graph(self, input_image, base_graph):
       util.download(self.params.CHECKPOINT_TARBALL_URI, self.params.MODEL_BASEDIR)
@@ -94,40 +96,9 @@ class Mobilenet(nnmodel.INNModel):
       nodes = list(self.output_names) + [input_image]
       self.graph = util.give_me_frozen_graph(
                               checkpoint,
-                              nodes=self.output_names,#['MobilenetV2/Predictions/Reshape_1'],
-                              # blacklist=[input_image.name.split(':')[0]],
+                              nodes=self.output_names,
                               base_graph=self.graph,
                               saver=saver)
-
-
-          
-          # saver.restore(sess,  checkpoint)
-
-          # # import ipdb;ipdb.set_trace()
-          
-          # import imageio
-          # im = imageio.imread('https://upload.wikimedia.org/wikipedia/commons/f/fe/Giant_Panda_in_Beijing_Zoo_1.JPG')
-          # import cv2
-          # imr = cv2.resize(im, (96, 96))
-          # print imr
-          # y = self.endpoints['Predictions'].eval(feed_dict={input_image:[imr]})
-          # print y, y.max()
-          
-          
-          
-          # saver.restore(sess, checkpoint)
-
-        #   root = tf.train.Checkpoint()
-        #   root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
-        #   util.log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
-          
-          # import pdb;pdb.set_trace()
-
-        # import pprint
-        # util.log.info("Loaded graph:")
-        # util.log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(self.graph)))
-
-          
 
       return self.graph
     

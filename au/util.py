@@ -51,6 +51,8 @@ class ThruputObserver(object):
     self.only_stats = only_stats or []
     self._start = None
   
+  # NB: contextmanagers appear to be expensive?!  Use {start,stop}_block
+  # for <10ms ops
   @contextmanager
   def observe(self, n=0, num_bytes=0):
     start = time.time()
@@ -395,13 +397,145 @@ def download(uri, dest):
 
 ### Tensorflow
 
-def tf_create_session_config(extra_opts=None):
+class GPUInfo(object):
+  __slots__ = (
+    'index',
+    'name',
+    'mem_util_frac',
+    'mem_free',
+    'mem_used',
+    'mem_total'
+  )
+
+  def __repr__(self):
+    data = ', '.join(
+      (k + '=' + str(getattr(self, k)))
+      for k in self.__slots__)
+    return 'GPUInfo(' + data + ')'
+
+  @staticmethod
+  def from_nvidia_smi(row):
+    info = GPUInfo()
+    info.index = int(row['index'])
+    info.name = row['name']
+    
+    info.mem_util_frac = float(row['utilization.memory [%]']) / 100.
+    def to_num_bytes(s):
+      return int(s) * int(1e6)
+    info.mem_free = to_num_bytes(row['memory.free [MiB]'])
+    info.mem_used = to_num_bytes(row['memory.used [MiB]'])
+    info.mem_total = to_num_bytes(row['memory.total [MiB]'])
+
+    return info
+
+  @staticmethod
+  def get_infos():
+    # Much safer than pycuda and Tensorflow, which can both segfault if the
+    # nvidia driver is absent :P
+    try:
+      cmd = "nvidia-smi --query-gpu=index,name,utilization.memory,name,memory.total,memory.free,memory.used --format=csv,nounits"
+      out = run_cmd(cmd, collect=True)
+    except Exception as e:
+      log.info("No GPUs found")
+      return []
+
+    # NB: nvidia doesn't actually return *valid* csv.
+    # Why would they? They make hardware, not software!
+    out = out.replace(', ', ',')
+
+    import csv
+    rows = list(csv.DictReader(out.split('\n')))
+    infos = [GPUInfo.from_nvidia_smi(row) for row in rows]
+    return infos
+
+  # lines = out.split('\n')
+  # assert lines[0] == 'index, name', "Nvidia why? %s" % (out,)
+  # rows = [
+  #   {'index': int(toks[0].strip()), 'name': toks[1].strip()}
+  #   for toks in (line.split(',') for line in lines[1:] if line)
+  # ]
+
+def get_gpus():
+  
+  
+  
+
+  log.info("Found GPUs: %s" % (rows,))
+
+  gpus = []
+  if 'CUDA_VISIBLE_DEVICES' in os.environ:
+    allowed_gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+    log.info("... restricting to %s ..." % (allowed_gpus,))
+    for row in rows:
+      if row['index'] in allowed_gpus:
+        gpus.append(row['index'])
+  else:
+    gpus = [row['index'] for row in rows]
+  log.info("Using GPUs: %s" % (gpus,))
+  return gpus
+
+
+import fasteners
+import json
+class GPUPool(object):
+  
+  def __getstate__(self):
+    return {'path': self.lock.path}
+  
+  def __setstate__(self, d):
+    self.lock = fasteners.InterProcessLock(d['path'])
+
+  class _GPUHandle(object):
+    def __init__(self, parent, gpu_num):
+      self.parent = parent
+      self.gpu_num = gpu_num
+    def __del__(self):
+      self.parent._release(self.gpu_num)
+
+  def __init__(self, path=''):
+    path = path or '/tmp/au.GPUPool.' + str(id(self))
+    self.lock = fasteners.InterProcessLock(path)
+    with self.lock:
+      gpus = get_gpus()
+      self._set_gpus(gpus)
+
+  def _set_gpus(self, lst):
+    with open(self.lock.path, 'w') as f:
+      json.dump(lst, f)
+
+  def _get_gpus(self):
+    with open(self.lock.path, 'r') as f:
+      return json.load(f)
+
+  def get_free_gpu(self):
+    with self.lock:
+      gpus = self._get_gpus()
+      handle = None
+      if gpus:
+        gpu = gpus.pop(0)
+        handle = GPUPool._GPUHandle(self, gpu)
+      self._set_gpus(gpus)
+      return handle
+
+  def _release(self, gpu_num):
+    with self.lock:
+      gpus = self._get_gpus()
+      gpus.append(gpu_num)
+      self._set_gpus(gpus)
+
+
+def tf_create_session_config(restrict_gpus=None, extra_opts=None):
   extra_opts = extra_opts or {}
   
   import tensorflow as tf
   config = tf.ConfigProto()
-  config.gpu_options.allow_growth = True
-  config.allow_soft_placement = True
+
+  if restrict_gpus is None:
+    config.gpu_options.allow_growth = True
+    config.allow_soft_placement = True
+  else:
+    config.device_count['GPU'] = len(restrict_gpus)
+    config.gpu_options.visible_device_list = ','.join(str(g) for g in restrict_gpus)
   config.log_device_placement = False
   
   # Let the system pick number of threads
@@ -429,7 +563,7 @@ def tf_data_session(dataset, sess=None, config=None):
   
   # Silly way to iterate over a tf.Dataset
   # https://stackoverflow.com/a/47917849
-  config = config or tf_create_session_config()
+  config = config or tf_create_session_config(restrict_gpus=[])
   sess = sess or tf.train.MonitoredTrainingSession(config=config)  
   with sess as sess:
     def iter_dataset():
@@ -447,17 +581,17 @@ def give_me_frozen_graph(
   """
   Tensorflow has several ways to load checkpoints / graph artifacts.
   It's impossible to know if some API is stable or if tomorrow somebody
-  will invent something new and break everything (e.g. TF Eager).  
-  Sam Abrahams wrote a book on Tensorflow
+  will invent something new and break everything becaus PyTorch is shiny
+  (e.g. TF Eager).  Sam Abrahams wrote a book on Tensorflow
   ( https://www.amazon.com/TensorFlow-Machine-Intelligence-hands--introduction-ebook/dp/B01IZ43JV4/ )
   and one time couldn't tell me definitively which API to use.  What's more is
-  that freeze_graph.py is an optional script instead of a module in
+  that freeze_graph.py is an optional script instead of a library module in
   Tensorflow.  Chaos!!
 
   So, based upon spark-dl's `strip_and_freeze_until()`
   ( https://github.com/databricks/spark-deep-learning/blob/4daa1179f498df4627310afea291133539ce7001/python/sparkdl/graph/utils.py#L199 ),
   here's a utility for getting a frozen, serializable, pyspark-friendly
-  graph from a checkpoint artifact metagraph thingy.
+  graph from a checkpoint artifact metagraph thingy I have no idea.
   """
 
   def op_name(v):
@@ -481,8 +615,7 @@ def give_me_frozen_graph(
   #     ops.remove(graph.get_operation_by_name(op_name(n)))
 
   with graph.as_default():
-    with (sess or tf_create_session()) as sess:
-
+    with (sess or tf_create_session(tf_create_session_config(restrict_gpus=[]))) as sess:
       saver = saver or tf.Saver()
       log.info("Reading from checkpoint %s ..." % checkpoint)
       saver.restore(sess, checkpoint)
@@ -490,10 +623,9 @@ def give_me_frozen_graph(
 
       gdef_frozen = tf.graph_util.convert_variables_to_constants(
         sess,
-        graph.as_graph_def(add_shapes=True)
+        graph.as_graph_def(add_shapes=True),
         [op.name for op in ops])
         # variable_names_blacklist=blacklist)
-  
   g = tf.Graph()
   with g.as_default():
     tf.import_graph_def(gdef_frozen, name='')

@@ -71,3 +71,7 @@ def test_ds_store_is_stupid():
   assert util.is_stupid_mac_file('/yay/.DS_Store')
   assert util.is_stupid_mac_file('.DS_Store')
   assert util.is_stupid_mac_file('._.DS_Store')
+
+def test_gpu_pool(monkeypatch):
+  rows = util.GPUInfo.get_infos()
+  print rows
