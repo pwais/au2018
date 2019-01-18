@@ -1,3 +1,4 @@
+fasteners
 gmplot
 imageio
 keras==2.2.2

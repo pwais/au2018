@@ -72,6 +72,67 @@ def test_ds_store_is_stupid():
   assert util.is_stupid_mac_file('.DS_Store')
   assert util.is_stupid_mac_file('._.DS_Store')
 
-def test_gpu_pool(monkeypatch):
+
+
+NVIDIA_SMI_MOCK_OUTPUT = (
+"""index, name, utilization.memory [%], name, memory.total [MiB], memory.free [MiB], memory.used [MiB]
+0, GeForce GTX 1060 with Max-Q Design, 2, GeForce GTX 1060 with Max-Q Design, 6072, 5796, 276
+""")
+
+def test_gpu_get_infos(monkeypatch):
+  # Test Smoke
   rows = util.GPUInfo.get_infos()
-  print rows
+  
+  # Test parsing a fixture
+  def mock_run_cmd(*args, **kwargs):
+    return NVIDIA_SMI_MOCK_OUTPUT
+  monkeypatch.setattr(util, 'run_cmd', mock_run_cmd)
+  rows = util.GPUInfo.get_infos()
+  
+  expected = util.GPUInfo()
+  expected.index = 0
+  expected.name = 'GeForce GTX 1060 with Max-Q Design'
+  expected.mem_util_frac = 0.02
+  expected.mem_free = 5796000000
+  expected.mem_used = 276000000
+  expected.mem_total = 6072000000
+  assert rows == [expected]
+
+def test_gpu_pool_no_gpus(monkeypatch):
+  environ = dict(os.environ)
+  environ['CUDA_VISIBLE_DEVICES'] = ''
+  monkeypatch.setattr(os, 'environ', environ)
+
+  pool = util.GPUPool()
+
+  # We should never get any handles
+  for _ in range(10):
+    h = pool.get_free_gpu()
+    assert h is None
+
+def test_gpu_pool_one_gpu(monkeypatch):
+  # Pretend we have one GPU
+  def mock_run_cmd(*args, **kwargs):
+    return NVIDIA_SMI_MOCK_OUTPUT
+  monkeypatch.setattr(util, 'run_cmd', mock_run_cmd)
+
+  pool = util.GPUPool()
+  
+  # We can get one GPU
+  h = pool.get_free_gpu()
+  assert h is not None
+  assert h.info.index == 0
+
+  # Subsequent fetches will fail
+  for _ in range(10):
+    h2 = pool.get_free_gpu()
+    assert h2 is None
+  
+  # Free the GPU
+  del h
+
+  # Now we can get it again
+  h3 = pool.get_free_gpu()
+  assert h3 is not None
+  assert h3.info.index == 0
+

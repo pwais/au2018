@@ -200,8 +200,8 @@ class FillActivationsTFDataset(FillActivationsBase):
       g = self.pool.get_free_gpu()
       print 'ggggggggggggggggggggggg', g
       if g:
-        restrict_gpus = [g.gpu_num]
-        self.tf_thruput.name = self.tf_thruput.name + '.gpu=' + str(g.gpu_num)
+        restrict_gpus = [g.info.index]
+        self.tf_thruput.name = self.tf_thruput.name + '.gpu=' + str(g.info.index)
       else:
         restrict_gpus = []
         self.tf_thruput.name = self.tf_thruput.name + '.cpu'

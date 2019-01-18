@@ -407,11 +407,14 @@ class GPUInfo(object):
     'mem_total'
   )
 
-  def __repr__(self):
+  def __str__(self):
     data = ', '.join(
       (k + '=' + str(getattr(self, k)))
       for k in self.__slots__)
     return 'GPUInfo(' + data + ')'
+
+  def __eq__(self, other):
+    return all(getattr(self, k) == getattr(other, k) for k in self.__slots__)
 
   @staticmethod
   def from_nvidia_smi(row):
@@ -429,7 +432,7 @@ class GPUInfo(object):
     return info
 
   @staticmethod
-  def get_infos():
+  def get_infos(only_visible=True):
     # Much safer than pycuda and Tensorflow, which can both segfault if the
     # nvidia driver is absent :P
     try:
@@ -446,7 +449,23 @@ class GPUInfo(object):
     import csv
     rows = list(csv.DictReader(out.split('\n')))
     infos = [GPUInfo.from_nvidia_smi(row) for row in rows]
+    
+    log.info("Found GPUs: %s" % ([str(info) for info in infos],))
+
+    if only_visible:
+      if 'CUDA_VISIBLE_DEVICES' in os.environ:
+        allowed_gpus = set(
+          int(g) for g in
+          os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+          if g)
+        log.info("... restricting to GPUs %s ..." % (allowed_gpus,))
+        infos = [
+          info for info in infos
+          if info.index in allowed_gpus
+        ]
     return infos
+
+
 
   # lines = out.split('\n')
   # assert lines[0] == 'index, name', "Nvidia why? %s" % (out,)
@@ -455,72 +474,93 @@ class GPUInfo(object):
   #   for toks in (line.split(',') for line in lines[1:] if line)
   # ]
 
-def get_gpus():
+# def get_gpus():
   
-  
-  
+#   log.info("Found GPUs: %s" % (rows,))
 
-  log.info("Found GPUs: %s" % (rows,))
-
-  gpus = []
-  if 'CUDA_VISIBLE_DEVICES' in os.environ:
-    allowed_gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
-    log.info("... restricting to %s ..." % (allowed_gpus,))
-    for row in rows:
-      if row['index'] in allowed_gpus:
-        gpus.append(row['index'])
-  else:
-    gpus = [row['index'] for row in rows]
-  log.info("Using GPUs: %s" % (gpus,))
-  return gpus
+#   gpus = []
+#   if 'CUDA_VISIBLE_DEVICES' in os.environ:
+#     allowed_gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+#     log.info("... restricting to %s ..." % (allowed_gpus,))
+#     for row in rows:
+#       if row['index'] in allowed_gpus:
+#         gpus.append(row['index'])
+#   else:
+#     gpus = [row['index'] for row in rows]
+#   log.info("Using GPUs: %s" % (gpus,))
+#   return gpus
 
 
 import fasteners
-import json
+import pickle
+
 class GPUPool(object):
+  """
+  An arbiter providing system-wide mutually exclusive handles to GPUs.  Mutual
+  exclusion is via file locks and cooperative use; handles emitted from this
+  utility have no impact on the underlying GPU devices.  Useful for restricting
+  individual pyspark worker processes to distinct GPUs.  (Otherwise, a Spark
+  executor can easily cause GPU OOMs when launching multiple worker processes
+  or threads).
   
+  Other context:
+  Tensorflow nortoriously enjoys comandeering all available GPU memory,
+  which can result in OOMs when Sessions try to run concurrently.  Morevoer,
+  nvidia-smi offers a feature to support "exclusive use" mode, but we don't
+  necessarily want to lock out other processes (e.g. the OS) and nvidia
+  software (especially drivers) typically have bugs or fragmentation issues.
+  This utility provides mutual exclusion that is concise and independent of
+  nvidia software as well as any cuda-wrapping framework (e.g. pycuda or 
+  Tensorflow) which can even segfault when devices / drivers are missing.
+  """
+  
+  # Users need only keep a handle in scope to maintain ownership
+  class Handle(object):
+    def __init__(self, parent, info):
+      self._parent = parent
+      self.info = info
+    def __del__(self):
+      self._parent._release(self.info)
+
+  def get_free_gpu(self):
+    """Return a handle to a free GPU or None if none available"""
+    with self.lock:
+      gpus = self._get_gpus()
+      handle = None
+      if gpus:
+        gpu = gpus.pop(0)
+        handle = GPUPool.Handle(self, gpu)
+      self._set_gpus(gpus)
+      return handle
+
+  # Make pickle-able for interop with Spark
   def __getstate__(self):
     return {'path': self.lock.path}
   
   def __setstate__(self, d):
     self.lock = fasteners.InterProcessLock(d['path'])
 
-  class _GPUHandle(object):
-    def __init__(self, parent, gpu_num):
-      self.parent = parent
-      self.gpu_num = gpu_num
-    def __del__(self):
-      self.parent._release(self.gpu_num)
-
   def __init__(self, path=''):
-    path = path or '/tmp/au.GPUPool.' + str(id(self))
+    import tempfile
+    if not path:
+      path = os.path.join(tempfile.gettempdir(), 'au.GPUPool.' + str(id(self)))
     self.lock = fasteners.InterProcessLock(path)
     with self.lock:
-      gpus = get_gpus()
+      gpus = GPUInfo.get_infos()
       self._set_gpus(gpus)
 
   def _set_gpus(self, lst):
     with open(self.lock.path, 'w') as f:
-      json.dump(lst, f)
+      pickle.dump(lst, f, protocol=pickle.HIGHEST_PROTOCOL)
 
   def _get_gpus(self):
     with open(self.lock.path, 'r') as f:
-      return json.load(f)
+      return pickle.load(f)
 
-  def get_free_gpu(self):
+  def _release(self, gpu):
     with self.lock:
       gpus = self._get_gpus()
-      handle = None
-      if gpus:
-        gpu = gpus.pop(0)
-        handle = GPUPool._GPUHandle(self, gpu)
-      self._set_gpus(gpus)
-      return handle
-
-  def _release(self, gpu_num):
-    with self.lock:
-      gpus = self._get_gpus()
-      gpus.append(gpu_num)
+      gpus.append(gpu)
       self._set_gpus(gpus)
 
 
