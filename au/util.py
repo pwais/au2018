@@ -561,6 +561,7 @@ class GPUPool(object):
     with self.lock:
       gpus = self._get_gpus()
       gpus.append(gpu)
+      print 'release', gpu
       self._set_gpus(gpus)
 
 
@@ -604,11 +605,14 @@ def tf_data_session(dataset, sess=None, config=None):
   # Silly way to iterate over a tf.Dataset
   # https://stackoverflow.com/a/47917849
   config = config or tf_create_session_config(restrict_gpus=[])
-  sess = sess or tf.train.MonitoredTrainingSession(config=config)  
+  sess = sess or tf.Session(config=config)#tf.train.MonitoredTrainingSession(config=config)  
   with sess as sess:
     def iter_dataset():
-      while not sess.should_stop():
-        yield sess.run(next_element)
+      while True:
+        try:#while not sess.should_stop():
+          yield sess.run(next_element)
+        except tf.errors.OutOfRangeError:
+          break
     yield sess, iter_dataset
 
 def give_me_frozen_graph(

@@ -1,4 +1,4 @@
-FROM tensorflow/tensorflow:1.11.0-gpu
+FROM tensorflow/tensorflow:1.12.0-gpu
 
 # We don't care for __pycache__ and .pyc files; sometimes VSCode doesn't clean
 # up properly when deleting things and the cache gets stale.

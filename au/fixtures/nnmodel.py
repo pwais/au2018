@@ -208,43 +208,48 @@ class FillActivationsTFDataset(FillActivationsBase):
       config = util.tf_create_session_config(restrict_gpus=restrict_gpus)
 
       # TODO: can we just use vanilla Session? & handle a tf.Dataset Stop?
-      with tf.train.MonitoredTrainingSession(config=config) as sess:
+      with tf.Session(config=config) as sess: #tf.train.MonitoredTrainingSession(config=config) as sess:
         # log.info("Session devices: %s" % ','.join(
         #                           (d.name for d in sess.list_devices())))
         
         tensors_to_eval = self.tigraph_factory.output_names
         assert tensors_to_eval
         
-        while not sess.should_stop():
-          self.tf_thruput.start_block()
-          result = sess.run(tensors_to_eval)
-          self.tf_thruput.stop_block()
-              # NB: above will processes `batch_size` rows in one run()
-          
-          assert len(result) >= 1
-          batch_size = result[0].shape[0]
-          for n in range(batch_size):
-            row = processed_rows.get(block=True)
-              # NB: we expect worker threads to spend most of their time
-              # blocking on the Tensorflow `sess.run()` call above, so
-              # this Queue::get() call should in practice block very rarely.
-              # Confirm using thruput stats (`overall_thruput` vs `tf_thruput`)
-
-            tensor_to_value = dict(
-                        (name, result[i][n,...])
-                        for i, name in enumerate(tensors_to_eval))
-
-            if 'activations' not in row.attrs:
-              row.attrs['activations'] = []  
+        while 1:#not sess.should_stop():
+          try:
+            self.tf_thruput.start_block()
+            result = sess.run(tensors_to_eval)
+            self.tf_thruput.stop_block()
+                # NB: above will processes `batch_size` rows in one run()
             
-            act = Activations(
-                      model_name=self.tigraph_factory.model_name,
-                      tensor_to_value=tensor_to_value)
-            row.attrs['activations'].append(act)
-            yield row
-    
-            self.tf_thruput.update_tallies(n=1)
-            self.overall_thruput.update_tallies(n=1)
+            assert len(result) >= 1
+            batch_size = result[0].shape[0]
+            for n in range(batch_size):
+              row = processed_rows.get(block=True)
+                # NB: we expect worker threads to spend most of their time
+                # blocking on the Tensorflow `sess.run()` call above, so
+                # this Queue::get() call should in practice block very rarely.
+                # Confirm using thruput stats (`overall_thruput` vs `tf_thruput`)
+
+              tensor_to_value = dict(
+                          (name, result[i][n,...])
+                          for i, name in enumerate(tensors_to_eval))
+
+              if 'activations' not in row.attrs:
+                row.attrs['activations'] = []  
+              
+              act = Activations(
+                        model_name=self.tigraph_factory.model_name,
+                        tensor_to_value=tensor_to_value)
+              row.attrs['activations'].append(act)
+              yield row
+      
+              self.tf_thruput.update_tallies(n=1)
+              self.overall_thruput.update_tallies(n=1)
+          except tf.errors.OutOfRangeError:
+            break
+      print "END SESSION"
+    tf.reset_default_graph()
     self.overall_thruput.stop_block()
 
 
@@ -306,7 +311,7 @@ class ActivationsTable(object):
     writer = df.write.parquet(
                 path=cls.table_root(),
                 mode='overwrite',
-                compression='gzip',
+                compression='lz4',
                 partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
     log.info("... wrote to %s ." % cls.table_root())
 

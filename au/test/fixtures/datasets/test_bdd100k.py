@@ -35,7 +35,7 @@ class TestVideoFrameTable(bdd100k.VideoFrameTable):
   VIDEO = TestVideoDataset
 
   TARGET_VID = '0000f77c-6257be58.mov'
-  N_FRAMES = 200
+  N_FRAMES = 10000
 
   @classmethod
   def as_imagerow_rdd(cls, spark):
