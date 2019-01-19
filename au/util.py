@@ -40,6 +40,22 @@ def ichunked(seq, n):
     else:
       break
 
+class Proxy(object):
+  __slots__ = ('instance',)
+  
+  def __init__(self, instance):
+    self.instance = instance
+  
+  def __getattr__(self, name):
+    return getattr(self.instance, name)
+  
+  def _on_delete(self):
+    pass
+
+  def __del__(self):
+    self._on_delete()
+    del self.instance
+
 class ThruputObserver(object):
   
   def __init__(self, name='', log_on_del=False, only_stats=None):
@@ -51,10 +67,14 @@ class ThruputObserver(object):
     self.only_stats = only_stats or []
     self._start = None
   
-  # NB: contextmanagers appear to be expensive?!  Use {start,stop}_block
-  # for <10ms ops
   @contextmanager
   def observe(self, n=0, num_bytes=0):
+    """
+    NB: contextmanagers appear to be expensive due to object creation.
+    Use ThurputObserver#{start,stop}_block() for <10ms ops. 
+    FMI https://stackoverflow.com/questions/34872535/why-contextmanager-is-slow
+    """
+
     start = time.time()
     yield
     end = time.time()
@@ -157,17 +177,23 @@ def imageio_ignore_warnings():
     imageio.core.util._precision_warn = old
 
 
-def run_cmd(cmd, collect=False):
-  log = create_log()
-  
+def run_cmd(cmd, collect=False, nolog=False):
+  dolog = not nolog
   cmd = cmd.replace('\n', '').strip()
-  log.info("Running %s ..." % cmd)
+  
+  if dolog:
+    log = create_log()
+    log.info("Running %s ..." % cmd)
+  
   if collect:
     out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
   else:
     subprocess.check_call(cmd, shell=True)
     out = None
-  log.info("... done with %s " % cmd)
+  
+  if dolog:
+    log.info("... done with %s " % cmd)
+  
   return out
 
 
@@ -464,6 +490,11 @@ class GPUInfo(object):
           if info.index in allowed_gpus
         ]
     return infos
+  
+  @staticmethod
+  def num_total_gpus():
+    return len(GPUInfo.get_infos())
+
 
 
 
@@ -514,13 +545,11 @@ class GPUPool(object):
   Tensorflow) which can even segfault when devices / drivers are missing.
   """
   
-  # Users need only keep a handle in scope to maintain ownership
-  class Handle(object):
-    def __init__(self, parent, info):
-      self._parent = parent
-      self.info = info
-    def __del__(self):
-      self._parent._release(self.info)
+  # Users need only keep a GPUInfo (proxy) in scope to maintain ownership
+  class _InfoProxy(Proxy):
+    __slots__ = ('instance', '_parent')
+    def _on_delete(self):
+      self._parent._release(self.instance)
 
   def get_free_gpu(self):
     """Return a handle to a free GPU or None if none available"""
@@ -529,9 +558,11 @@ class GPUPool(object):
       handle = None
       if gpus:
         gpu = gpus.pop(0)
-        handle = GPUPool.Handle(self, gpu)
+        handle = GPUPool._InfoProxy(gpu)
+        handle._parent = self
       self._set_gpus(gpus)
       return handle
+
 
   # Make pickle-able for interop with Spark
   def __getstate__(self):
@@ -571,12 +602,7 @@ def tf_create_session_config(restrict_gpus=None, extra_opts=None):
   import tensorflow as tf
   config = tf.ConfigProto()
 
-  if restrict_gpus is None:
-    config.gpu_options.allow_growth = True
-    config.allow_soft_placement = True
-  else:
-    config.device_count['GPU'] = len(restrict_gpus)
-    config.gpu_options.visible_device_list = ','.join(str(g) for g in restrict_gpus)
+  tf_session_config_restrict_gpus(config, restrict_gpus=restrict_gpus)
   config.log_device_placement = False
   
   # Let the system pick number of threads
@@ -587,12 +613,39 @@ def tf_create_session_config(restrict_gpus=None, extra_opts=None):
     setattr(config, k, v)
   return config
 
+def tf_session_config_restrict_gpus(config, restrict_gpus=None):
+  if restrict_gpus is None:
+    config.gpu_options.allow_growth = True
+    config.allow_soft_placement = True
+  else:
+    config.device_count['GPU'] = len(restrict_gpus)
+    config.gpu_options.visible_device_list = ','.join(str(g) for g in restrict_gpus)
+
 def tf_create_session(config=None):
   config = config or tf_create_session_config()
 
   import tensorflow as tf
   sess = tf.Session(config=config)
   return sess
+
+def tf_cpu_session(config=None):
+  if not config:
+    config = tf_create_session_config(restrict_gpus=[])
+  else:
+    tf_session_config_restrict_gpus(config, restrict_gpus=[])
+  return tf_create_session(config=config)
+
+@contextmanager
+def loop_until_data_exausted():
+  """Similar to MonitoredTrainingSession.StepContext but allows us to
+    use tf.Datasets / iterators with any Session."""
+  import tensorflow as tf
+  while True:
+    try:
+      yield
+    # NB: tf.Dataset iterators throw these exceptions when all data consumed
+    except (tf.errors.OutOfRangeError, StopIteration):
+      break
 
 @contextmanager
 def tf_data_session(dataset, sess=None, config=None):
@@ -608,12 +661,80 @@ def tf_data_session(dataset, sess=None, config=None):
   sess = sess or tf.Session(config=config)#tf.train.MonitoredTrainingSession(config=config)  
   with sess as sess:
     def iter_dataset():
+      # see MonitoredTrainingSession.StepContext
       while True:
-        try:#while not sess.should_stop():
+        try:
+      # with loop_until_data_exausted():
           yield sess.run(next_element)
-        except tf.errors.OutOfRangeError:
+        except (tf.errors.OutOfRangeError, StopIteration):
           break
     yield sess, iter_dataset
+
+
+class TFSessionPool(object):
+  """
+  TODO docs
+  https://github.com/tensorflow/tensorflow/issues/15880
+  https://github.com/tensorflow/tensorflow/issues/20387
+  https://github.com/tensorflow/tensorflow/blob/a14adaa2329fb46cb472b949ee52546c2516a21e/tensorflow/core/common_runtime/gpu/gpu_device.cc#L1095
+  https://github.com/tensorflow/tensorflow/issues/15880#issuecomment-378336673
+
+  """
+  _gpu_pool = GPUPool()
+  _lock = threading.Lock()
+  
+  class ManagedSession(Proxy):
+    __slots__ = ('sess', 'gpus')
+    def __init__(self, sess=None, gpus=None):
+      self.sess = sess
+      self.gpus = gpus or []
+  
+  class _SessHandle(Proxy):
+    __slots__ = ('instance', '_parent')
+    def _on_delete(self):
+      self._parent._reclaim(self.instance)
+
+  _sessions = []
+  ALL_GPUS = -1
+
+  @classmethod
+  def get_best_session(cls, num_gpus=0, config=None):
+    if num_gpus == cls.ALL_GPUS:
+      num_gpus = GPUInfo.num_total_gpus()
+    
+    with cls._lock:
+      # Try to find a good session
+      for msess in cls._sessions:
+        if len(sess.gpus) == num_gpus:
+          cls._sessions.remove(msess)
+          h = cls._SessHandle(msess)
+          h._parent = cls
+          return h
+      
+      # Can't find one! Create it.
+      gpus = [cls._gpu_pool.get_free_gpu() for _ in range(num_gpus)]
+      if gpus and not all(g is not None for g in gpus):
+        raise ValueError("Can't get %s GPUs" % num_gpus)
+
+      config = config or tf_create_session_config()
+      tf_session_config_restrict_gpus(config, restrict_gpus=(gpus or None))
+      sess = tf_create_session(config=config)
+
+      msess = cls.ManagedSession(sess=sess, gpus=gpus)
+      h = cls._SessHandle(msess)
+      h._parent = cls
+      return h
+
+  @classmethod
+  def _reclaim(cls, managed_sess):
+    with cls._lock:
+      cls._sessions.append(managed_sess)
+
+  @classmethod
+  def register_session(cls, sess):
+    with cls._lock:
+      cls._sessions.append(cls.ManagedSession(sess=sess))
+
 
 def give_me_frozen_graph(
           checkpoint,
@@ -659,8 +780,8 @@ def give_me_frozen_graph(
   #     ops.remove(graph.get_operation_by_name(op_name(n)))
 
   with graph.as_default():
-    with (sess or tf_create_session(tf_create_session_config(restrict_gpus=[]))) as sess:
-      saver = saver or tf.Saver()
+    with (sess or tf_cpu_session()) as sess:
+      saver = saver or tf.train.Saver()
       log.info("Reading from checkpoint %s ..." % checkpoint)
       saver.restore(sess, checkpoint)
       log.info("... done.")

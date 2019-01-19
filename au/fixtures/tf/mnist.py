@@ -218,18 +218,43 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
     
   def create_inference_graph(self, input_image, base_graph):
     log = util.create_log()
-    self.graph = base_graph
+    graph = base_graph
+    with util.tf_cpu_session() as sess:
+      with graph.as_default():
+        # Create ops and load weights
+        tf_model = create_model()
+        root = tf.train.Checkpoint(model=tf_model)
+        root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
+        log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
+              
+        pred = tf_model(tf.cast(input_image, tf.float32), training=False)
+
+        import pprint
+        log.info("Loaded graph:")
+        log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(graph)))
+        assert False
+
+
+        def op_name(v):
+          name = v
+          if hasattr(v, 'name'):
+            name = v.name
+          if ':' not in name:
+            return name
+          toks = name.split(':')
+          assert len(toks) <= 2, (toks, v, name)
+          return toks[0]
+        
+        gdef_frozen = tf.graph_util.convert_variables_to_constants(
+            sess,
+            graph.as_graph_def(add_shapes=True),
+            [op_name(n) for n in self.output_names])
+        assert False, gdef_frozen
+    
+    self.graph = tf.Graph()
     with self.graph.as_default():
-      # Create ops and load weights
-      self.tf_model = create_model()
-      root = tf.train.Checkpoint(model=self.tf_model)
-      root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
-      log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
-            
-      self.pred = self.tf_model(
-                      tf.cast(input_image, tf.float32),
-                      training=False)
-      
+      tf.import_graph_def(gdef_frozen, name='')
+
     import pprint
     log.info("Loaded graph:")
     log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(self.graph)))

@@ -3,6 +3,7 @@ from au.test import testconf
 from au.test import testutils
 
 import os
+import unittest
 
 def test_ichunked():
   
@@ -23,6 +24,37 @@ def test_ichunked():
   assert list_ichunked((1, 2, 3, 4, 5), 6) == [(1, 2, 3, 4, 5)]
   
   assert list_ichunked('abcde', 4) == [('a', 'b', 'c', 'd'), ('e',)]
+
+
+
+class TextProxy(unittest.TestCase):
+  class Foo(object):
+    def __init__(self):
+      self.x = 1
+
+  def test_raw_obj(self):
+    global_foo = TextProxy.Foo()
+    global_foo.x = 0
+
+    foo = TextProxy.Foo()
+    assert foo.x == 1
+    del foo
+    global_foo.x == 0
+
+  def test_wrapped_with_custom_dtor(self):
+    global_foo = TextProxy.Foo()
+    global_foo.x = 0
+
+    class FooProxy(util.Proxy):
+      def _on_delete(self):
+        global_foo.x = 2
+  
+    foo = FooProxy(TextProxy.Foo())
+    assert foo.x == 1
+    del foo
+    global_foo.x == 2
+
+
 
 def test_thruput_observer():
   t1 = util.ThruputObserver()
@@ -121,7 +153,7 @@ def test_gpu_pool_one_gpu(monkeypatch):
   # We can get one GPU
   h = pool.get_free_gpu()
   assert h is not None
-  assert h.info.index == 0
+  assert h.index == 0
 
   # Subsequent fetches will fail
   for _ in range(10):
@@ -134,5 +166,5 @@ def test_gpu_pool_one_gpu(monkeypatch):
   # Now we can get it again
   h3 = pool.get_free_gpu()
   assert h3 is not None
-  assert h3.info.index == 0
+  assert h3.index == 0
 
