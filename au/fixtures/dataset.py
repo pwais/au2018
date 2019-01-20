@@ -16,6 +16,14 @@ from au import util
 class ImageRow(object):
   """For expected usage, see `test_imagerow_demo`"""
   
+
+  # NB: While pyspark uses cloudpickle for *user code*, it uses normal
+  # pickle for *data*, so the contents of ImageRow instances must be
+  # pickle-able.  I.e. attributes cannot be free functions, since only
+  # cloudpickle can serialize functions.  FMI:
+  # http://apache-spark-user-list.1001560.n3.nabble.com/pyspark-serializer-can-t-handle-functions-td7650.html
+  # https://github.com/apache/spark/blob/master/python/pyspark/worker.py#L50
+
   __slots__ = (
     'dataset',
     'split',
@@ -24,7 +32,7 @@ class ImageRow(object):
     '_image_bytes',  # NB: see property image_bytes
     '_cached_image_arr', # TODO: use __ for privates .. idk 
     '_cached_image_fobj',
-    '_arr_factory',
+    '_arr_factory', # NB: must be a callable object; see above
     
     'label',
     'attrs',

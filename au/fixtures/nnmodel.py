@@ -208,16 +208,18 @@ class FillActivationsTFDataset(FillActivationsBase):
       # config = util.tf_create_session_config(restrict_gpus=restrict_gpus)
 
       # TODO: can we just use vanilla Session? & handle a tf.Dataset Stop?
-      msess = util.TFSessionPool.get_best_session()
-      suffix = '.gpu' if msess.gpus else '.cpu'
-      self.tf_thruput.name = self.tf_thruput.name + suffix
-      with msess.sess as sess: #tf.train.MonitoredTrainingSession(config=config) as sess:
-        # log.info("Session devices: %s" % ','.join(
-        #                           (d.name for d in sess.list_devices())))
-        
+      with util.tf_cpu_session() as sess:
+
+      # msess = util.TFSessionPool.get_best_session()
+      # suffix = '.gpu' if msess.gpus else '.cpu'
+      # self.tf_thruput.name = self.tf_thruput.name + suffix
+      # with msess.sess.as_default():
+        # with msess.sess as sess: #tf.train.MonitoredTrainingSession(config=config) as sess:
+          # log.info("Session devices: %s" % ','.join(
+          #                           (d.name for d in sess.list_devices())))
+          
         tensors_to_eval = self.tigraph_factory.output_names
         assert tensors_to_eval
-        
         # see MonitoredTrainingSession.StepContext
         while True:
           try:
@@ -308,7 +310,7 @@ class ActivationsTable(object):
             )
     
     activation_row_rdd = activated.mapPartitions(to_activation_rows)
-    
+
     df = spark.createDataFrame(activation_row_rdd)
     df.show()
     writer = df.write.parquet(

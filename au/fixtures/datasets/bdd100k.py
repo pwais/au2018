@@ -841,40 +841,128 @@ class VideoURI(object):
       vu.videoname, vu.frame_i, vu.frame_t = toks
       return vu
 
-class _VideoReaderCache(object):
-  lock = threading.Lock()
-  cache = {}
-  thruput = util.ThruputObserver(name='_VideoReaderCache', log_on_del=True)
-  local = None
+# class _VideoReaderCache(object):
+#   lock = threading.Lock()
+#   cache = {}
+#   thruput = util.ThruputObserver(name='VideoReaderCache', log_on_del=True)
+#   local = None
 
-  @classmethod
-  def get_frame(cls, name, frame_i, reader_f):
-    # print threading.current_thread(), threading.active_count()
-    # if cls.local is None:
-    #   cls.local = threading.local()
-    #   print 'new local'
-    if name not in cls.cache:
-      with cls.lock:
-        cls.cache[name] = reader_f()
-        print 'new reader', name
+#   @classmethod
+#   def get_frame(cls, name, frame_i, reader_f):
+#     # print threading.current_thread(), threading.active_count()
+#     # if cls.local is None:
+#     #   cls.local = threading.local()
+#     #   print 'new local'
+#     if name not in cls.cache:
+#       with cls.lock:
+#         cls.cache[name] = reader_f()
+#         print 'new reader', name
 
-    with cls.lock:
-      cls.thruput.start_block()
-      d = cls.cache[name].get_data(frame_i)
-      cls.thruput.stop_block()
+#     with cls.lock:
+#       cls.thruput.start_block()
+#       d = cls.cache[name].get_data(frame_i)
+#       cls.thruput.stop_block()
 
-      cls.thruput.update_tallies(n=1, num_bytes=d.nbytes)
-      # print str(cls.thruput)
-      return d
+#       cls.thruput.update_tallies(n=1, num_bytes=d.nbytes)
+#       if cls.thruput.n % 100 == 0:
+#         print str(cls.thruput)
+#       return d
 
-# NB: add some docs .. http://apache-spark-user-list.1001560.n3.nabble.com/pyspark-serializer-can-t-handle-functions-td7650.html
-# https://github.com/apache/spark/blob/master/python/pyspark/worker.py#L50
-class _ArrFactory(object):
-  def __init__(self, parent, i):
-    self.parent = parent
-    self.i = i
+class FrameProxy(object):
+  # NB: must be public to be pickle-able; FMI see note in ImageRow
+  __slots__ = ('name', 'data', 'frame_i')
+  def __init__(self, name=None, data=None, frame_i=0):
+    self.name = name
+    self.data = data
+    self.frame_i = frame_i
+  
   def __call__(self):
-    return self.parent.get_frame(self.i)
+    reader = _VideoReaderCache.get_reader(self.name, self.data)
+    return reader.get_frame(self.frame_i)
+
+import klepto
+class _VideoReaderCache(object):
+  _reader_cache_lock = threading.Lock()
+
+  class ExclusiveReader(object):
+    __slots__ = ('reader', 'lock', 'name', 'thruput')
+
+    # Make compatible with lru cache
+    def __hash__(self):
+      return self.name
+    def __eq__(self, other):
+      return hasattr(other, 'name') and self.name == other.name
+
+    def __init__(self, name, data_proxy):
+      vformat = name.split('.')[-1]
+      # bdd100k videos have some odd dimension issue, so we silence:
+      # "the frame size for reading (1280, 720) is different from the source frame size (720, 1280)"
+      import imageio
+      import imageio.plugins.ffmpeg
+      imageio.plugins.ffmpeg.logging.warning = lambda m: True
+      self.reader = imageio.get_reader(data_proxy(), format=vformat)
+      
+      self.name = name
+      self.lock = threading.Lock()
+      self.thruput = util.ThruputObserver(
+                        name='ExclusiveReader.' + self.name,
+                        log_on_del=True)
+
+    def get_frame(self, i):
+      with self.lock:
+        self.thruput.start_block()
+        d = self.reader.get_data(i)
+        self.thruput.stop_block(n=1, num_bytes=d.nbytes)
+
+        if self.thruput.n % 100 == 0:
+          print str(self.thruput)
+
+        return d
+    
+    def get_meta_data(self):
+      with self.lock:
+        return self.reader.get_meta_data()
+
+  @staticmethod
+  @klepto.lru_cache(maxsize=50)
+  def _get_reader(name, data):
+    print 'uncached', name
+    return _VideoReaderCache.ExclusiveReader(name, data)
+  
+  @classmethod
+  def get_reader(cls, name, data):
+    with cls._reader_cache_lock:
+      return _VideoReaderCache._get_reader(name, data)
+
+class _BytesProxy(object):
+  __slots__ = ('fw', 'path')
+
+  # Required for klepto.lru_cache above
+  def __hash__(self):
+    return hash((getattr(self.fw, 'name', None), self.path))
+  def __eq__(self, other):
+    return hash(self) == hash(other)
+
+  def __init__(self, fw=None, path=None):
+    self.fw = fw
+    self.path = path
+  
+  def __call__(self):
+    if self.fw:
+      assert isinstance(self.fw, util.ArchiveFileFlyweight)
+      return self.fw.data
+    elif self.path:
+      # Read the whole movie file
+      return open(self.path).read()
+    else:
+      raise ValueError()
+
+# class _ArrFactory(object):
+#   def __init__(self, parent, i):
+#     self.parent = parent
+#     self.i = i
+#   def __call__(self):
+#     return self.parent.get_frame(self.i)
 
 class Video(object):
   """Flyweight for a single BDD100k video file"""
@@ -887,7 +975,7 @@ class Video(object):
     self._data = data
     self.viddataset = viddataset or VideoDataset
     self._videometa = None
-    # self._local = threading.local()
+    self._local = threading.local()
 
   @staticmethod
   def from_videometa(meta, viddataset=None):
@@ -904,16 +992,26 @@ class Video(object):
   def videoname(path):
     return os.path.split(path)[-1] if os.path.sep in path else path
 
-  def get_frame(self, i):
-    """Get the image frame at offset `i`"""
-    # if self._local is None:
-    #   self._local = threading.local()
-    #   print 'new local'
-    # if not hasattr(self._local, 'reader'):
-    #   self._local.reader = self.get_reader()
-    #   print 'new reader', threading.current_thread(), threading.active_count()
-    # return self._local.reader.get_data(i)
-    return _VideoReaderCache.get_frame(self.name, i, lambda: self.get_reader())
+  def get_frame_proxy(self, i):
+    """Return a thread-safe proxy / factory function for getting frame `i`
+    or None if this Video has no data"""
+    if self.data:
+      return FrameProxy(name=self.name, data=self.data, frame_i=i)
+    else:
+      return None
+
+  # def get_frame(self, i):
+  #   """Get the image frame at offset `i`"""
+  #   # if self._local is None:
+  #   #   self._local = threading.local()
+  #   #   print 'new local'
+  #   if not hasattr(self._local, 'reader'):
+  #     self._local.reader = 'yay'#self.get_reader()
+  #     print 'new reader', self.name, threading.current_thread(), threading.active_count()
+  #   else:
+  #     print 're-use reader', self.name
+  #   # return self._local.reader.get_data(i)
+  #   return _VideoReaderCache.get_frame(self.name, i, lambda: self.get_reader())
 
     # # Use a thread-local, cached imageio reader for the video.  Designed
     # # so that a Spark worker thread will open a video only once
@@ -942,11 +1040,16 @@ class Video(object):
       videometa.path = self.path or self.viddataset.get_path_for_video(self.name)
 
     if self.data:
-      imageio_meta = self.get_reader().get_meta_data()    
+      imageio_meta = \
+        _VideoReaderCache.get_reader(self.name, self.data).get_meta_data()
       imageio_meta.update({
         'width': imageio_meta['size'][0],
         'height': imageio_meta['size'][1],
       })
+
+      # imageio / ffmpeg seems to over-report the number of frames :P
+      if imageio_meta['nframes'] >= 3:
+        imageio_meta['nframes'] = imageio_meta['nframes'] - 2
 
     videometa.update(**imageio_meta)
   
@@ -974,28 +1077,32 @@ class Video(object):
     # # self._local.reader = None
     # return VideoMeta(**video_meta)
 
-  def get_reader(self):
-    format = self.name.split('.')[-1]
-    # bdd100k videos have some odd dimension issue, so we silence:
-    # "the frame size for reading (1280, 720) is different from the source frame size (720, 1280)"
-    import imageio
-    import imageio.plugins.ffmpeg
-    imageio.plugins.ffmpeg.logging.warning = lambda m: True
-    return imageio.get_reader(self.data, format=format)
+  # def get_reader(self):
+  #   format = self.name.split('.')[-1]
+  #   # bdd100k videos have some odd dimension issue, so we silence:
+  #   # "the frame size for reading (1280, 720) is different from the source frame size (720, 1280)"
+  #   import imageio
+  #   import imageio.plugins.ffmpeg
+  #   imageio.plugins.ffmpeg.logging.warning = lambda m: True
+  #   return imageio.get_reader(self.data, format=format)
 
   @property
   def data(self):
-    """Return raw video bytes"""
-    if isinstance(self._data, util.ArchiveFileFlyweight):
-      return self._data.data
-    elif self.path != '':
-      # Read the whole movie file
-      return open(self.path).read()
+    """Return a proxy to raw video bytes"""
+    if self._data or self.path:
+      return _BytesProxy(fw=self._data, path=self.path)
     else:
       return None
-      # raise ValueError(
-      #   "No idea what to do with %s %s %s" % (
-      #     self._data, self.path, self.name))
+    # if isinstance(self._data, util.ArchiveFileFlyweight):
+    #   return self._data.data
+    # elif self.path != '':
+    #   # Read the whole movie file
+    #   return open(self.path).read()
+    # else:
+    #   return None
+    #   # raise ValueError(
+    #   #   "No idea what to do with %s %s %s" % (
+    #   #     self._data, self.path, self.name))
 
   @property
   def timeseries(self):
@@ -1015,11 +1122,13 @@ class Video(object):
             frame_i=i,
             frame_t=frame_timestamp_ms)
     
+    
+
     return dataset.ImageRow(
       dataset='bdd100k.video',
       split=video_meta.split,
       uri=str(vu),
-      _arr_factory=_ArrFactory(self, i),#lambda: self.get_frame(i),
+      _arr_factory=self.get_frame_proxy(i),#arr_factory,#_ArrFactory(self, i),#lambda: self.get_frame(i),
       attrs={
         'nanostamp': int(frame_timestamp_ms * 1e6),
         'bdd100k': {
@@ -1399,7 +1508,7 @@ class VideoDataset(object):
       
       util.log.info("Writing meta index to %s ..." % video_index_dir)
       df = spark.createDataFrame(row_rdd)
-      df.write.parquet(video_index_dir, mode='overwrite', compression='gzip')
+      df.write.parquet(video_index_dir, mode='overwrite', compression='lz4')
       util.log.info("... wrote video meta index to %s ." % video_index_dir)
 
       t_end = _setup_thruput.value

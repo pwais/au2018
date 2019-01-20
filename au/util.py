@@ -657,8 +657,8 @@ def tf_data_session(dataset, sess=None, config=None):
   
   # Silly way to iterate over a tf.Dataset
   # https://stackoverflow.com/a/47917849
-  config = config or tf_create_session_config(restrict_gpus=[])
-  sess = sess or tf.Session(config=config)#tf.train.MonitoredTrainingSession(config=config)  
+  # config = config or tf_create_session_config(restrict_gpus=[])
+  sess = sess or tf_cpu_session()#tf.Session(config=config)#tf.train.MonitoredTrainingSession(config=config)  
   with sess as sess:
     def iter_dataset():
       # see MonitoredTrainingSession.StepContext
@@ -670,70 +670,75 @@ def tf_data_session(dataset, sess=None, config=None):
           break
     yield sess, iter_dataset
 
+# @contextmanager
+# def keras_use_session(sess):
+#   import tensorflo as tf
+#   old_sess = tf.keras.backend.get_se
+#   tf.keras.backend.set_session(sess)
 
-class TFSessionPool(object):
-  """
-  TODO docs
-  https://github.com/tensorflow/tensorflow/issues/15880
-  https://github.com/tensorflow/tensorflow/issues/20387
-  https://github.com/tensorflow/tensorflow/blob/a14adaa2329fb46cb472b949ee52546c2516a21e/tensorflow/core/common_runtime/gpu/gpu_device.cc#L1095
-  https://github.com/tensorflow/tensorflow/issues/15880#issuecomment-378336673
+# class TFSessionPool(object):
+#   """
+#   TODO docs
+#   https://github.com/tensorflow/tensorflow/issues/15880
+#   https://github.com/tensorflow/tensorflow/issues/20387
+#   https://github.com/tensorflow/tensorflow/blob/a14adaa2329fb46cb472b949ee52546c2516a21e/tensorflow/core/common_runtime/gpu/gpu_device.cc#L1095
+#   https://github.com/tensorflow/tensorflow/issues/15880#issuecomment-378336673
 
-  """
-  _gpu_pool = GPUPool()
-  _lock = threading.Lock()
+#   """
+#   _gpu_pool = GPUPool()
+#   _lock = threading.Lock()
   
-  class ManagedSession(Proxy):
-    __slots__ = ('sess', 'gpus')
-    def __init__(self, sess=None, gpus=None):
-      self.sess = sess
-      self.gpus = gpus or []
+#   class ManagedSession(Proxy):
+#     __slots__ = ('sess', 'gpus')
+#     def __init__(self, sess=None, gpus=None):
+#       self.sess = sess
+#       self.gpus = gpus or []
   
-  class _SessHandle(Proxy):
-    __slots__ = ('instance', '_parent')
-    def _on_delete(self):
-      self._parent._reclaim(self.instance)
+#   class _SessHandle(Proxy):
+#     __slots__ = ('instance', '_parent')
+#     def _on_delete(self):
+#       self._parent._reclaim(self.instance)
 
-  _sessions = []
-  ALL_GPUS = -1
+#   _sessions = []
+#   ALL_GPUS = -1
 
-  @classmethod
-  def get_best_session(cls, num_gpus=0, config=None):
-    if num_gpus == cls.ALL_GPUS:
-      num_gpus = GPUInfo.num_total_gpus()
+#   @classmethod
+#   def get_best_session(cls, num_gpus=0, config=None):
+#     if num_gpus == cls.ALL_GPUS:
+#       num_gpus = GPUInfo.num_total_gpus()
     
-    with cls._lock:
-      # Try to find a good session
-      for msess in cls._sessions:
-        if len(sess.gpus) == num_gpus:
-          cls._sessions.remove(msess)
-          h = cls._SessHandle(msess)
-          h._parent = cls
-          return h
+#     with cls._lock:
+#       # Try to find a good session
+#       for msess in cls._sessions:
+#         if len(msess.gpus) == num_gpus:
+#           cls._sessions.remove(msess)
+#           h = cls._SessHandle(msess)
+#           h._parent = cls
+#           return h
       
-      # Can't find one! Create it.
-      gpus = [cls._gpu_pool.get_free_gpu() for _ in range(num_gpus)]
-      if gpus and not all(g is not None for g in gpus):
-        raise ValueError("Can't get %s GPUs" % num_gpus)
+#       # Can't find one! Create it.
+#       gpus = [cls._gpu_pool.get_free_gpu() for _ in range(num_gpus)]
+#       if gpus and not all(g is not None for g in gpus):
+#         raise ValueError("Can't get %s GPUs" % num_gpus)
 
-      config = config or tf_create_session_config()
-      tf_session_config_restrict_gpus(config, restrict_gpus=(gpus or None))
-      sess = tf_create_session(config=config)
+#       config = config or tf_create_session_config()
+#       tf_session_config_restrict_gpus(config, restrict_gpus=(gpus or None))
+#       sess = tf_create_session(config=config)
 
-      msess = cls.ManagedSession(sess=sess, gpus=gpus)
-      h = cls._SessHandle(msess)
-      h._parent = cls
-      return h
+#       msess = cls.ManagedSession(sess=sess, gpus=gpus)
+#       h = cls._SessHandle(msess)
+#       h._parent = cls
+#       return h
 
-  @classmethod
-  def _reclaim(cls, managed_sess):
-    with cls._lock:
-      cls._sessions.append(managed_sess)
+#   @classmethod
+#   def _reclaim(cls, managed_sess):
+#     with cls._lock:
+#       cls._sessions.append(managed_sess)
 
-  @classmethod
-  def register_session(cls, sess):
-    with cls._lock:
-      cls._sessions.append(cls.ManagedSession(sess=sess))
+#   @classmethod
+#   def register_session(cls, sess):
+#     with cls._lock:
+#       cls._sessions.append(cls.ManagedSession(sess=sess))
 
 
 def give_me_frozen_graph(
