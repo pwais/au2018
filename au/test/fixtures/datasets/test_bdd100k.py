@@ -1,6 +1,6 @@
+from au.fixtures.datasets import bdd100k
 from au.test import testconf
 from au.test import testutils
-from au.fixtures.datasets import bdd100k
 
 import unittest
 import os

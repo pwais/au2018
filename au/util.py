@@ -314,6 +314,20 @@ class ArchiveFileFlyweight(object):
   @property
   def data(self):
     return self.archive.get(self.name)
+  
+  @staticmethod
+  def copy_n(src, dest, n):
+    log.info("Copying %s of %s -> %s ..." % (n, src, dest))
+
+    mkdir(os.path.split(dest)[0])
+
+    import zipfile
+    with zipfile.ZipFile(src) as zin:
+      with zipfile.ZipFile(dest, mode='w') as zout:
+        for name in itertools.islice(sorted(zin.namelist()), n):
+          zout.writestr(name, zin.read(name))
+    
+    log.info("... done")
 
 
 
@@ -354,7 +368,7 @@ def is_stupid_mac_file(path):
   fname = os.path.basename(path)
   return fname.startswith('._') or fname in ('.DS_Store',)
 
-def download(uri, dest):
+def download(uri, dest, try_expand=True):
   """Fetch `uri`, which is a file or archive, and put in `dest`, which
   is either a destination file path or destination directory."""
   
@@ -410,13 +424,16 @@ def download(uri, dest):
   
   tempdest.flush()
   
-  try:
-    # Is it an archive? expand!
-    mkdir(dest)
-    patoolib.extract_archive(tempdest.name, outdir=dest)
-    log.info("Extracted archive.")
-  except Exception:
-    # Just move the file
+  mkdir(dest)
+  if try_expand:
+    try:
+      # Is it an archive? expand!
+      patoolib.extract_archive(tempdest.name, outdir=dest)
+      log.info("Extracted archive.")
+    except Exception:
+      # Just move the file
+      shutil.move(tempdest.name, dest)
+  else:
     shutil.move(tempdest.name, dest)
   log.info("Downloaded to %s" % dest)
 

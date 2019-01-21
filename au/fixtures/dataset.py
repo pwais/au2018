@@ -228,7 +228,7 @@ class ImageRow(object):
         dest_dir,
         rows_per_file=-1,
         partition_cols=DEFAULT_PQ_PARTITION_COLS,
-        compression='snappy'):
+        compression='lz4'):
     
     import pandas as pd
     import pyarrow as pa

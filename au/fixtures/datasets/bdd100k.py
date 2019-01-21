@@ -69,22 +69,22 @@ class Fixtures(object):
       cls.telemetry_zip(),
     )
 
-    def _copy_n(src, dest, n):
-      log.info("Copying %s of %s -> %s ..." % (n, src, dest))
+    # def _copy_n(src, dest, n):
+    #   log.info("Copying %s of %s -> %s ..." % (n, src, dest))
 
-      util.mkdir(os.path.split(dest)[0])
+    #   util.mkdir(os.path.split(dest)[0])
 
-      import zipfile
-      with zipfile.ZipFile(src) as zin:
-        with zipfile.ZipFile(dest, mode='w') as zout:
-          for name in itertools.islice(sorted(zin.namelist()), n):
-            zout.writestr(name, zin.read(name))
+    #   import zipfile
+    #   with zipfile.ZipFile(src) as zin:
+    #     with zipfile.ZipFile(dest, mode='w') as zout:
+    #       for name in itertools.islice(sorted(zin.namelist()), n):
+    #         zout.writestr(name, zin.read(name))
       
-      log.info("... done")
+    #   log.info("... done")
 
     util.cleandir(cls.TEST_FIXTURE_DIR)
     for path in ZIPS_TO_COPY:
-      _copy_n(path, cls.test_fixture(path), 10)
+      util.copy_n_from_zip(path, cls.test_fixture(path), 10)
     
     # Videos: just copy the ones that have INFO data
     log.info("Copying videos ...")

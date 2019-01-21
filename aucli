@@ -193,6 +193,10 @@ def setup_tf_models():
 def setup_bdd100k():
   assert os.path.exists('/opt/au/cache/data/bdd100k/zips/bdd100k_info.zip'), 'TODO: provide formal copy / audit mechanism'
 
+def setup_mscoco():
+  # also need from pycocotools import mask !!!
+  assert os.path.exists('/opt/au/cache/data/mscoco/zips/annotations_trainval2017.zip'), 'TODO: provide formal copy / audit mechanism'
+
 ## Services
 
 def test_spark_local():  
