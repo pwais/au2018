@@ -303,6 +303,11 @@ class MSCOCOImageTableBase(dataset.ImageTable):
   IMAGES = True
   BBOXEN = True
 
+  # Pre-shuffle the data for SGD runs on the data in order (cache friendly)
+  RANDOM_SHUFFLE = True
+  RANDOM_SHUFFLE_SEED = 7
+  APPROX_MB_PER_SHARD = 128.
+
   @classmethod
   def setup(cls, spark=None):
     spark = spark or Spark.getOrCreate()
@@ -349,10 +354,42 @@ class MSCOCOImageTableBase(dataset.ImageTable):
     
     zip_path = cls.FIXTURES.zip_path(cls.IMAGES_ZIP_FNAME)
     archive_rdd = Spark.archive_rdd(zip_path)
+    if cls.RANDOM_SHUFFLE:
+      seed = cls.RANDOM_SHUFFLE_SEED
+      archive_rdd, _ = archive_rdd.randomSplit(1.0, seed=seed)
+
     row_rdd = archive_rdd.mapPartitions(iter_image_rows)
 
-      
+    def estimate_bytes_per_row(rows):
+      COMPRESSION_FACTOR = 0.8
 
+      import pickle
+      n_rows = len(rows)
+      n_bytes = sum(len(pickle.dumps(r)) for r in rows)
+      return COMPRESSION_FACTOR * n_bytes / n_rows
     
-      
-      
+    est_total_rows = archive_rdd.count()
+    est_bytes_per_row = estimate_bytes_per_row(row_rdd.take(10))
+    est_total_bytes = est_total_rows * est_bytes_per_row
+    n_shards = max(10, int(est_total_bytes / (cls.APPROX_MB_PER_SHARD * 1e9)))
+
+    util.log.info(
+      "Writing %s total rows in %s shards; estimated %s MB / row" % (
+        est_total_rows, n_shards, est_bytes_per_row * 1e-9))
+
+    # Partition the `archive_rdd` because partitioning `row_rdd` will cause
+    # Spark to compute all ImageRows, which, as written above, are not
+    # flyweights.
+    row_rdd = zip_path.repartition(n_shards).mapPartitions(iter_image_rows)    
+    dataset.ImageRow.write_to_parquet(row_rdd, cls.table_root())
+
+class MSCOCOImageTableTrain(MSCOCOImageTableBase):
+  TABLE_NAME = 'mscoco'
+  ANNOS_CLS = TrainAnnos
+  IMAGES_ZIP_FNAME = Fixtures.TRAIN_ZIP
+
+class MSCOCOImageTableVal(MSCOCOImageTableBase):
+  TABLE_NAME = 'mscoco'
+  ANNOS_CLS = ValAnnos
+  IMAGES_ZIP_FNAME = Fixtures.VAL_ZIP
+

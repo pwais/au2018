@@ -228,50 +228,79 @@ class ImageRow(object):
         dest_dir,
         rows_per_file=-1,
         partition_cols=DEFAULT_PQ_PARTITION_COLS,
-        compression='lz4'):
+        compression='lz4',
+        spark=None):
     
-    import pandas as pd
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+    is_rdd, is_pyspark_df = False, False
+    try:
+      import pyspark.rdd
+      import pyspark.sql
+      is_rdd = isinstance(rows, pyspark.rdd.RDD)
+      is_pyspark_df = isinstance(rows, pyspark.sql.dataframe.DataFrame)
+    except ImportError:
+      pass
     
-    log = create_log()
-    
-    if rows_per_file >= 1:
-      irows = util.ichunked(rows, rows_per_file)
-    else:
-      rows = list(rows)
-      if not rows:
-        return
-      irows = iter([rows])
-    
-    log.info("Writing parquet to %s ..." % dest_dir)
-    for row_chunk in irows:
-      r = row_chunk[0]
-      
-      # Pandas wants dicts
-      if isinstance(r, ImageRow):
-        row_chunk = [r.to_dict() for r in row_chunk]
+    if is_rdd:
+      assert spark is not None
+      from pyspark.sql import Row
 
-      df = pd.DataFrame(row_chunk)
-      table = pa.Table.from_pandas(df)
-      util.mkdir(dest_dir)
-      pq.write_to_dataset(
-            table,
-            dest_dir,
-            partition_cols=partition_cols,
-            preserve_index=False, # Don't care about pandas index
-            compression=compression,
-            flavor='spark')
-      log.info("... wrote %s rows ..." % len(row_chunk))
-    log.info("... done writing to %s ." % dest_dir)
+      # RDD[ImageRow] -> DataFrame[ImageRow]
+      rows = spark.createDataFrame(rows.map(lambda r: Row(**r.to_dict())))
+      is_pyspark_df = True
+    
+    if is_pyspark_df:
+      util.log.info("Writing parquet to %s ..." % dest_dir)
+      df.write.parquet(
+        dest_dir,
+        mode='append',
+        partition_cols=partition_cols,
+        compression=compression)
+      util.log.info("... done! Wrote to %s ." % dest_dir)
+    
+    else:
+
+      # Use Pyarrow to write Parquet in this process
+
+      import pandas as pd
+      import pyarrow as pa
+      import pyarrow.parquet as pq
+      
+      log = create_log()
+      
+      if rows_per_file >= 1:
+        irows = util.ichunked(rows, rows_per_file)
+      else:
+        rows = list(rows)
+        if not rows:
+          return
+        irows = iter([rows])
+      
+      util.log.info("Writing parquet to %s ..." % dest_dir)
+      for row_chunk in irows:
+        r = row_chunk[0]
+        
+        # Pandas wants dicts
+        if isinstance(r, ImageRow):
+          row_chunk = [r.to_dict() for r in row_chunk]
+
+        df = pd.DataFrame(row_chunk)
+        table = pa.Table.from_pandas(df)
+        util.mkdir(dest_dir)
+        pq.write_to_dataset(
+              table,
+              dest_dir,
+              partition_cols=partition_cols,
+              preserve_index=False, # Don't care about pandas index
+              compression=compression,
+              flavor='spark')
+        util.log.info("... wrote %s rows ..." % len(row_chunk))
+      util.log.info("... done writing to %s ." % dest_dir)
 
   @staticmethod
   def write_to_pngs(rows, dest_root=None):
-    log = create_log()
-    
     dest_root = dest_root or conf.AU_DATA_CACHE
     
-    log.info("Writing PNGs to %s ..." % dest_root)
+    util.log.info("Writing PNGs to %s ..." % dest_root)
     n = 0
     for row in rows:
       dest_dir = os.path.join(
@@ -288,8 +317,8 @@ class ImageRow(object):
       
       n += 1
       if n % 100 == 0:
-        log.info("... write %s PNGs ..." % n)
-    log.info("... wrote %s total PNGs to %s ." % (n, dest_root))  
+        util.log.info("... write %s PNGs ..." % n)
+    util.log.info("... wrote %s total PNGs to %s ." % (n, dest_root))  
 
 
 

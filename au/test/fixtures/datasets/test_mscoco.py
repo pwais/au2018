@@ -11,6 +11,7 @@ class TestFixtures(mscoco.Fixtures):
 
 class TestMSCOCOImageTable(mscoco.MSCOCOImageTable):
   FIXTURES = TestFixtures
+  APPROX_MB_PER_SHARD = 10.
 
 class TestMSCOCOImageTable(unittest.TestCase):
   """Exercise utiltiies in the mscoco module.  Allow soft failures
@@ -34,3 +35,6 @@ class TestMSCOCOImageTable(unittest.TestCase):
     if not self.have_fixtures:
       return
     
+    with testutils.LocalSpark.sess() as spark:
+      TestMSCOCOImageTable.setup(spark=spark)
+
