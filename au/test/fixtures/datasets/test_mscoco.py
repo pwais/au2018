@@ -58,7 +58,7 @@ class TestMSCOCOImageTable(unittest.TestCase):
     with testutils.LocalSpark.sess() as spark:
       TABLES = (
         TestMSCOCOImageTableTrain,
-        TestMSCOCOImageTableVal,
+        # TestMSCOCOImageTableVal,
       )
 
       for table in TABLES:

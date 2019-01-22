@@ -112,6 +112,10 @@ class Fixtures(object):
   def zip_path(cls, fname):
     return os.path.join(cls.zips_dir(), fname)
 
+  @classmethod
+  def index_dir(cls):
+    return os.path.join(cls.ROOT, 'index')
+
   ## Test Data
 
   @classmethod
@@ -153,79 +157,117 @@ class AnnotationsIndexBase(object):
   ANNO_FNAME = ''
 
   _setup_lock = threading.Lock()
-  _image_to_annos = {}
-  _image_id_to_image = {}
+  _image_to_annos = None
+  _image_id_to_image = None
   _category_index = None
 
   @classmethod
+  def _index_file(cls, fname):
+    index_dir = cls.ZIP_FNAME.replace('.', '_')
+    return os.path.join(cls.FIXTURES.index_dir(), index_dir, fname)
+
+  @classmethod
+  def setup(cls):
+    with cls._setup_lock:
+      cls._setup_indices()
+
+  @classmethod
   def _setup_indices(cls):
-    ###
-    ### Based upon _create_tf_record_from_coco_annotations()
-    ###
-    
-    import json
-    import pprint
+    import shelve
 
-    # From tensorflow/models
-    from object_detection.utils import label_map_util
+    if not os.path.exists(cls._index_file('')):
+      
+      ###
+      ### Based upon _create_tf_record_from_coco_annotations()
+      ###
+      
+      import json
+      import pprint
 
-    zip_path = cls.FIXTURES.zip_path(cls.ZIP_FNAME)
-    util.log.info("Building annotations index for %s ..." % zip_path)
+      # From tensorflow/models
+      from object_detection.utils import label_map_util
 
-    fws = util.ArchiveFileFlyweight.fws_from(zip_path)
-    anno_fw = None
-    for fw in fws:
-      if cls.ANNO_FNAME in fw.name:
-        anno_fw = fw
-    assert anno_fw, \
-      "Could not find entry for %s in %s" % (cls.ANNO_FNAME, zip_path)
+      zip_path = cls.FIXTURES.zip_path(cls.ZIP_FNAME)
+      util.log.info("Building annotations index for %s ..." % zip_path)
 
-    anno_data = json.loads(anno_fw.data)
+      fws = util.ArchiveFileFlyweight.fws_from(zip_path)
+      anno_fw = None
+      for fw in fws:
+        if cls.ANNO_FNAME in fw.name:
+          anno_fw = fw
+      assert anno_fw, \
+        "Could not find entry for %s in %s" % (cls.ANNO_FNAME, zip_path)
 
-    images = anno_data['images']
-    cls._category_index = label_map_util.create_category_index(
-                                      anno_data['categories'])
-    
-    util.log.info("Have annotations index for %s images." % len(images))
-    util.log.info("Category index: \n\n%s" % pprint.pformat(cls._category_index))
+      util.log.info("... reading json ...")
+      anno_data = json.loads(anno_fw.data)
+      util.log.info("... json loaded ...")
 
-    image_to_annos = {}
-    if 'annotations' in anno_data:
-      util.log.info("... Building image ID -> Annos ...")
-      for anno in anno_data['annotations']:
-        image_id = anno['image_id']
-        image_to_annos.setdefault(image_id, [])
-        image_to_annos[image_id].append(anno)
+      images = anno_data['images']
+      category_index = label_map_util.create_category_index(
+                                        anno_data['categories'])
+      category_index = dict((str(k), v) for k, v in category_index.iteritems())
+      
+      util.log.info("Have annotations index for %s images." % len(images))
+      util.log.info("Category index: \n\n%s" % pprint.pformat(category_index))
 
-    missing_anno_count = sum(
-      1 for image in images
-      if image['id'] not in image_to_annos)
-    util.log.info("... %s images are missing annos ..." % missing_anno_count)
+      image_to_annos = {}
+      if 'annotations' in anno_data:
+        util.log.info("... Building image ID -> Annos ...")
+        for anno in anno_data['annotations']:
+          image_id = str(anno['image_id'])
+          image_to_annos.setdefault(image_id, [])
+          image_to_annos[image_id].append(anno)
 
-    util.log.info("... finished index for %s ." % zip_path)
-    cls._image_to_annos = image_to_annos
-    cls._image_id_to_image = dict((image['id'], image) for image in images)
+      missing_anno_count = sum(
+        1 for image in images
+        if image['id'] not in image_to_annos)
+      util.log.info("... %s images are missing annos ..." % missing_anno_count)
+
+      util.log.info("... finished index for %s ." % zip_path)
+
+      image_id_to_image = dict((str(image['id']), image) for image in images)
+
+      def dump_to_shelf(name, data):
+        dest = cls._index_file(name)
+        util.log.info("... saving %s to %s ..." % (name, dest))
+
+        import pickle
+        d = shelve.open(dest, protocol=pickle.HIGHEST_PROTOCOL)
+        d.update(data.iteritems())
+        d.close()
+
+      # Keeping the below data in memory will OOM almost any reasonable box,
+      # so we cache the data on disk.
+      util.mkdir(cls._index_file(''))
+      dump_to_shelf('image_id_to_image', image_id_to_image)
+      dump_to_shelf('category_index', category_index)
+      dump_to_shelf('image_to_annos', image_to_annos)
+
+    util.log.info("Using indices in %s" % cls._index_file(''))
+    cls._image_id_to_image = shelve.open(cls._index_file('image_id_to_image'))
+    cls._category_index = shelve.open(cls._index_file('category_index'))
+    cls._image_to_annos = shelve.open(cls._index_file('image_to_annos'))
 
   @classmethod
   def get_annos_for_image(cls, image_id):
     if not cls._image_to_annos:
       with cls._setup_lock:
         cls._setup_indices()
-    return cls._image_to_annos.get(image_id, [])
+    return cls._image_to_annos.get(str(image_id), [])
   
   @classmethod
   def get_image_info(cls, image_id):
     if not cls._image_id_to_image:
       with cls._setup_lock:
         cls._setup_indices()
-    return cls._image_id_to_image.get(image_id)
+    return cls._image_id_to_image.get(str(image_id))
   
   @classmethod
   def get_category_name_for_id(cls, category_id):
     if not cls._category_index:
       with cls._setup_lock:
         cls._setup_indices()
-    row = cls._category_index.get(category_id)
+    row = cls._category_index.get(str(category_id))
     if row:
       return row['name'].encode('utf8')
     else:
@@ -242,13 +284,13 @@ class AnnotationsIndexBase(object):
       return bboxen
     
     for anno_index, anno in enumerate(annos):
-      extra = {
+      kwargs = {
         'im_width': image['width'],
         'im_height': image['height'],
         'category_name': cls.get_category_name_for_id(anno['category_id']),
         'anno_index': anno_index,
       }
-      anno.update(**extra)
+      kwargs.update(anno.iteritems())
       bbox = BBox(**anno)
       bboxen.append(bbox)
     return bboxen
@@ -285,7 +327,7 @@ class AnnotationsIndexBase(object):
         'category_name': cls.get_category_name_for_id(anno['category_id']),
         'anno_index': anno_index,
       }
-      kwargs.update(**anno)
+      kwargs.update(anno.iteritems())
       mask = Mask(**kwargs)
       masks.append(mask)
     return masks
@@ -347,6 +389,8 @@ class MSCOCOImageTableBase(dataset.ImageTable):
   def setup(cls, spark=None):
     spark = spark or Spark.getOrCreate()
 
+    cls.ANNOS_CLS.setup()
+
     split = ''
     if 'train' in cls.IMAGES_ZIP_FNAME:
       split = 'train'
@@ -355,7 +399,7 @@ class MSCOCOImageTableBase(dataset.ImageTable):
     elif 'val' in cls.IMAGES_ZIP_FNAME:
       split = 'val'
 
-    def iter_image_rows(fws):
+    def gen_rows(fws):
       for fw in fws:
         if not ('.jpg' in fw.name or '.png' in fw.name):
           continue
@@ -374,6 +418,8 @@ class MSCOCOImageTableBase(dataset.ImageTable):
             'height': info['height'],
             'mscoco_image_id': info['id'],
           }
+        else:
+          attrs = {}
 
         if cls.BBOXEN:
           attrs['mscoco_bboxen'] = cls.ANNOS_CLS.get_bboxes_for_image(image_id)
@@ -396,7 +442,7 @@ class MSCOCOImageTableBase(dataset.ImageTable):
       rdds = archive_rdd.randomSplit([1.0], seed=seed)
       archive_rdd = rdds[0]
 
-    row_rdd = archive_rdd.mapPartitions(iter_image_rows)
+    row_rdd = archive_rdd.mapPartitions(gen_rows)
 
     def estimate_bytes_per_row(rows):
       COMPRESSION_FACTOR = 0.8
@@ -409,7 +455,7 @@ class MSCOCOImageTableBase(dataset.ImageTable):
     est_total_rows = archive_rdd.count()
     est_bytes_per_row = estimate_bytes_per_row(row_rdd.take(10))
     est_total_bytes = est_total_rows * est_bytes_per_row
-    n_shards = max(2, int(est_total_bytes / (cls.APPROX_MB_PER_SHARD * 1e6)))
+    n_shards = max(10, int(est_total_bytes / (cls.APPROX_MB_PER_SHARD * 1e6)))
 
     util.log.info(
       "Writing %s total rows in %s shards; estimated %s MB / row" % (
@@ -418,7 +464,7 @@ class MSCOCOImageTableBase(dataset.ImageTable):
     # Partition the `archive_rdd` because partitioning `row_rdd` will cause
     # Spark to compute all ImageRows, which, as written above, are not
     # flyweights.
-    row_rdd = archive_rdd.repartition(n_shards).mapPartitions(iter_image_rows)    
+    row_rdd = archive_rdd.repartition(n_shards).mapPartitions(gen_rows)
     dataset.ImageRow.write_to_parquet(row_rdd, cls.table_root(), spark=spark)
 
 class MSCOCOImageTableTrain(MSCOCOImageTableBase):
