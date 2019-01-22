@@ -48,6 +48,7 @@ class ImageRow(object):
   def __setstate__(self, d):
     for k in self.__slots__:
       setattr(self, k, d.get(k, ''))
+    self._image_bytes = d.get('image_bytes', self._image_bytes)
 
   DEFAULT_PQ_PARTITION_COLS = ['dataset', 'split']
     # NB: must be a list and not a tuple due to pyarrow c++ api
@@ -226,9 +227,6 @@ class ImageRow(object):
       row.update(**kwargs)
       yield ImageRow(**row)
 
-  # @staticmethod
-  # def from_spark(df, spark, **kwargs):
-
   @staticmethod
   def write_to_parquet(
         rows,
@@ -260,7 +258,9 @@ class ImageRow(object):
     
     if is_pyspark_df:
       util.log.info("Writing parquet to %s ..." % dest_dir)
-      df.show()
+      df.printSchema() # NB: can't .show() b/c of binary data
+      # import tabulate
+      # util.log.info("\n\n" + tabulate.tabulate(df.limit(20).toPandas(), headers='keys', tablefmt='psql') + "\n\n")
       df.write.parquet(
         dest_dir,
         mode='append',

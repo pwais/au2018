@@ -40,6 +40,27 @@ def ichunked(seq, n):
     else:
       break
 
+@contextmanager
+def utf8_safe_stdout():
+  # https://stackoverflow.com/a/44567597
+  # https://stackoverflow.com/a/39293287
+  old = sys.getdefaultencoding()
+  reload(sys)
+  sys.setdefaultencoding('utf8')
+  yield
+  sys.setdefaultencoding(old)
+  reload(sys)
+  # old = os.environ.get('PYTHONIOENCODING')
+  # os.environ['PYTHONIOENCODING'] = 'utf8'
+  # # import sys
+  # # old_stdout = sys.stdout
+  # # sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf8')
+  # yield
+  # if old is None:
+  #   del os.environ['PYTHONIOENCODING']
+  # else:
+  #   os.environ['PYTHONIOENCODING'] = old
+
 class Proxy(object):
   __slots__ = ('instance',)
   

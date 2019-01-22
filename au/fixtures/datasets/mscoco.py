@@ -83,7 +83,7 @@ class Fixtures(object):
   IMAGE_INFO_TEST_ZIP = "image_info_test2017.zip"
 
   ANNOS_TRAIN_FNAME = 'instances_train2017.json'
-  ANNOS_VAL_FNAME = 'instances_train2017.json'
+  ANNOS_VAL_FNAME = 'instances_val2017.json'
 
   DATA_ZIPS = (
     TRAIN_ZIP,
@@ -101,6 +101,7 @@ class Fixtures(object):
   ROOT = os.path.join(conf.AU_DATA_CACHE, 'mscoco')
   
   TEST_FIXTURE_DIR = os.path.join(conf.AU_DY_TEST_FIXTURES, 'mscoco')
+  NUM_IMAGES_IN_TEST_ZIP = 100
 
   ## Source Data
 
@@ -140,7 +141,7 @@ class Fixtures(object):
       src = cls.zip_path(fname)
       dest = cls.test_fixture(src)
       if fname in cls.DATA_ZIPS:
-        util.copy_n_from_zip(src, dest, 100)
+        util.copy_n_from_zip(src, dest, cls.NUM_IMAGES_IN_TEST_ZIP)
       elif fname in cls.ANNO_ZIPS:
         if not os.path.exists(dest):
           util.run_cmd('cp -v %s %s' % (src, dest))
@@ -163,7 +164,7 @@ class AnnotationsIndexBase(object):
 
   @classmethod
   def _index_file(cls, fname):
-    index_dir = cls.ZIP_FNAME.replace('.', '_')
+    index_dir = cls.__name__
     return os.path.join(cls.FIXTURES.index_dir(), index_dir, fname)
 
   @classmethod
@@ -214,13 +215,14 @@ class AnnotationsIndexBase(object):
       if 'annotations' in anno_data:
         util.log.info("... Building image ID -> Annos ...")
         for anno in anno_data['annotations']:
+          # NB: we must string-ify keys for `shelve`
           image_id = str(anno['image_id'])
           image_to_annos.setdefault(image_id, [])
           image_to_annos[image_id].append(anno)
 
       missing_anno_count = sum(
         1 for image in images
-        if image['id'] not in image_to_annos)
+        if str(image['id']) not in image_to_annos)
       util.log.info("... %s images are missing annos ..." % missing_anno_count)
 
       util.log.info("... finished index for %s ." % zip_path)
@@ -382,12 +384,14 @@ class MSCOCOImageTableBase(dataset.ImageTable):
   # Pre-shuffle the data for SGD runs on the data in order (cache friendly)
   RANDOM_SHUFFLE = True
   RANDOM_SHUFFLE_SEED = 7
-  APPROX_MB_PER_SHARD = 128.
+  APPROX_MB_PER_SHARD = 1024.
   # ROWS_PER_FILE ignored
 
   @classmethod
   def setup(cls, spark=None):
     spark = spark or Spark.getOrCreate()
+
+    util.log.info("Setting up table %s (%s)" % (cls.TABLE_NAME, cls.__name__))
 
     cls.ANNOS_CLS.setup()
 
@@ -408,6 +412,7 @@ class MSCOCOImageTableBase(dataset.ImageTable):
         image_bytes = ''
         if cls.IMAGES:
           image_bytes = fw.data
+          assert len(image_bytes) > 0, 'Sanity check'
 
         fname = os.path.split(fw.name)[-1]
         image_id = int(fname.split('.')[0])
@@ -431,26 +436,28 @@ class MSCOCOImageTableBase(dataset.ImageTable):
           dataset='mscoco',
           split=split,
           uri=str(uri),
-          _image_bytes=image_bytes,
+          image_bytes=image_bytes,
           attrs=attrs,
         )
     
     zip_path = cls.FIXTURES.zip_path(cls.IMAGES_ZIP_FNAME)
-    archive_rdd = Spark.archive_rdd(spark, zip_path)
+    fws = util.ArchiveFileFlyweight.fws_from(zip_path)
     if cls.RANDOM_SHUFFLE:
-      seed = cls.RANDOM_SHUFFLE_SEED
-      rdds = archive_rdd.randomSplit([1.0], seed=seed)
-      archive_rdd = rdds[0]
+      import random
+      g = random.Random()
+      g.seed(cls.RANDOM_SHUFFLE_SEED)
+      random.shuffle(fws, random=g.random)
 
+    archive_rdd = spark.sparkContext.parallelize(fws, numSlices=len(fws))
     row_rdd = archive_rdd.mapPartitions(gen_rows)
 
     def estimate_bytes_per_row(rows):
-      COMPRESSION_FACTOR = 0.8
-
+      COMPRESSION_FRAC = 0.6
       import pickle
       n_rows = len(rows)
-      n_bytes = sum(len(pickle.dumps(r)) for r in rows) # , pickle.HIGHEST_PROTOCOL
-      return COMPRESSION_FACTOR * n_bytes / n_rows
+      assert all(r.image_bytes is not '' for r in rows), 'Sanity check'
+      n_bytes = sum(len(pickle.dumps(r)) for r in rows)
+      return COMPRESSION_FRAC * n_bytes / n_rows
     
     est_total_rows = archive_rdd.count()
     est_bytes_per_row = estimate_bytes_per_row(row_rdd.take(10))
@@ -458,8 +465,11 @@ class MSCOCOImageTableBase(dataset.ImageTable):
     n_shards = max(10, int(est_total_bytes / (cls.APPROX_MB_PER_SHARD * 1e6)))
 
     util.log.info(
-      "Writing %s total rows in %s shards; estimated %s MB / row" % (
-        est_total_rows, n_shards, est_bytes_per_row * 1e-6))
+      "Writing %s total rows in %s shards; est. %s MB (%s MB / row)" % (
+        est_total_rows,
+        n_shards,
+        est_total_bytes * 1e-6,
+        est_bytes_per_row * 1e-6))
 
     # Partition the `archive_rdd` because partitioning `row_rdd` will cause
     # Spark to compute all ImageRows, which, as written above, are not
