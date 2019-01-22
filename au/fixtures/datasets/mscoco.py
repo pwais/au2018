@@ -128,6 +128,7 @@ class Fixtures(object):
 
   @classmethod
   def download_all(cls):
+    util.mkdir(cls.zip_path(''))
     for fname in cls.DATA_ZIPS:
       uri = cls.BASE_ZIP_URL + '/' + fname
       util.download(uri, cls.zip_path(fname), try_expand=False)
@@ -411,7 +412,7 @@ class MSCOCOImageTableBase(dataset.ImageTable):
         uri = ImageURI(zip_path=zip_path, image_fname=fw.name)
         image_bytes = ''
         if cls.IMAGES:
-          image_bytes = fw.data
+          image_bytes = bytes(fw.data)
           assert len(image_bytes) > 0, 'Sanity check'
 
         fname = os.path.split(fw.name)[-1]

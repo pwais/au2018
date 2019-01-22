@@ -40,26 +40,26 @@ def ichunked(seq, n):
     else:
       break
 
-@contextmanager
-def utf8_safe_stdout():
-  # https://stackoverflow.com/a/44567597
-  # https://stackoverflow.com/a/39293287
-  old = sys.getdefaultencoding()
-  reload(sys)
-  sys.setdefaultencoding('utf8')
-  yield
-  sys.setdefaultencoding(old)
-  reload(sys)
-  # old = os.environ.get('PYTHONIOENCODING')
-  # os.environ['PYTHONIOENCODING'] = 'utf8'
-  # # import sys
-  # # old_stdout = sys.stdout
-  # # sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf8')
-  # yield
-  # if old is None:
-  #   del os.environ['PYTHONIOENCODING']
-  # else:
-  #   os.environ['PYTHONIOENCODING'] = old
+# @contextmanager
+# def utf8_safe_stdout():
+#   # https://stackoverflow.com/a/44567597
+#   # https://stackoverflow.com/a/39293287
+#   old = sys.getdefaultencoding()
+#   reload(sys)
+#   sys.setdefaultencoding('utf8')
+#   yield
+#   sys.setdefaultencoding(old)
+#   reload(sys)
+#   # old = os.environ.get('PYTHONIOENCODING')
+#   # os.environ['PYTHONIOENCODING'] = 'utf8'
+#   # # import sys
+#   # # old_stdout = sys.stdout
+#   # # sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf8')
+#   # yield
+#   # if old is None:
+#   #   del os.environ['PYTHONIOENCODING']
+#   # else:
+#   #   os.environ['PYTHONIOENCODING'] = old
 
 class Proxy(object):
   __slots__ = ('instance',)
@@ -444,17 +444,19 @@ def download(uri, dest, try_expand=True):
   
   tempdest.flush()
   
-  mkdir(os.path.split(dest)[0])
   if try_expand:
     try:
       # Is it an archive? expand!
+      mkdir(dest)
       patoolib.extract_archive(tempdest.name, outdir=dest)
       log.info("Extracted archive.")
     except Exception:
       # Just move the file
       shutil.move(tempdest.name, dest)
+      tempdest.delete = False
   else:
     shutil.move(tempdest.name, dest)
+    tempdest.delete = False
   log.info("Downloaded to %s" % dest)
 
 

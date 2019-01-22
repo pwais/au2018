@@ -61,18 +61,18 @@ class TestMSCOCOImageTable(unittest.TestCase):
       cls.have_fixtures = True
     except Exception as e:
       print "Failed to create test fixtures: %s" % (e,)
-  
-  @pytest.mark.slow
-  def test_image_table(self):
-    if not self.have_fixtures:
-      return
-    
+
     from _pytest.monkeypatch import MonkeyPatch
     monkeypatch = MonkeyPatch()
     TEST_TEMPDIR = os.path.join(
                         testconf.TEST_TEMPDIR_ROOT,
                         'test_mscoco')
     testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+  
+  @pytest.mark.slow
+  def test_image_table(self):
+    if not self.have_fixtures:
+      return
 
     with testutils.LocalSpark.sess() as spark:
       TABLES = (
@@ -93,3 +93,22 @@ class TestMSCOCOImageTable(unittest.TestCase):
         assert set(table.EXPECTED_FNAMES) - fnames == set([])
         assert all(len(r.image_bytes) > 0 for r in rows)
 
+  @pytest.mark.slow
+  def test_mscoco_activations(self):
+    if not self.have_fixtures:
+      return
+    
+    from au.fixtures import nnmodel
+    from au.fixtures.tf import mobilenet
+
+    with testutils.LocalSpark.sess() as spark:
+      TestMSCOCOImageTableVal.setup(spark=spark)
+
+      class TestTable(nnmodel.ActivationsTable):
+        TABLE_NAME = 'mscoco_mobilenet_activations_test'
+        NNMODEL_CLS = mobilenet.Mobilenet
+        MODEL_PARAMS = mobilenet.Mobilenet.Small()
+        IMAGE_TABLE_CLS = TestMSCOCOImageTableVal
+      
+      TestTable.MODEL_PARAMS.INFERENCE_BATCH_SIZE = 10
+      TestTable.setup(spark=spark)

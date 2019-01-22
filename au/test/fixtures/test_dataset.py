@@ -168,6 +168,31 @@ def test_imagetable_demo(monkeypatch):
     
     assert len(list(ImageTable.iter_all_rows())) == 6
 
+# def test_imagetable_demo_spark(monkeypatch):
+  
+#   TABLE_TEMPDIR = os.path.join(
+#                       testconf.TEST_TEMPDIR_ROOT,
+#                       'ImageTable_pq_spark_demo')
+#   util.cleandir(TABLE_TEMPDIR)
+  
+#   with monkeypatch.context() as m: 
+#     m.setattr(conf, 'AU_TABLE_CACHE', TABLE_TEMPDIR)
+  
+#     ImageTable.setup()
+  
+#     test_img_path = os.path.join(
+#                         conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
+#                         '2929331372_398d58807e.jpg')
+#     rows = ImageTable.get_rows_by_uris((test_img_path, 'not_in_table'))
+#     assert len(rows) == 1
+#     row = rows[0]
+    
+#     expected_bytes = open(test_img_path, 'rb').read()
+#     assert row.image_bytes == expected_bytes
+#     assert row.label == 'coffee'
+    
+#     assert len(list(ImageTable.iter_all_rows())) == 6
+
 class TestFillNormalized(unittest.TestCase):
   def test_identity(self):
     f = FillNormalized()
@@ -205,6 +230,18 @@ class TestFillNormalized(unittest.TestCase):
     expected = row.as_numpy() - 10
     np.testing.assert_array_equal(expected, row.attrs['normalized'])
   
+  def test_greyscale_to_rgb(self):
+    # Jpeg can have greyscale images!  See e.g.
+    # mscoco/zips/val2017.zip|val2017/000000007888.jpg
+    img = np.zeros((10, 10))
+    
+    row = ImageRow.from_np_img_labels(img)
+    assert row.as_numpy().shape == (10, 10)
+
+    f = FillNormalized(target_nchan=3)
+    row = f(row)
+    assert row.attrs['normalized'].shape == (10, 10, 3)
+
 def test_create_video():
   v = testutils.VideoFixture()
   

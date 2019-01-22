@@ -107,7 +107,7 @@ class ImageRow(object):
         attrs.append((k, v))
 
       elif k == '_image_bytes':
-        attrs.append(('image_bytes', self.image_bytes))
+        attrs.append(('image_bytes', bytearray(self.image_bytes)))
 #       elif k == '_label_bytes':
 #         attrs.append(('label_bytes', self.label_bytes))
     return OrderedDict(attrs)
@@ -358,6 +358,7 @@ def _make_have_target_chan(img, nchan):
     if len(shape) == 3 and shape[-1] == 1:
       # Repeate the grey channel to create an RGB image
       # (or BGR or who knows)
+      img = np.squeeze(img, axis=-1)
       return np.stack([img, img, img], axis=-1)
     else:
       raise ValueError("TODO input image has != 1 chan %s" % (shape,))
@@ -394,6 +395,8 @@ class FillNormalized(object):
     row.attrs.update({
       'normalized': normalized,
     })
+
+    print row.uri, normalized.shape
     
     self.thruput.stop_block(n=1, num_bytes=bytes_in)
     return row
