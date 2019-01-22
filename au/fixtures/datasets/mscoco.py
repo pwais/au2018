@@ -19,6 +19,7 @@ import threading
 from au import conf
 from au import util
 from au.fixtures import dataset
+from au.spark import Spark
 
 class BBox(object):
   __slots__ = (
@@ -30,6 +31,14 @@ class BBox(object):
     'category_name',
     'anno_index', # To link with mask, if needed
   )
+
+  def __getstate__(self):
+    return self.to_dict()
+  
+  def __setstate__(self, d):
+    for k in self.__slots__:
+      setattr(self, k, d.get(k, ''))
+
 
   def __init__(self, **kwargs):
     for k in self.__slots__:
@@ -48,6 +57,14 @@ class Mask(object):
     'anno_index', # To link with bbox, if needed
   )
 
+  def __getstate__(self):
+    return self.to_dict()
+  
+  def __setstate__(self, d):
+    for k in self.__slots__:
+      setattr(self, k, d.get(k, ''))
+
+
   def __init__(self, **kwargs):
     for k in self.__slots__:
       setattr(self, k, kwargs.get(k))
@@ -58,6 +75,7 @@ class Mask(object):
 class Fixtures(object):
 
   BASE_ZIP_URL = "http://images.cocodataset.org/zips"
+  BASE_ANNO_URL = "http://images.cocodataset.org/annotations"
   TRAIN_ZIP = "train2017.zip"
   TEST_ZIP = "test2017.zip"
   VAL_ZIP = "val2017.zip"
@@ -105,8 +123,11 @@ class Fixtures(object):
 
   @classmethod
   def download_all(cls):
-    for fname in cls.ZIPS:
+    for fname in cls.DATA_ZIPS:
       uri = cls.BASE_ZIP_URL + '/' + fname
+      util.download(uri, cls.zip_path(fname), try_expand=False)
+    for fname in cls.ANNO_ZIPS:
+      uri = cls.BASE_ANNO_URL + '/' + fname
       util.download(uri, cls.zip_path(fname), try_expand=False)
   
   @classmethod
@@ -117,10 +138,18 @@ class Fixtures(object):
       if fname in cls.DATA_ZIPS:
         util.copy_n_from_zip(src, dest, 100)
       elif fname in cls.ANNO_ZIPS:
-        util.run_cmd('cp -v %s %s' % (src dest))
+        if not os.path.exists(dest):
+          util.run_cmd('cp -v %s %s' % (src, dest))
   
+  @classmethod
+  def run_import(cls):
+    print 'TODO make program'
+    cls.download_all()
+    cls.create_test_fixtures()
+
 class AnnotationsIndexBase(object):
-  ZIP_PATH = ''
+  FIXTURES = Fixtures
+  ZIP_FNAME = ''
   ANNO_FNAME = ''
 
   _setup_lock = threading.Lock()
@@ -140,39 +169,40 @@ class AnnotationsIndexBase(object):
     # From tensorflow/models
     from object_detection.utils import label_map_util
 
-    util.log.info("Building annotations index for %s ..." % cls.ZIP_PATH)
+    zip_path = cls.FIXTURES.zip_path(cls.ZIP_FNAME)
+    util.log.info("Building annotations index for %s ..." % zip_path)
 
-    fws = util.ArchiveFileFlyweight.fws_from(cls.ZIP_PATH)
+    fws = util.ArchiveFileFlyweight.fws_from(zip_path)
     anno_fw = None
     for fw in fws:
       if cls.ANNO_FNAME in fw.name:
         anno_fw = fw
     assert anno_fw, \
-      "Could not find entry for %s in %s" % (cls.ANNO_FNAME, cls.ZIP_PATH)
+      "Could not find entry for %s in %s" % (cls.ANNO_FNAME, zip_path)
 
-    anno_data = json.load(anno_fw.data)
+    anno_data = json.loads(anno_fw.data)
 
     images = anno_data['images']
     cls._category_index = label_map_util.create_category_index(
                                       anno_data['categories'])
     
     util.log.info("Have annotations index for %s images." % len(images))
-    util.log.info("Category index: \n\n%s" % pprint.pformat(category_index))
+    util.log.info("Category index: \n\n%s" % pprint.pformat(cls._category_index))
 
-    cls._image_to_annos = {}
+    image_to_annos = {}
     if 'annotations' in anno_data:
       util.log.info("... Building image ID -> Annos ...")
       for anno in anno_data['annotations']:
         image_id = anno['image_id']
         image_to_annos.setdefault(image_id, [])
         image_to_annos[image_id].append(anno)
-    
+
     missing_anno_count = sum(
       1 for image in images
       if image['id'] not in image_to_annos)
     util.log.info("... %s images are missing annos ..." % missing_anno_count)
 
-    util.log.info("... finished index for %s ." % ZIP_PATH)
+    util.log.info("... finished index for %s ." % zip_path)
     cls._image_to_annos = image_to_annos
     cls._image_id_to_image = dict((image['id'], image) for image in images)
 
@@ -231,9 +261,9 @@ class AnnotationsIndexBase(object):
     masks = []
     if not (image and annos):
       util.log.warn("No annos or image info for image id %s" % image_id)
-      return bboxen
+      return masks
 
-    for anno_index, anno in enumeraet(annos):
+    for anno_index, anno in enumerate(annos):
       ## See Tensorflow/models create_coco_tf_record.py create_tf_example()
       from pycocotools import mask as cocomask
       import numpy as np
@@ -245,7 +275,7 @@ class AnnotationsIndexBase(object):
                                   image['width'])
       mask_arr = cocomask.decode(run_len_encoding)
       if not anno['iscrowd']:
-        mask_arr = np.amax(binary_mask, axis=2)
+        mask_arr = np.amax(mask_arr, axis=2) # hmmm ?
       buf = io.BytesIO()
       imageio.imwrite(buf, mask_arr, format='png')
       kwargs = {
@@ -261,12 +291,14 @@ class AnnotationsIndexBase(object):
     return masks
 
 class TrainAnnos(AnnotationsIndexBase):
-  ZIP_PATH = FIXTURES.zip_path(FIXTURES.ANNOS_TRAIN_VAL_ZIP)
-  ANNO_FNAME = FIXTURES.ANNOS_TRAIN_FNAME
+  ZIP_FNAME = Fixtures.ANNOS_TRAIN_VAL_ZIP
+  ANNO_FNAME = Fixtures.ANNOS_TRAIN_FNAME
 
 class ValAnnos(AnnotationsIndexBase):
-  ZIP_PATH = FIXTURES.zip_path(FIXTURES.ANNOS_TRAIN_VAL_ZIP)
-  ANNO_FNAME = FIXTURES.ANNOS_VAL_FNAME
+  ZIP_FNAME = Fixtures.ANNOS_TRAIN_VAL_ZIP
+  ANNO_FNAME = Fixtures.ANNOS_VAL_FNAME
+
+
 
 class ImageURI(object):
   __slots__ = ('zip_path', 'image_fname')
@@ -291,6 +323,8 @@ class ImageURI(object):
     iu.zip_path, iu.image_fname = toks
     return iu
 
+
+
 class MSCOCOImageTableBase(dataset.ImageTable):
 
   FIXTURES = Fixtures
@@ -307,6 +341,7 @@ class MSCOCOImageTableBase(dataset.ImageTable):
   RANDOM_SHUFFLE = True
   RANDOM_SHUFFLE_SEED = 7
   APPROX_MB_PER_SHARD = 128.
+  # ROWS_PER_FILE ignored
 
   @classmethod
   def setup(cls, spark=None):
@@ -322,7 +357,7 @@ class MSCOCOImageTableBase(dataset.ImageTable):
 
     def iter_image_rows(fws):
       for fw in fws:
-        if '.jpg' not in fw.name or '.png' not in fw.name:
+        if not ('.jpg' in fw.name or '.png' in fw.name):
           continue
         
         uri = ImageURI(zip_path=zip_path, image_fname=fw.name)
@@ -330,13 +365,15 @@ class MSCOCOImageTableBase(dataset.ImageTable):
         if cls.IMAGES:
           image_bytes = fw.data
 
-        image_id = int(fw.name.splt('.')[0])
+        fname = os.path.split(fw.name)[-1]
+        image_id = int(fname.split('.')[0])
         info = cls.ANNOS_CLS.get_image_info(image_id)
-        attrs = {
-          'width': info['width'],
-          'height': info['height'],
-          'mscoco_image_id': image['id'],
-        }
+        if info:
+          attrs = {
+            'width': info['width'],
+            'height': info['height'],
+            'mscoco_image_id': info['id'],
+          }
 
         if cls.BBOXEN:
           attrs['mscoco_bboxen'] = cls.ANNOS_CLS.get_bboxes_for_image(image_id)
@@ -353,10 +390,11 @@ class MSCOCOImageTableBase(dataset.ImageTable):
         )
     
     zip_path = cls.FIXTURES.zip_path(cls.IMAGES_ZIP_FNAME)
-    archive_rdd = Spark.archive_rdd(zip_path)
+    archive_rdd = Spark.archive_rdd(spark, zip_path)
     if cls.RANDOM_SHUFFLE:
       seed = cls.RANDOM_SHUFFLE_SEED
-      archive_rdd, _ = archive_rdd.randomSplit(1.0, seed=seed)
+      rdds = archive_rdd.randomSplit([1.0], seed=seed)
+      archive_rdd = rdds[0]
 
     row_rdd = archive_rdd.mapPartitions(iter_image_rows)
 
@@ -365,23 +403,23 @@ class MSCOCOImageTableBase(dataset.ImageTable):
 
       import pickle
       n_rows = len(rows)
-      n_bytes = sum(len(pickle.dumps(r)) for r in rows)
+      n_bytes = sum(len(pickle.dumps(r)) for r in rows) # , pickle.HIGHEST_PROTOCOL
       return COMPRESSION_FACTOR * n_bytes / n_rows
     
     est_total_rows = archive_rdd.count()
     est_bytes_per_row = estimate_bytes_per_row(row_rdd.take(10))
     est_total_bytes = est_total_rows * est_bytes_per_row
-    n_shards = max(10, int(est_total_bytes / (cls.APPROX_MB_PER_SHARD * 1e9)))
+    n_shards = max(2, int(est_total_bytes / (cls.APPROX_MB_PER_SHARD * 1e6)))
 
     util.log.info(
       "Writing %s total rows in %s shards; estimated %s MB / row" % (
-        est_total_rows, n_shards, est_bytes_per_row * 1e-9))
+        est_total_rows, n_shards, est_bytes_per_row * 1e-6))
 
     # Partition the `archive_rdd` because partitioning `row_rdd` will cause
     # Spark to compute all ImageRows, which, as written above, are not
     # flyweights.
-    row_rdd = zip_path.repartition(n_shards).mapPartitions(iter_image_rows)    
-    dataset.ImageRow.write_to_parquet(row_rdd, cls.table_root())
+    row_rdd = archive_rdd.repartition(n_shards).mapPartitions(iter_image_rows)    
+    dataset.ImageRow.write_to_parquet(row_rdd, cls.table_root(), spark=spark)
 
 class MSCOCOImageTableTrain(MSCOCOImageTableBase):
   TABLE_NAME = 'mscoco'

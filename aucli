@@ -183,7 +183,7 @@ def setup_tf_models():
         cd /opt/au/external/tensorflow_models/research &&
         /opt/protobuf3/bin/protoc object_detection/protos/*.proto --python_out=. &&
         python object_detection/builders/model_builder_test.py )
-    """ % TF_MODELS_PATH)
+    """)
   
   #run_cmd("""
   #  ls -lhat /tmp/raw-data &&
@@ -195,6 +195,17 @@ def setup_bdd100k():
 
 def setup_mscoco():
   # also need from pycocotools import mask !!!
+  setup_tf_models()
+  
+  # # pycoco tools -- todo fix docker i.e. add protobuf above
+  # run_cmd("""
+  #   cd /tmp &&
+  #   git clone https://github.com/cocodataset/cocoapi.git &&
+  #   cd cocoapi/PythonAPI &&
+  #   make &&
+  #   cp -r pycocotools /opt/au/external/tensorflow_models/research/models/research/
+  # """)
+
   assert os.path.exists('/opt/au/cache/data/mscoco/zips/annotations_trainval2017.zip'), 'TODO: provide formal copy / audit mechanism'
 
 ## Services
@@ -516,7 +527,7 @@ def main(args=None):
 
   elif args.setup_external:
     setup_tf_models()
-    setup_bdd100k()
+    # setup_bdd100k()
 
 if __name__ == '__main__':
   main()

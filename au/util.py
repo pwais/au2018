@@ -315,19 +315,18 @@ class ArchiveFileFlyweight(object):
   def data(self):
     return self.archive.get(self.name)
   
-  @staticmethod
-  def copy_n(src, dest, n):
-    log.info("Copying %s of %s -> %s ..." % (n, src, dest))
+def copy_n_from_zip(src, dest, n):
+  log.info("Copying %s of %s -> %s ..." % (n, src, dest))
 
-    mkdir(os.path.split(dest)[0])
+  mkdir(os.path.split(dest)[0])
 
-    import zipfile
-    with zipfile.ZipFile(src) as zin:
-      with zipfile.ZipFile(dest, mode='w') as zout:
-        for name in itertools.islice(sorted(zin.namelist()), n):
-          zout.writestr(name, zin.read(name))
-    
-    log.info("... done")
+  import zipfile
+  with zipfile.ZipFile(src) as zin:
+    with zipfile.ZipFile(dest, mode='w') as zout:
+      for name in itertools.islice(sorted(zin.namelist()), n):
+        zout.writestr(name, zin.read(name))
+  
+  log.info("... done")
 
 
 
@@ -424,7 +423,7 @@ def download(uri, dest, try_expand=True):
   
   tempdest.flush()
   
-  mkdir(dest)
+  mkdir(os.path.split(dest)[0])
   if try_expand:
     try:
       # Is it an archive? expand!

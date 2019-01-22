@@ -42,6 +42,13 @@ class ImageRow(object):
 #     '_cached_label_fobj',
   )
   
+  def __getstate__(self):
+    return self.to_dict()
+  
+  def __setstate__(self, d):
+    for k in self.__slots__:
+      setattr(self, k, d.get(k, ''))
+
   DEFAULT_PQ_PARTITION_COLS = ['dataset', 'split']
     # NB: must be a list and not a tuple due to pyarrow c++ api
   
@@ -237,6 +244,8 @@ class ImageRow(object):
       import pyspark.sql
       is_rdd = isinstance(rows, pyspark.rdd.RDD)
       is_pyspark_df = isinstance(rows, pyspark.sql.dataframe.DataFrame)
+      if is_pyspark_df:
+        df = rows
     except ImportError:
       pass
     
@@ -245,15 +254,17 @@ class ImageRow(object):
       from pyspark.sql import Row
 
       # RDD[ImageRow] -> DataFrame[ImageRow]
-      rows = spark.createDataFrame(rows.map(lambda r: Row(**r.to_dict())))
+      rows_rdd = rows.map(lambda r: Row(**r.to_dict()))
+      df = spark.createDataFrame(rows_rdd)
       is_pyspark_df = True
     
     if is_pyspark_df:
       util.log.info("Writing parquet to %s ..." % dest_dir)
+      df.show()
       df.write.parquet(
         dest_dir,
         mode='append',
-        partition_cols=partition_cols,
+        partitionBy=partition_cols,
         compression=compression)
       util.log.info("... done! Wrote to %s ." % dest_dir)
     

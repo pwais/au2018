@@ -2,6 +2,7 @@ from au.fixtures.datasets import mscoco
 from au.test import testconf
 from au.test import testutils
 
+import os
 import unittest
 
 import pytest
@@ -9,8 +10,20 @@ import pytest
 class TestFixtures(mscoco.Fixtures):
   ROOT = mscoco.Fixtures.TEST_FIXTURE_DIR
 
-class TestMSCOCOImageTable(mscoco.MSCOCOImageTable):
+class TestTrainAnnos(mscoco.TrainAnnos):
   FIXTURES = TestFixtures
+
+class TestValAnnos(mscoco.ValAnnos):
+  FIXTURES = TestFixtures
+
+class TestMSCOCOImageTableTrain(mscoco.MSCOCOImageTableTrain):
+  FIXTURES = TestFixtures
+  ANNOS_CLS = TestTrainAnnos
+  APPROX_MB_PER_SHARD = 10.
+
+class TestMSCOCOImageTableVal(mscoco.MSCOCOImageTableVal):
+  FIXTURES = TestFixtures
+  ANNOS_CLS = TestValAnnos
   APPROX_MB_PER_SHARD = 10.
 
 class TestMSCOCOImageTable(unittest.TestCase):
@@ -35,6 +48,19 @@ class TestMSCOCOImageTable(unittest.TestCase):
     if not self.have_fixtures:
       return
     
+    from _pytest.monkeypatch import MonkeyPatch
+    monkeypatch = MonkeyPatch()
+    TEST_TEMPDIR = os.path.join(
+                        testconf.TEST_TEMPDIR_ROOT,
+                        'test_mscoco')
+    testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+
     with testutils.LocalSpark.sess() as spark:
-      TestMSCOCOImageTable.setup(spark=spark)
+      TABLES = (
+        TestMSCOCOImageTableTrain,
+        TestMSCOCOImageTableVal,
+      )
+
+      for table in TABLES:
+        table.setup(spark=spark)
 
