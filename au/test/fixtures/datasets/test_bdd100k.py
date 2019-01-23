@@ -34,7 +34,7 @@ class TestVideoFrameTable(bdd100k.VideoFrameTable):
   VIDEO = TestVideoDataset
 
   TARGET_VID = '0000f77c-6257be58.mov'
-  N_FRAMES = 10000
+  N_FRAMES = 1000
 
   @classmethod
   def as_imagerow_rdd(cls, spark):
@@ -43,7 +43,7 @@ class TestVideoFrameTable(bdd100k.VideoFrameTable):
 
     row_rdd = super(TestVideoFrameTable, cls).as_imagerow_rdd(spark)
 
-    video_rows = row_rdd.filter(lambda row: cls.TARGET_VID in row.uri) #IsTargetVideo())
+    video_rows = row_rdd.filter(lambda row: cls.TARGET_VID in row.uri)
     rows = video_rows.take(cls.N_FRAMES)
     test_rdd = spark.sparkContext.parallelize(rows, numSlices=10)
     return test_rdd

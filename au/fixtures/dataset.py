@@ -51,12 +51,12 @@ class ImageRow(object):
   # __slots__.  Some part of Spark uses this API for serializatio, so we
   # provide an impl.
   def __getstate__(self):
-    return self.to_dict()
+    return {'as_tuple': self.astuple()}
   
   def __setstate__(self, d):
-    for k in self.__slots__:
-      setattr(self, k, d.get(k, ''))
-    self._image_bytes = d.get('image_bytes', self._image_bytes)
+    for k, v in zip(self.__slots__, d['as_tuple']):
+      setattr(self, k, v)
+    # self._image_bytes = d.get('image_bytes', self._image_bytes)
   
 
   def __init__(self, **kwargs):
@@ -400,8 +400,6 @@ class FillNormalized(object):
     row.attrs.update({
       'normalized': normalized,
     })
-
-    print row.uri, normalized.shape
     
     self.thruput.stop_block(n=1, num_bytes=bytes_in)
     return row

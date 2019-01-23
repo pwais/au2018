@@ -205,7 +205,7 @@ class Spark(object):
   @classmethod
   def selftest(cls):
     with cls.sess() as spark:
-      spark.sparkContext.setLogLevel("INFO")
+      # spark.sparkContext.setLogLevel("INFO")
       cls.test_pi(spark)
       cls.test_egg(spark)
       cls.test_tensorflow(spark)
