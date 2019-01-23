@@ -88,7 +88,6 @@ class Mobilenet(nnmodel.INNModel):
                               nodes=self.output_names,
                               base_graph=self.graph,
                               saver=saver)
-
       return self.graph
     
     @property

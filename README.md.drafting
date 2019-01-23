@@ -13,7 +13,7 @@ See [the `cluster` module](cluster/README.md) about setting up a cluster.
 
 https://www.cs.cmu.edu/~tom/10701_sp11/recitations/Recitation_9.pdf
 
-pytest au -s --runslow -k test_mnist_save_png
+pytest au -s --runslow --runhighmem -k test_mnist_save_png
 
 
 lolololololol https://github.com/databricks/spark-deep-learning/blob/973e9da5216f69763f44da37d6039d205ddd5ade/python/sparkdl/estimators/keras_image_file_estimator.py#L194

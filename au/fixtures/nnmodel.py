@@ -137,13 +137,11 @@ class Activations(object):
   
   tensor_to_value = property(get_tensor_to_value, set_tensor_to_value)
 
-
 class FillActivationsTFDataset(FillActivationsBase):
   """A `FillActivationsBase` impl that leverages Tensorflow
   tf.Dataset to feed data into a tf.Graph""" 
   
   def __call__(self, iter_imagerows):
-
     self.overall_thruput.start_block()
     
     import Queue
@@ -265,7 +263,7 @@ class ActivationsTable(object):
 
     model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
     filler = FillActivationsTFDataset(model=model)
-
+    
     activated = img_rdd.mapPartitions(filler)
 
     def to_activation_rows(imagerows):

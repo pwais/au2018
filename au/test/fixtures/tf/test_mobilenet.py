@@ -63,7 +63,10 @@ def test_mobilenet_inference_graph(monkeypatch):
     # y = self.endpoints['Predictions'].eval(feed_dict={input_image:[imr]})
     # print y, y.max()
 
+# FIXME: CI only has 8GB of RAM, and that's not enough for this test.  We tried
+# to profile but discovered no clear Python memory issue; might be Tensorflow.
 @pytest.mark.slow
+@pytest.mark.highmem
 def test_mobilenet_activation_tables(monkeypatch):
   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
   dataset.ImageTable.setup()
