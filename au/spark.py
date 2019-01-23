@@ -275,8 +275,11 @@ class Spark(object):
     def format_info(info):
       s = """
         Host: {hostname} {host}
-        Num CPUs: {n_cpus}
         Egg: {filepath}
+
+        Num CPUs: {n_cpus}
+        Memory:
+        {memory}
         
         PYTHONPATH:
         {PYTHONPATH}

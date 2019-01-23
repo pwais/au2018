@@ -241,6 +241,7 @@ def get_sys_info():
   info['cpuinfo'] = safe_cmd('cat /proc/cpuinfo')
   info['disk_free'] = safe_cmd('df -h')
   info['ifconfig'] = safe_cmd('ifconfig')
+  info['memory'] = safe_cmd('free -h')
 
   import socket
   info['hostname'] = socket.gethostname()
