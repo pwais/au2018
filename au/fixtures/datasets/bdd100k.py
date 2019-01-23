@@ -4,6 +4,15 @@ Notes:
  * Expanding bdd100k_videos.zip can take days (!!!).
  * See /docs/bdd100k.md for more info.
 
+TODOS:
+ * Introduce a metaclass for 'Row' objects (that have __slots__)
+ * Add support for:
+      # 'bdd100k_drivable_maps.zip': ?,
+      # 'bdd100k_images.zip': ?,
+      # 'bdd100k_labels_release.zip': ?,
+      # 'bdd100k_seg.zip': ?,
+ * TimeseriesRow feature matrix encoding
+ * Promote Video & friends to standard au module
 """
 
 import itertools
@@ -68,19 +77,6 @@ class Fixtures(object):
     ZIPS_TO_COPY = (
       cls.telemetry_zip(),
     )
-
-    # def _copy_n(src, dest, n):
-    #   log.info("Copying %s of %s -> %s ..." % (n, src, dest))
-
-    #   util.mkdir(os.path.split(dest)[0])
-
-    #   import zipfile
-    #   with zipfile.ZipFile(src) as zin:
-    #     with zipfile.ZipFile(dest, mode='w') as zout:
-    #       for name in itertools.islice(sorted(zin.namelist()), n):
-    #         zout.writestr(name, zin.read(name))
-      
-    #   log.info("... done")
 
     util.cleandir(cls.TEST_FIXTURE_DIR)
     for path in ZIPS_TO_COPY:
@@ -233,26 +229,7 @@ class Fixtures(object):
       print "Running video setup ..."
       VideoDataset.setup(spark, all_videos=args.all_videos)
 
-
-
-
-    
-
-  # @classmethod
-  # def setup(cls, spark=None):
-  #   cls.create_test_fixtures()
-
-    ### Transform telemetry into Parquet table
-
-### Utils and Data
-
-# TODO make metaclass
-# class MutableTuple(object):
-#   # __slots__ = ('dummy',)
-
-#   def __init__(self, **kwargs):
-#     for k in self.__slots__:
-#       setattr(self, k, kwargs.get(k))
+### Data
 
 # These defaults help explicitly define attribute types
 _Meta_DEFAULTS = {
@@ -296,14 +273,6 @@ class Meta(object):
     else:
       jobj = json.loads(json_bytes)
     return Meta(video=video, split=split, **jobj)
-
-  # def __getstate__(self):
-  #   return self.__dict__
-  
-  # def __setstate__(self, d):
-  #   for k in self.__slots__:
-  #     setattr(self, k, d.get(k, _Meta_DEFAULTS[k]))
-
 
 class GPSObs(object):
   __slots__ = (
@@ -374,48 +343,7 @@ class TimeseriesRow(object):
         vt.append((t.t, v))
     return vt
 
-  # @staticmethod
-  # def get_vt(path, ts):
-  #   return [(p.t, getattr(p, name)) for p in pts]
-  
-  # @staticmethod
-  # def get_all_ts(pts):
-  # return {
-  #     'x(t)': Point3.to_ts('x', pts),
-  #     'y(t)': Point3.to_ts('y', pts),
-  #     'z(t)': Point3.to_ts('z', pts),
-  #   }
-
-  # TODO: convert into a matrix row
-
-#   @property
-#   def __dict__(self):
-#     return dict((k, getattr(self, k, None)) for k in self.__slots__)
-
-# class TimeseriesRow(object):
-#   __slots__ = (
-#     'namespace',
-#     'timestamp',
-#     'meta',
-    
-#     'accelerometer',
-#     'gyro',
-#     'location',
-#     'gps',
-#   )
-
-#   def __init__(self, **kwargs):
-#     for k in self.__slots__:
-#       if k != '__dict__':
-#         setattr(self, k, kwargs.get(k))
-  
-#   @property
-#   def __dict__(self):
-#     return dict((k, getattr(self, k, None)) for k in self.__slots__)
-
-
-
-### Interface
+### Interfaces
 
 class InfoDataset(object):
 
@@ -436,39 +364,6 @@ class InfoDataset(object):
       7b2a9ec9-7f4dd1a6.mov <-> 7b2a9ec9-7f4dd1a6.json
     """
     return fname.replace('.json', '.mov')
-
-  # @classmethod
-  # def create_meta_factory_rdd(cls, spark):
-  #   """Return an RDD of `Meta` instances for all info JSONs available"""
-  #   archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
-
-  #   def get_meta_factory(entry):
-  #     if 'json' not in entry.name:
-  #       return 
-  #     video = InfoDataset.json_path_to_video_fname(entry.name)
-
-  #     # Determine train / test split.  NB: Fisher has 20k info objects
-  #     # on the eval server and is not sharing (hehe)
-  #     if 'train' in entry.name:
-  #       split = 'train'
-  #     elif 'val' in entry.name:
-  #       split = 'val'
-  #     else:
-  #       split = ''
-      
-  #     def get_meta():
-  #       import json
-  #       json_bytes = entry.data
-  #       if not json_bytes:
-  #         return None
-  #       else:
-  #         jobj = json.loads(json_bytes)
-  #       return Meta(video=video, split=split, **jobj)
-      
-  #     return (video, split, get_meta)
-    
-  #   rdd = archive_rdd.map(get_meta).filter(lambda m: m is not None)
-  #   return rdd
 
   @classmethod
   def _video_to_fw_cache(cls):
@@ -552,67 +447,7 @@ class InfoDataset(object):
     return InfoDataset.info_json_to_timeseries(jobj)
 
 
-# meta = Meta(**jobj)
-    
-#     namespace = 'bdd100k.' + jobj['videoname']
-    
-#     for datum in jobj.get('gps', []):
-#       yield TimeseriesRow(
-#         namespace=namespace,
-#         timestamp=datum['timestamp'],
-#         meta=meta,
-#         gps=GPSObs(**datum),
-#       )
-    
-#     for datum in jobj.get('location', []):
-#       yield TimeseriesRow(
-#         namespace=namespace,
-#         timestamp=datum['timestamp'],
-#         meta=meta,
-#         location=GPSObs(**datum),
-#       )
-    
-#     for datum in jobj.get('accelerometer', []):
-#       yield TimeseriesRow(
-#         namespace=namespace,
-#         timestamp=datum['timestamp'],
-#         meta=meta,
-#         accelerometer=Point3(**datum),
-#       )
-    
-#     for datum in jobj.get('gyro', []):
-#       yield TimeseriesRow(
-#         namespace=namespace,
-#         timestamp=datum['timestamp'],
-#         meta=meta,
-#         gyro=Point3(**datum),
-#       )
-
-
-  # @classmethod
-  # def _info_table_from_zip(cls, spark):
-  #   archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
-
-  #   def get_filename_split(entry):
-  #     import json
-      
-  #     video_fname = ''
-  #     json_bytes = entry.data
-  #     if json_bytes:
-  #       jobj = json.loads(json_bytes)
-  #       video_fname = jobj.get('filename', '')
-
-  #     # Determine train / test split.  NB: Fisher has 20k info objects
-  #     # on the eval server and is not sharing (hehe)
-  #     if 'train' in video_fname:
-  #       split = 'train'
-  #     elif 'val' in video_fname:
-  #       split = 'val'
-  #     else:
-  #       split = ''
-      
-  #     return {'video': video_fname, 'split': split}
-
+  ### Keep below for TODO noted in module docstring
   #   filename_split_rdd = archive_rdd.map(get_filename_split)
   #   df = spark.createDataFrame(filename_split_rdd)
   #   df.registerTempTable('bdd100k_info_video_split')
@@ -714,63 +549,8 @@ class InfoDataset(object):
   #   # ts_df = spark.createDataFrame(ts_rdd, samplingRatio=1)
   #   return ts_df
 
-    
 
-
-
-
-
-  # @classmethod
-  # def ts_row_rdd(cls, spark):
-    
-  #   archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
-
-  #   def to_rows(entry):
-  #     import json
-  #     from pyspark.sql import Row
-      
-  #     fname = entry.name
-  #     if 'json' not in fname:
-  #       return
-      
-  #     # Determine train / test split.  NB: Fisher has 20k info objects
-  #     # on the eval server and is not sharing (hehe)
-  #     if 'train' in fname:
-  #       split = 'train'
-  #     elif 'val' in fname:
-  #       split = 'val'
-  #     else:
-  #       split = ''
-      
-  #     json_bytes = entry.data
-  #     jobj = json.loads(json_bytes)
-  #     for row in cls.info_json_to_rows(jobj):
-  #       yield Row(
-  #               split=split,
-  #               fname=fname,
-  #               **row.__dict__)
-    
-  #   # ts_row_rdd = archive_rdd.flatMap(to_rows)
-  #   ts_row_rdd = spark.read.json(archive_rdd.map(lambda entry: entry.data))
-  #   return ts_row_rdd
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+### Video Data
 
 # These defaults help explicitly define attribute types
 _VideoMeta_DEFAULTS = dict(
@@ -804,13 +584,6 @@ class VideoMeta(object):
       if k in kwargs:
         setattr(self, k, kwargs[k])
 
-  # def __getstate__(self):
-  #   return self.__dict__
-  
-  # def __setstate__(self, d):
-  #   for k in self.__slots__:
-  #     setattr(self, k, d.get(k, _Meta_DEFAULTS[k]))
-
 class VideoURI(object):
     __slots__ = ('videoname', 'frame_i', 'frame_t')
 
@@ -841,33 +614,6 @@ class VideoURI(object):
       vu.videoname, vu.frame_i, vu.frame_t = toks
       return vu
 
-# class _VideoReaderCache(object):
-#   lock = threading.Lock()
-#   cache = {}
-#   thruput = util.ThruputObserver(name='VideoReaderCache', log_on_del=True)
-#   local = None
-
-#   @classmethod
-#   def get_frame(cls, name, frame_i, reader_f):
-#     # print threading.current_thread(), threading.active_count()
-#     # if cls.local is None:
-#     #   cls.local = threading.local()
-#     #   print 'new local'
-#     if name not in cls.cache:
-#       with cls.lock:
-#         cls.cache[name] = reader_f()
-#         print 'new reader', name
-
-#     with cls.lock:
-#       cls.thruput.start_block()
-#       d = cls.cache[name].get_data(frame_i)
-#       cls.thruput.stop_block()
-
-#       cls.thruput.update_tallies(n=1, num_bytes=d.nbytes)
-#       if cls.thruput.n % 100 == 0:
-#         print str(cls.thruput)
-#       return d
-
 class FrameProxy(object):
   # NB: must be public to be pickle-able; FMI see note in ImageRow
   __slots__ = ('name', 'data', 'frame_i')
@@ -880,14 +626,14 @@ class FrameProxy(object):
     reader = _VideoReaderCache.get_reader(self.name, self.data)
     return reader.get_frame(self.frame_i)
 
-import klepto
+import klepto # For a LRU cache of imageio Readers / ffmpeg process handles
 class _VideoReaderCache(object):
   _reader_cache_lock = threading.Lock()
 
   class ExclusiveReader(object):
     __slots__ = ('reader', 'lock', 'name', 'thruput')
 
-    # Make compatible with lru cache
+    # Make compatible with klepto.lru_cache
     def __hash__(self):
       return self.name
     def __eq__(self, other):
@@ -956,13 +702,6 @@ class _BytesProxy(object):
     else:
       raise ValueError()
 
-# class _ArrFactory(object):
-#   def __init__(self, parent, i):
-#     self.parent = parent
-#     self.i = i
-#   def __call__(self):
-#     return self.parent.get_frame(self.i)
-
 class Video(object):
   """Flyweight for a single BDD100k video file"""
 
@@ -998,40 +737,6 @@ class Video(object):
       return FrameProxy(name=self.name, data=self.data, frame_i=i)
     else:
       return None
-
-  # def get_frame(self, i):
-  #   """Get the image frame at offset `i`"""
-  #   # if self._local is None:
-  #   #   self._local = threading.local()
-  #   #   print 'new local'
-  #   if not hasattr(self._local, 'reader'):
-  #     self._local.reader = 'yay'#self.get_reader()
-  #     print 'new reader', self.name, threading.current_thread(), threading.active_count()
-  #   else:
-  #     print 're-use reader', self.name
-  #   # return self._local.reader.get_data(i)
-  #   return _VideoReaderCache.get_frame(self.name, i, lambda: self.get_reader())
-
-    # # Use a thread-local, cached imageio reader for the video.  Designed
-    # # so that a Spark worker thread will open a video only once
-    # # (e.g. once per Spark partition)
-    # if self._local is None:
-    #   local = threading.local()
-    #   local.reader = self.get_reader()
-    #   self._local = local
-    #   print 'new local', self._local, dir(self._local)
-    #   print threading.current_thread()
-    # else:
-    #   print 're-use local', self._local, dir(self._local)
-    #   print threading.current_thread()
-    
-    # if not hasattr(self._local, 'reader'):
-    #   self._local.reader = self.get_reader()
-    #   print 'new reader'
-    # else:
-    #   print 're-use reader'
-
-    # return self._local.reader.get_data(i)
   
   def _fill_video_meta(self, videometa):
     imageio_meta = {}
@@ -1062,29 +767,6 @@ class Video(object):
       self._videometa = videometa
     return self._videometa
 
-  # def get_video_meta(self):
-    
-  #   return videometa
-    
-    # assert self.meta is not None, (self.name, self.path)
-    # video_meta = self.meta.to_dict() if self.meta else {}
-    # video_meta.update(**imageio_meta)
-    # video_meta.update({
-    #   'video': self.name,
-    #   'path': self.path,
-    # })
-    # # self._local.reader = None
-    # return VideoMeta(**video_meta)
-
-  # def get_reader(self):
-  #   format = self.name.split('.')[-1]
-  #   # bdd100k videos have some odd dimension issue, so we silence:
-  #   # "the frame size for reading (1280, 720) is different from the source frame size (720, 1280)"
-  #   import imageio
-  #   import imageio.plugins.ffmpeg
-  #   imageio.plugins.ffmpeg.logging.warning = lambda m: True
-  #   return imageio.get_reader(self.data, format=format)
-
   @property
   def data(self):
     """Return a proxy to raw video bytes"""
@@ -1092,16 +774,6 @@ class Video(object):
       return _BytesProxy(fw=self._data, path=self.path)
     else:
       return None
-    # if isinstance(self._data, util.ArchiveFileFlyweight):
-    #   return self._data.data
-    # elif self.path != '':
-    #   # Read the whole movie file
-    #   return open(self.path).read()
-    # else:
-    #   return None
-    #   # raise ValueError(
-    #   #   "No idea what to do with %s %s %s" % (
-    #   #     self._data, self.path, self.name))
 
   @property
   def timeseries(self):
@@ -1121,13 +793,11 @@ class Video(object):
             frame_i=i,
             frame_t=frame_timestamp_ms)
     
-    
-
     return dataset.ImageRow(
       dataset='bdd100k.video',
       split=video_meta.split,
       uri=str(vu),
-      _arr_factory=self.get_frame_proxy(i),#arr_factory,#_ArrFactory(self, i),#lambda: self.get_frame(i),
+      _arr_factory=self.get_frame_proxy(i),
       attrs={
         'nanostamp': int(frame_timestamp_ms * 1e6),
         'bdd100k': {
@@ -1220,8 +890,6 @@ class VideoDebugWebpage(object):
     gps_lons = [v for t, v in TimeseriesRow.get_series('gps.longitude', ts)]
     loc_lats = [v for t, v in TimeseriesRow.get_series('location.latitude', ts)]
     loc_lons = [v for t, v in TimeseriesRow.get_series('location.longitude', ts)]
-    # loc_lats = [l.latitude for t, l in locs]
-    # loc_lons = [l.longitude for t, l in locs]
 
     center_lat = np.mean(gps_lats or loc_lats)
     center_lon = np.mean(gps_lons or loc_lons)
@@ -1250,7 +918,7 @@ class VideoDebugWebpage(object):
         if v)
       gmap.marker(g.latitude, g.longitude, title=title)
 
-    # NB: sadly gmplot can only target files for output
+    # NB: sadly gmplot can only target *files* for output
     dest = dest_base + '.map.html'
     gmap.draw(dest)
     util.log.debug("Saved map to %s" % dest)
@@ -1287,7 +955,7 @@ class VideoDebugWebpage(object):
       plt.plot(ts, vs)
       plt.title(title)
 
-      # Save as a png
+      # Save plot as a png
       def to_filename(value):
         # Based upon: https://stackoverflow.com/a/295466
         import unicodedata
@@ -1304,15 +972,6 @@ class VideoDebugWebpage(object):
       paths.append(dest)
       plt.close(fig) # Important! else python process will OOM
     return paths
-
-
-# NB: add some docs .. http://apache-spark-user-list.1001560.n3.nabble.com/pyspark-serializer-can-t-handle-functions-td7650.html
-# https://github.com/apache/spark/blob/master/python/pyspark/worker.py#L50
-# class _LoadFromMeta(object):
-#   def __init__(self, viddataset):
-#     self.viddataset = viddataset
-#   def __call__(self, meta):
-#     return Video.from_videometa(meta, viddataset=self.viddataset)
 
 _setup_thruput = None
 class VideoDataset(object):
@@ -1377,73 +1036,6 @@ class VideoDataset(object):
   def get_video(cls, videoname):
     return cls._videoname_to_video().get(videoname)
 
-  # @classmethod
-  # def _create_video_rdd(cls, spark):
-  #   """Return an RDD of `Video` instances for all known videos"""
-  #   util.log.info("Finding videos ...")
-  #   if os.path.exists(cls.FIXTURES.video_zip()):
-
-  #     assert False, "TODO require zipfile be decompressed for better caching"
-
-  #     # path = cls.FIXTURES.video_zip()
-  #     # archive_rdd = Spark.archive_rdd(spark, path)
-  #     # video_rdd = archive_rdd.map(
-  #     #   lambda fw: \
-  #     #     Video(name=Video.videoname(fw.name), data=fw))
-  #     # return video_rdd
-    
-  #   elif os.path.exists(cls.FIXTURES.video_dir()):
-
-  #     video_dir = cls.FIXTURES.video_dir()
-  #     util.log.info("Using expanded dir of videos: %s" % video_dir)
-      
-  #     paths = list(util.all_files_recursive(video_dir))
-  #     util.log.info("... found %s total videos." % len(paths))
-      
-  #     videos = [
-  #       Video(name=Video.videoname(p), path=p)
-  #       for p in paths
-  #       if '.mov' in p
-  #     ]
-  #     video_rdd = spark.sparkContext.parallelize(videos)
-  #     return video_rdd
-          
-  #   else:
-  #     raise ValueError(
-  #       "Can't find videos for fixtures %s" % (cls.FIXTURES.__dict__))
-
-  # @classmethod
-  # def _create_videometa_rdd(cls, spark):
-  #   info_entry_rdd = Spark.archive_rdd(spark, cls.FIXTURES.telemetry_zip())
-  #   def to_video_entry(partition_entries):
-  #     for entry in partition_entries:
-  #       if 'json' not in entry.name:
-  #         continue
-        
-  #       video = InfoDataset.json_path_to_video_fname(entry.name)
-  #       yield (video, entry)
-  #   video_info_rdd = info_entry_rdd.mapPartitions(to_video_entry)
-    
-  #   video_rdd = cls._create_video_rdd(spark)
-  #   filename_video = video_rdd.map(lambda v: (v.name, v)).cache()
-  #   joined = video_info_rdd.fullOuterJoin(filename_video)
-    
-  #   import multiprocessing
-  #   joined = joined.repartition(10 * multiprocessing.cpu_count())
-  #   joined = joined.cache()
-    
-  #   def to_video_meta(k_lr):
-  #     key, (meta_entry, video) = k_lr
-  #     meta = Meta.from_zip_entry(meta_entry)
-  #     if not video:
-  #       return VideoMeta(**meta.to_dict())
-  #     video.meta = meta
-  #     print 'row'
-  #     return video.get_video_meta()
-
-  #   videometa_rdd = joined.map(to_video_meta)
-  #   return videometa_rdd
-
   @classmethod
   def load_videometa_df(cls, spark):
     df = spark.read.parquet(cls.FIXTURES.video_index_root())
@@ -1452,10 +1044,7 @@ class VideoDataset(object):
   @classmethod
   def load_video_rdd(cls, spark):
     df = cls.load_videometa_df(spark)
-
-    
-
-    video_rdd = df.rdd.map(lambda meta: Video.from_videometa(meta))# _LoadFromMeta(cls))
+    video_rdd = df.rdd.map(lambda meta: Video.from_videometa(meta))
     return video_rdd
 
   @classmethod
@@ -1521,28 +1110,15 @@ class VideoDataset(object):
       util.log.info("Creating video debug webpages ...")
       video_rdd = cls.load_video_rdd(spark)
 
-      # Protect against plotters from OOMing; also get better progress printout
+      # Repartition to protect against plotters from OOMing; also get better
+      # progress printout
       video_rdd = video_rdd.repartition(
                     max(10, int(video_rdd.count() / 10)))
       video_rdd.foreach(lambda v: VideoDebugWebpage(v).save())
 
-      # # Don't OOM creating webpages
-      # VIDS_PER_PARTITION = 10
-      # n_partitions = max(1, int(video_rdd.count() / VIDS_PER_PARTITION))
-      # video_rdd = video_rdd.repartition(n_partitions)
-      # def save(videos):
-      #   for v in videos:
-      #     try:
-      #       VideoDebugWebpage(v).save()
-      #     except Exception as e:
-      #       for _ in range(10):
-      #         print "wat", e
-      # video_rdd.foreachPartition(save)
-# class _ToRows(object):
-#       def __call__(self, vid):
-#         for r in vid.iter_imagerows():
-#           yield r
-    
+
+### ImageTable interface to Video Frames
+
 class VideoFrameTable(dataset.ImageTable):
 
   TABLE_NAME = 'bdd100k_video_frames'
@@ -1587,15 +1163,10 @@ class VideoFrameTable(dataset.ImageTable):
     # The user will probably map over images, so pre-reparition by video in
     # order to help avoid OOM (too many videos in memory)
     video_rdd = video_rdd.repartition(video_rdd.count())
-    
 
     def to_rows(vid):
       for r in vid.iter_imagerows():
         yield r
-      # for chunk in util.ichunked(vid.iter_imagerows(), 50):
-      #   for r in chunk:
-      #     x = r.as_numpy()
-      #   for r in chunk:
-      #     yield r
-    row_rdd = video_rdd.flatMap(to_rows)#_ToRows())
+
+    row_rdd = video_rdd.flatMap(to_rows)
     return row_rdd

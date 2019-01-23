@@ -43,7 +43,7 @@ def test_imagerow_demo(monkeypatch):
   }
   assert ImageRow().to_dict() == empty_row_as_dict
   
-  ## We can wrap a closure that geneates an image
+  ## We can wrap a closure that generates an image
   def gen_img():
     return np.zeros((32, 32))
   row = ImageRow.wrap_factory(gen_img)
@@ -168,30 +168,9 @@ def test_imagetable_demo(monkeypatch):
     
     assert len(list(ImageTable.iter_all_rows())) == 6
 
-# def test_imagetable_demo_spark(monkeypatch):
-  
-#   TABLE_TEMPDIR = os.path.join(
-#                       testconf.TEST_TEMPDIR_ROOT,
-#                       'ImageTable_pq_spark_demo')
-#   util.cleandir(TABLE_TEMPDIR)
-  
-#   with monkeypatch.context() as m: 
-#     m.setattr(conf, 'AU_TABLE_CACHE', TABLE_TEMPDIR)
-  
-#     ImageTable.setup()
-  
-#     test_img_path = os.path.join(
-#                         conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
-#                         '2929331372_398d58807e.jpg')
-#     rows = ImageTable.get_rows_by_uris((test_img_path, 'not_in_table'))
-#     assert len(rows) == 1
-#     row = rows[0]
-    
-#     expected_bytes = open(test_img_path, 'rb').read()
-#     assert row.image_bytes == expected_bytes
-#     assert row.label == 'coffee'
-    
-#     assert len(list(ImageTable.iter_all_rows())) == 6
+###
+### TODO: spark version of above
+###
 
 class TestFillNormalized(unittest.TestCase):
   def test_identity(self):
@@ -231,7 +210,7 @@ class TestFillNormalized(unittest.TestCase):
     np.testing.assert_array_equal(expected, row.attrs['normalized'])
   
   def test_greyscale_to_rgb(self):
-    # Jpeg can have greyscale images!  See e.g.
+    # Jpeg can have greyscale color mode!  See e.g.
     # mscoco/zips/val2017.zip|val2017/000000007888.jpg
     img = np.zeros((10, 10))
     

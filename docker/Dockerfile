@@ -66,16 +66,6 @@ RUN curl -L --retry 3 \
  && pip install findspark
 COPY docker/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
-# Spark k8s image build requires docker-in-docker
-#RUN \
-#  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add - && \
-#  add-apt-repository \
-#     "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
-#    $(lsb_release -cs) \
-#    stable" && \
-#  apt-get update && \
-#  apt-get install -y docker-ce=18.06.1~ce~3-0~ubuntu
-
 ## Alluxio
 RUN \
   apt-get install -y libfuse-dev && \

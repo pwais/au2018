@@ -85,13 +85,3 @@ def test_spark_archive_zip():
     rdd = testutils.LocalSpark.archive_rdd(spark, fixture_path)
     name_data = rdd.map(lambda entry: (entry.name, entry.data)).collect()
     assert sorted(name_data) == sorted((s, s) for s in ss)
-
-# @pytest.mark.slow
-# def test_spark_uses_cloudpickle():
-#   with testutils.LocalSpark.sess() as spark:
-#     rdd = spark.sparkContext.parallelize([range(10)] * 10)
-#     def iter_x(xs):
-#       moof = lambda xs: xs
-#       for x in moof(xs):
-#         yield x
-#     print rdd.flatMap(iter_x).cache().count()

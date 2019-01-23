@@ -40,27 +40,6 @@ def ichunked(seq, n):
     else:
       break
 
-# @contextmanager
-# def utf8_safe_stdout():
-#   # https://stackoverflow.com/a/44567597
-#   # https://stackoverflow.com/a/39293287
-#   old = sys.getdefaultencoding()
-#   reload(sys)
-#   sys.setdefaultencoding('utf8')
-#   yield
-#   sys.setdefaultencoding(old)
-#   reload(sys)
-#   # old = os.environ.get('PYTHONIOENCODING')
-#   # os.environ['PYTHONIOENCODING'] = 'utf8'
-#   # # import sys
-#   # # old_stdout = sys.stdout
-#   # # sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf8')
-#   # yield
-#   # if old is None:
-#   #   del os.environ['PYTHONIOENCODING']
-#   # else:
-#   #   os.environ['PYTHONIOENCODING'] = old
-
 class Proxy(object):
   __slots__ = ('instance',)
   
@@ -277,25 +256,25 @@ def get_sys_info():
 ### ArchiveFileFlyweight
 
 class _IArchive(object):
-    __SLOTS__ = ('archive_path', 'thread_data')
-    
-    def __init__(self, path):
-      self.archive_path = path
-      self.thread_data = threading.local()
+  __slots__ = ('archive_path', 'thread_data')
+  
+  def __init__(self, path):
+    self.archive_path = path
+    self.thread_data = threading.local()
 
-    def _setup(self, archive_path):
-      pass
+  def _setup(self, archive_path):
+    pass
 
-    @classmethod
-    def list_names(cls, archive_path):
-      return []
+  @classmethod
+  def list_names(cls, archive_path):
+    return []
 
-    def _archive_get(self, name):
-      raise KeyError("Interface stores no data")
+  def _archive_get(self, name):
+    raise KeyError("Interface stores no data")
 
-    def get(self, name):
-      self._setup(self.archive_path)
-      return self._archive_get(name)
+  def get(self, name):
+    self._setup(self.archive_path)
+    return self._archive_get(name)
 
 class _ZipArchive(_IArchive):
   
@@ -314,7 +293,7 @@ class _ZipArchive(_IArchive):
 
 class ArchiveFileFlyweight(object):
 
-  __SLOTS__ = ('name', 'archive')
+  __slots__ = ('name', 'archive')
 
   def __init__(self, name='', archive=None):
     self.name = name
@@ -534,36 +513,8 @@ class GPUInfo(object):
   def num_total_gpus():
     return len(GPUInfo.get_infos())
 
-
-
-
-  # lines = out.split('\n')
-  # assert lines[0] == 'index, name', "Nvidia why? %s" % (out,)
-  # rows = [
-  #   {'index': int(toks[0].strip()), 'name': toks[1].strip()}
-  #   for toks in (line.split(',') for line in lines[1:] if line)
-  # ]
-
-# def get_gpus():
-  
-#   log.info("Found GPUs: %s" % (rows,))
-
-#   gpus = []
-#   if 'CUDA_VISIBLE_DEVICES' in os.environ:
-#     allowed_gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
-#     log.info("... restricting to %s ..." % (allowed_gpus,))
-#     for row in rows:
-#       if row['index'] in allowed_gpus:
-#         gpus.append(row['index'])
-#   else:
-#     gpus = [row['index'] for row in rows]
-#   log.info("Using GPUs: %s" % (gpus,))
-#   return gpus
-
-
 import fasteners
 import pickle
-
 class GPUPool(object):
   """
   An arbiter providing system-wide mutually exclusive handles to GPUs.  Mutual
@@ -602,11 +553,9 @@ class GPUPool(object):
       self._set_gpus(gpus)
       return handle
 
-
   # Make pickle-able for interop with Spark
   def __getstate__(self):
     return {'path': self.lock.path}
-  
   def __setstate__(self, d):
     self.lock = fasteners.InterProcessLock(d['path'])
 
@@ -675,18 +624,6 @@ def tf_cpu_session(config=None):
   return tf_create_session(config=config)
 
 @contextmanager
-def loop_until_data_exausted():
-  """Similar to MonitoredTrainingSession.StepContext but allows us to
-    use tf.Datasets / iterators with any Session."""
-  import tensorflow as tf
-  while True:
-    try:
-      yield
-    # NB: tf.Dataset iterators throw these exceptions when all data consumed
-    except (tf.errors.OutOfRangeError, StopIteration):
-      break
-
-@contextmanager
 def tf_data_session(dataset, sess=None, config=None):
   import tensorflow as tf
 
@@ -696,8 +633,7 @@ def tf_data_session(dataset, sess=None, config=None):
   
   # Silly way to iterate over a tf.Dataset
   # https://stackoverflow.com/a/47917849
-  # config = config or tf_create_session_config(restrict_gpus=[])
-  sess = sess or tf_cpu_session()#tf.Session(config=config)#tf.train.MonitoredTrainingSession(config=config)  
+  sess = sess or tf_cpu_session()
   with sess as sess:
     def iter_dataset():
       # see MonitoredTrainingSession.StepContext
@@ -709,12 +645,8 @@ def tf_data_session(dataset, sess=None, config=None):
           break
     yield sess, iter_dataset
 
-# @contextmanager
-# def keras_use_session(sess):
-#   import tensorflo as tf
-#   old_sess = tf.keras.backend.get_se
-#   tf.keras.backend.set_session(sess)
-
+# NB: we must use a multiprocessing.Process for Tensorflow GPU usage.  Keeping
+# this commented cruft as a reminder.
 # class TFSessionPool(object):
 #   """
 #   TODO docs

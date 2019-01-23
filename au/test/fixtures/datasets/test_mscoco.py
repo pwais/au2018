@@ -89,7 +89,7 @@ class TestMSCOCOImageTable(unittest.TestCase):
         uris = [mscoco.ImageURI.from_uri(r.uri) for r in rows]
         fnames = set(u.image_fname for u in uris)
         assert len(fnames) == (TestFixtures.NUM_IMAGES_IN_TEST_ZIP - 1)
-                                    # subtract zip folder entry
+                                    # subtract zip folder entry ...
         assert set(table.EXPECTED_FNAMES) - fnames == set([])
         assert all(len(r.image_bytes) > 0 for r in rows)
 
@@ -112,3 +112,6 @@ class TestMSCOCOImageTable(unittest.TestCase):
       
       TestTable.MODEL_PARAMS.INFERENCE_BATCH_SIZE = 10
       TestTable.setup(spark=spark)
+
+      df = spark.read.parquet(TestTable.table_root()).show()
+      

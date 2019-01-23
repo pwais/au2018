@@ -8,7 +8,6 @@ import os
 import pytest
 
 
-
 ## Fixtures
 
 class TestFixtures(bdd100k.Fixtures):
@@ -43,10 +42,6 @@ class TestVideoFrameTable(bdd100k.VideoFrameTable):
     # contain ~12k frames.  So here we restrict to a small subset.
 
     row_rdd = super(TestVideoFrameTable, cls).as_imagerow_rdd(spark)
-
-    # class IsTargetVideo(object):
-    #   def __call__(self, row):
-    #     return '0000f77c-6257be58.mov' in row.uri
 
     video_rows = row_rdd.filter(lambda row: cls.TARGET_VID in row.uri) #IsTargetVideo())
     rows = video_rows.take(cls.N_FRAMES)
@@ -145,15 +140,6 @@ class BDD100kTests(unittest.TestCase):
           w = bdd100k.VideoDebugWebpage(video)
           w.save()
 
-    #   ts_row_rdd = TestInfoDataset._info_table_from_zip(spark)
-    #   # df = ts_row_rdd#spark.createDataFrame(ts_row_rdd)
-    #   # import ipdb; ipdb.set_trace()
-    #   df = TestInfoDataset._ts_table_from_info_table(spark, ts_row_rdd)
-    #   df.printSchema()
-    #   df.registerTempTable('moof')
-    #   spark.sql('select * from moof').show()
-    #   # spark.sql('select * from moof').write.parquet('/tmp/yyyyyy', partitionBy=['split', 'video'], compression='gzip')
-    
   @pytest.mark.slow
   def test_video_activations(self):
     if not self.have_fixtures:
@@ -185,6 +171,8 @@ class BDD100kTests(unittest.TestCase):
 
 
 """
+TODO DELETEME Notes on data growth:
+
  'MobilenetV2/Logits/output:0',
         'MobilenetV2/embedding:0',
          'MobilenetV2/expanded_conv_16/output:0',

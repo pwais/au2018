@@ -163,11 +163,6 @@ class Spark(object):
       builder = builder.enableHiveSupport()
     spark = builder.getOrCreate()
 
-    # barf https://github.com/apache/spark/blob/c3c45cbd76d91d591d98cf8411fcfd30079f5969/python/pyspark/worker.py#L359
-    # # from pyspark.serializers import AutoBatchedSerializer
-    # from pyspark.serializers import CloudPickleSerializer
-    # spark.sparkContext._unbatched_serializer = CloudPickleSerializer()
-
     # spark.sparkContext.setLogLevel('INFO')
 
     spark.sparkContext.addPyFile(cls.egg_path())

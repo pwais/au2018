@@ -46,6 +46,7 @@ def test_mobilenet_inference_graph(monkeypatch):
         all_preds.add(preds)
       
         # The Small model consistently gets this one right
+        assert '202228408_eccfe4790e.jpg' in ' '.join(row.uri for row in out_rows)
         if '202228408_eccfe4790e.jpg' in row.uri:
           from slim.datasets import imagenet
           label_map = imagenet.create_readable_names_for_imagenet_labels()
@@ -54,7 +55,7 @@ def test_mobilenet_inference_graph(monkeypatch):
 
 
 
-    # For debugging, this is a Panda that the model predicts corectly per
+    # For debugging, this is a Panda that the model predicts correctly per
     # https://colab.research.google.com/github/tensorflow/models/blob/master/research/slim/nets/mobilenet/mobilenet_example.ipynb
     # import imageio
     # im = imageio.imread('https://upload.wikimedia.org/wikipedia/commons/f/fe/Giant_Panda_in_Beijing_Zoo_1.JPG')

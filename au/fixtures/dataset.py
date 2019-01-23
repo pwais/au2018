@@ -22,7 +22,9 @@ class ImageRow(object):
   # pickle-able.  I.e. attributes cannot be free functions, since only
   # cloudpickle can serialize functions.  FMI:
   # http://apache-spark-user-list.1001560.n3.nabble.com/pyspark-serializer-can-t-handle-functions-td7650.html
-  # https://github.com/apache/spark/blob/master/python/pyspark/worker.py#L50
+  # https://github.com/apache/spark/blob/c3c45cbd76d91d591d98cf8411fcfd30079f5969/python/pyspark/worker.py#L50
+  # https://github.com/apache/spark/blob/c3c45cbd76d91d591d98cf8411fcfd30079f5969/python/pyspark/worker.py#L359
+  
 
   __slots__ = (
     'dataset',
@@ -32,7 +34,7 @@ class ImageRow(object):
     '_image_bytes',  # NB: see property image_bytes
     '_cached_image_arr', # TODO: use __ for privates .. idk 
     '_cached_image_fobj',
-    '_arr_factory', # NB: must be a callable object; see above
+    '_arr_factory', # NB: must be a callable *object*; see above
     
     'label',
     'attrs',
@@ -42,6 +44,12 @@ class ImageRow(object):
 #     '_cached_label_fobj',
   )
   
+  DEFAULT_PQ_PARTITION_COLS = ['dataset', 'split']
+    # NB: must be a list and not a tuple due to pyarrow c++ api
+
+  # Old pickle API requires __{get,set}state__ for classes that define
+  # __slots__.  Some part of Spark uses this API for serializatio, so we
+  # provide an impl.
   def __getstate__(self):
     return self.to_dict()
   
@@ -49,10 +57,8 @@ class ImageRow(object):
     for k in self.__slots__:
       setattr(self, k, d.get(k, ''))
     self._image_bytes = d.get('image_bytes', self._image_bytes)
-
-  DEFAULT_PQ_PARTITION_COLS = ['dataset', 'split']
-    # NB: must be a list and not a tuple due to pyarrow c++ api
   
+
   def __init__(self, **kwargs):
     for k in self.__slots__:
       setattr(self, k, kwargs.get(k, ''))
@@ -108,6 +114,7 @@ class ImageRow(object):
 
       elif k == '_image_bytes':
         attrs.append(('image_bytes', bytearray(self.image_bytes)))
+          # NB: must be bytearray to support parquet / pyspark type inference
 #       elif k == '_label_bytes':
 #         attrs.append(('label_bytes', self.label_bytes))
     return OrderedDict(attrs)
@@ -233,7 +240,7 @@ class ImageRow(object):
         dest_dir,
         rows_per_file=-1,
         partition_cols=DEFAULT_PQ_PARTITION_COLS,
-        compression='lz4',
+        compression='lz4', # NB: pyarrow-pyspark lz4 interop is broken :(
         spark=None):
     
     is_rdd, is_pyspark_df = False, False
@@ -259,8 +266,6 @@ class ImageRow(object):
     if is_pyspark_df:
       util.log.info("Writing parquet to %s ..." % dest_dir)
       df.printSchema() # NB: can't .show() b/c of binary data
-      # import tabulate
-      # util.log.info("\n\n" + tabulate.tabulate(df.limit(20).toPandas(), headers='keys', tablefmt='psql') + "\n\n")
       df.write.parquet(
         dest_dir,
         mode='append',

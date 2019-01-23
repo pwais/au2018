@@ -127,14 +127,10 @@ def test_activations_sobel(monkeypatch):
 def test_activations_sobel_spark(monkeypatch):
   fixture = _create_fixture(monkeypatch)
 
-  # rows = dataset.ImageTable.iter_all_rows()
   with testutils.LocalSpark.sess() as spark:
     sc = spark.sparkContext
     rdd = sc.parallelize(fixture.rows)
     rdd = rdd.mapPartitions(fixture.filler)
-    
-    # df = rdd.map(lambda r: r.to_dict()).toDF()
-    # df.save.parque('/tmp/yay')
 
     filled = rdd.collect()
     _check_rows(fixture, filled)

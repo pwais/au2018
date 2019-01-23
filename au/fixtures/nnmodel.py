@@ -190,37 +190,20 @@ class FillActivationsTFDataset(FillActivationsBase):
       d = d.batch(self.tigraph_factory.batch_size)
       input_image = d.make_one_shot_iterator().get_next()
     
-    print 'create inf graph'
+    util.log.info("Creating inference graph ...")
     final_graph = self.tigraph_factory.create_inference_graph(
                                               input_image,
                                               graph)
-    print 'done create inf graph'
+    util.log.info("... done creating inference graph.")
 
     with final_graph.as_default():
-      # g = self.pool.get_free_gpu()
-      # print 'ggggggggggggggggggggggg', g
-      # if g:
-      #   restrict_gpus = [g.info.index]
-      #   self.tf_thruput.name = self.tf_thruput.name + '.gpu=' + str(g.info.index)
-      # else:
-      #   restrict_gpus = []
-      #   self.tf_thruput.name = self.tf_thruput.name + '.cpu'
-      # config = util.tf_create_session_config(restrict_gpus=restrict_gpus)
-
-      # TODO: can we just use vanilla Session? & handle a tf.Dataset Stop?
+      # TODO: support using single GPUs; requires running in a subprocess
+      # due to Tensorflow memory madness :( 
       with util.tf_cpu_session() as sess:
-
-      # msess = util.TFSessionPool.get_best_session()
-      # suffix = '.gpu' if msess.gpus else '.cpu'
-      # self.tf_thruput.name = self.tf_thruput.name + suffix
-      # with msess.sess.as_default():
-        # with msess.sess as sess: #tf.train.MonitoredTrainingSession(config=config) as sess:
-          # log.info("Session devices: %s" % ','.join(
-          #                           (d.name for d in sess.list_devices())))
           
         tensors_to_eval = self.tigraph_factory.output_names
         assert tensors_to_eval
-        # see MonitoredTrainingSession.StepContext
+        
         while True:
           try:
             self.tf_thruput.start_block()
@@ -228,6 +211,7 @@ class FillActivationsTFDataset(FillActivationsBase):
             self.tf_thruput.stop_block()
                 # NB: above will processes `batch_size` rows in one run()
           except (tf.errors.OutOfRangeError, StopIteration):
+            # see MonitoredTrainingSession.StepContext
             break
           
           assert len(result) >= 1
@@ -254,11 +238,8 @@ class FillActivationsTFDataset(FillActivationsBase):
     
             self.tf_thruput.update_tallies(n=1)
             self.overall_thruput.update_tallies(n=1)
-      print "END SESSION"
     tf.reset_default_graph()
     self.overall_thruput.stop_block()
-
-
 
 
 
@@ -319,51 +300,3 @@ class ActivationsTable(object):
                 compression='lz4',
                 partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
     log.info("... wrote to %s ." % cls.table_root())
-
-  # @classmethod
-  # def get_as_imagerow_rdd(cls, spark=None, include_images=True):
-  #   log = util.create_log()
-  #   log.info("Reading from %s ..." % cls.table_root())
-
-  #   spark = spark or util.Spark.getOrCreate()
-
-  #   df = spark.read.parquet(cls.table_root())
-  #   df.registerTempTable("tmp_activations_df_%s" % cls.TABLE_NAME)
-  #   if include_images:
-  #     df = spark.read.parquet(cls.IMAGE_TABLE_CLS.table_root())
-  #     df.registerTempTable("tmp_images_%s" % cls.TABLE_NAME)
-
-  #     query = """
-  #       SELECT
-
-  #     img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
-
-
-  #   else:
-  #     df = activations_df
-    
-
-
-        
-
-
-"""
-
-au_image_bytes = tf.placeholder(tf.string, [], name="au_image_bytes")
-image_uint8 = tf.decode_raw(image_buffer, tf.uint8, name="decode_raw")
-image_float = tf.to_float(image_uint8)
-
-
-make these things pluggable so we can test ... :)
-
-a ftor that takes in image rows and manipulates them-- preprocess:
-  * decode to numpy
-  * resize
-  * mebbe do mean sub on numpy array
-  * mebbe FILL the resized numpy... see if parrow likes that?
-
-a ftor that takes in image rows, runs inference, and fills each image
-  row with activations and stuff.  use tf.Dataset.from_tensor_slices
-  and feed_dict to feed in numpy.
-
-"""
