@@ -10,8 +10,6 @@ import os
 import numpy as np
 import pytest
 
-# MODEL_BASEDIR = '/tmp/au_test/test_mobilenet'
-
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mobilenet')
 
 @pytest.mark.slow
@@ -73,6 +71,7 @@ def test_mobilenet_activation_tables(monkeypatch):
   with testutils.LocalSpark.sess() as spark:
     for params_cls in mobilenet.Mobilenet.ALL_PARAMS_CLSS:
       params = params_cls()
+      params.INFERENCE_BATCH_SIZE = 1
 
       class TestTable(nnmodel.ActivationsTable):
         TABLE_NAME = 'Mobilenet_test_' + params_cls.__name__
