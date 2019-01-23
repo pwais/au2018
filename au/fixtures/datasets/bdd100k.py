@@ -926,7 +926,6 @@ class _VideoReaderCache(object):
   @staticmethod
   @klepto.lru_cache(maxsize=50)
   def _get_reader(name, data):
-    print 'uncached', name
     return _VideoReaderCache.ExclusiveReader(name, data)
   
   @classmethod

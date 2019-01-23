@@ -1,6 +1,7 @@
 fasteners
 gmplot
 imageio
+klepto
 keras==2.2.2
 matplotlib
 opencv-python
