@@ -768,8 +768,10 @@ def give_me_frozen_graph(
         graph.as_graph_def(add_shapes=True),
         [op.name for op in ops])
         # variable_names_blacklist=blacklist)
-  g = tf.Graph()
-  with g.as_default():
-    tf.import_graph_def(gdef_frozen, name='')
-  return g
+  return gdef_frozen
+  
+  # g = tf.Graph()
+  # with g.as_default():
+  #   tf.import_graph_def(gdef_frozen, name='')
+  # return g
   

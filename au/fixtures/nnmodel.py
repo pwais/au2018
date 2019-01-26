@@ -156,10 +156,10 @@ class FillActivationsTFDataset(FillActivationsBase):
     def iter_normalized_np_images():
       normalize = self.tigraph_factory.make_normalize_ftor()
       for row in iter_imagerows:
-        row = normalize(row)        
-        processed_rows.put(row, block=True)
+        row = normalize(row)
+        processed_rows.put(row)
         arr = row.attrs['normalized']
-        yield arr
+        yield row.uri, arr
         
         self.tf_thruput.update_tallies(num_bytes=arr.nbytes)
         self.overall_thruput.update_tallies(num_bytes=arr.nbytes)
@@ -181,16 +181,21 @@ class FillActivationsTFDataset(FillActivationsBase):
       input_shape = list(self.tigraph_factory.input_tensor_shape)
       input_shape = input_shape[1:]
       d = tf.data.Dataset.from_generator(
-                      iter_normalized_np_images,
-                      tf.uint8,
-                      input_shape)
+                      generator=iter_normalized_np_images,
+                      output_types=(tf.string, tf.uint8),
+                      output_shapes=(tf.TensorShape([]), input_shape))
       d = d.batch(self.tigraph_factory.batch_size)
-      input_image = d.make_one_shot_iterator().get_next()
+      uris, input_image = d.make_one_shot_iterator().get_next()
+      uris = tf.identity(uris, name='au_inf_uris')
     
     util.log.info("Creating inference graph ...")
     final_graph = self.tigraph_factory.create_inference_graph(
+      uris,
                                               input_image,
                                               graph)
+    # with final_graph.as_default() as g:
+    #   uris = tf.identity(uris, name='au_uris')
+    #   assert uris.graph is g
     util.log.info("... done creating inference graph.")
 
     with final_graph.as_default():
@@ -198,32 +203,44 @@ class FillActivationsTFDataset(FillActivationsBase):
       # due to Tensorflow memory madness :( 
       with util.tf_cpu_session() as sess:
           
-        tensors_to_eval = self.tigraph_factory.output_names
+        tensors_to_eval = list(self.tigraph_factory.output_names)
         assert tensors_to_eval
+        tensors_to_eval.append('au_inf_uris:0')
         
+        uri_to_row_cache = {}
         while True:
           try:
             self.tf_thruput.start_block()
-            result = sess.run(tensors_to_eval)
+            output = sess.run(tensors_to_eval)
             self.tf_thruput.stop_block()
                 # NB: above will processes `batch_size` rows in one run()
           except (tf.errors.OutOfRangeError, StopIteration):
             # see MonitoredTrainingSession.StepContext
             break
           
-          assert len(result) >= 1
-          batch_size = result[0].shape[0]
+          assert len(output) >= 1
+          batch_size = output[0].shape[0]
           for n in range(batch_size):
-            row = processed_rows.get(block=True)
-              # NB: we expect worker threads to spend most of their time
-              # blocking on the Tensorflow `sess.run()` call above, so
-              # this Queue::get() call should in practice block very rarely.
-              # Confirm using thruput stats (`overall_thruput` vs `tf_thruput`)
-
             tensor_to_value = dict(
-                        (name, result[i][n,...])
+                        (name, output[i][n,...])
                         for i, name in enumerate(tensors_to_eval))
+            row_uri = str(tensor_to_value['au_inf_uris:0'])
 
+            # Find the row corresponding to this output
+            for _ in range(100 * batch_size):
+              if row_uri in uri_to_row_cache:
+                break
+              else:
+                row = processed_rows.get()
+                  # NB: we expect worker threads to spend most of their time
+                  # blocking on the Tensorflow `sess.run()` call above, and
+                  # sessions should process rows roughly in order (within
+                  # the tolerance of this inner loop), so this Queue::get()
+                  # call should be fast and correct.
+                uri_to_row_cache[row.uri] = row
+            row = uri_to_row_cache.pop(row_uri) # Don't let cache grow
+
+            # Fill the row with the activation data
             if 'activations' not in row.attrs:
               row.attrs['activations'] = []  
             

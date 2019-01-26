@@ -215,30 +215,69 @@ def mnist_train(params):
 class MNISTGraph(nnmodel.TFInferenceGraphFactory):
   def __init__(self, params):
     self.params = params
-    
-  def create_inference_graph(self, input_image, base_graph):
-    log = util.create_log()
-    
-    with base_graph.as_default():  
+  
+  def create_frozen_graph_def(self):
+    g = tf.Graph()
+    with g.as_default():
       sess = util.tf_cpu_session()
       with sess.as_default():
         tf_model = create_model()
 
-        # Create ops and load weights
+        input_image = tf.placeholder(tf.float32, self.params.INPUT_TENSOR_SHAPE, name='au_inf_input')
+        uris = tf.placeholder(tf.string, [None], name='au_inf_uris')
         
-        # root = tf.train.Checkpoint(model=tf_model)
-        # root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
-        # log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
-          
-        pred = tf_model(tf.cast(input_image, tf.float32), training=False)
+        pred = tf_model(input_image, training=False)
         checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
-        saver = tf.train.import_meta_graph(checkpoint + '.meta', clear_devices=True)
-        self.graph = util.give_me_frozen_graph(
+        saver = tf.train.import_meta_graph(
+                              checkpoint + '.meta',
+                              clear_devices=True)
+        return util.give_me_frozen_graph(
                             checkpoint,
-                            nodes=self.output_names,
+                            nodes=list(self.output_names) + [input_image, uris],
                             saver=saver,
-                            base_graph=base_graph,
+                            base_graph=g,
                             sess=sess)
+
+
+  def create_inference_graph(self, uris, input_image, base_graph):
+    log = util.create_log()
+
+    gdef_frozen = self.create_frozen_graph_def()
+
+    self.graph = base_graph
+    with self.graph.as_default():
+      tf.import_graph_def(
+        gdef_frozen,
+        name='',
+        input_map={
+          'au_inf_input': tf.cast(input_image, tf.float32),
+          'au_inf_uris': uris,
+              # https://stackoverflow.com/a/33770771
+        })
+
+    # with base_graph.as_default():
+    #   sess = util.tf_cpu_session()
+    #   with sess.as_default():
+    #     tf_model = create_model()
+
+    #     # Create ops and load weights
+        
+    #     # root = tf.train.Checkpoint(model=tf_model)
+    #     # root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
+    #     # log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
+          
+    #     pred = tf_model(tf.cast(input_image, tf.float32), training=False)
+    #     uris = tf.identity(uris, name='au_uris')
+    #     checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
+    #     saver = tf.train.import_meta_graph(
+    #                           checkpoint + '.meta',
+    #                           clear_devices=True)
+    #     self.graph = util.give_me_frozen_graph(
+    #                         checkpoint,
+    #                         nodes=list(self.output_names) + [input_image, uris],
+    #                         saver=saver,
+    #                         base_graph=base_graph,
+    #                         sess=sess)
 
     import pprint
     log.info("Loaded graph:")
@@ -351,7 +390,7 @@ class MNISTDataset(dataset.ImageTable):
 
 def setup_caches():
   MNIST.load_or_train()
-  MNISTDataset.init()
+  MNISTDataset.setup()
 
 if __name__ == '__main__':
   # self-test / demo mode!

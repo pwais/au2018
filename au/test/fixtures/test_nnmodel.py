@@ -124,7 +124,7 @@ def test_activations_sobel(monkeypatch):
   _check_rows(fixture, filled)
   
 @pytest.mark.slow
-def test_activations_sobel_spark(monkeypatch):
+def test_spark_activations_sobel(monkeypatch):
   fixture = _create_fixture(monkeypatch)
 
   with testutils.LocalSpark.sess() as spark:

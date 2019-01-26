@@ -59,8 +59,9 @@ class Mobilenet(nnmodel.INNModel):
     def create_inference_graph(self, input_image, base_graph):
       util.download(self.params.CHECKPOINT_TARBALL_URI, self.params.MODEL_BASEDIR)
       
-      self.graph = base_graph
-      with self.graph.as_default():        
+      # self.graph = base_graph
+      g = tf.Graph()
+      with g.as_default():
         input_image = tf.cast(input_image, tf.float32) / 128. - 1
         input_image.set_shape(self.params.INPUT_TENSOR_SHAPE)
 
@@ -82,11 +83,11 @@ class Mobilenet(nnmodel.INNModel):
       checkpoint = os.path.join(
         self.params.MODEL_BASEDIR,
         self.params.CHECKPOINT + '.ckpt')
-      nodes = list(self.output_names) + [input_image]
+      # nodes = list(self.output_names) + [input_image]
       self.graph = util.give_me_frozen_graph(
                               checkpoint,
                               nodes=self.output_names,
-                              base_graph=self.graph,
+                              base_graph=base_graph,
                               saver=saver)
       return self.graph
     
