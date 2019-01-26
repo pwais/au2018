@@ -240,7 +240,7 @@ class ImageRow(object):
         dest_dir,
         rows_per_file=-1,
         partition_cols=DEFAULT_PQ_PARTITION_COLS,
-        compression='lz4', # NB: pyarrow-pyspark lz4 interop is broken :(
+        compression='lz4',
         spark=None):
     
     is_rdd, is_pyspark_df = False, False
@@ -307,7 +307,8 @@ class ImageRow(object):
               dest_dir,
               partition_cols=partition_cols,
               preserve_index=False, # Don't care about pandas index
-              compression=compression,
+              compression='snappy',
+                # NB: pyarrow lz4 is totes broken https://github.com/apache/arrow/issues/3491
               flavor='spark')
         util.log.info("... wrote %s rows ..." % len(row_chunk))
       util.log.info("... done writing to %s ." % dest_dir)

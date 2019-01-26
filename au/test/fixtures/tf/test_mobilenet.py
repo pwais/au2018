@@ -66,7 +66,6 @@ def test_mobilenet_inference_graph(monkeypatch):
 # FIXME: CI only has 8GB of RAM, and that's not enough for this test.  We tried
 # to profile but discovered no clear Python memory issue; might be Tensorflow.
 @pytest.mark.slow
-@pytest.mark.highmem
 def test_mobilenet_activation_tables(monkeypatch):
   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
   dataset.ImageTable.setup()
@@ -74,7 +73,6 @@ def test_mobilenet_activation_tables(monkeypatch):
   with testutils.LocalSpark.sess() as spark:
     for params_cls in mobilenet.Mobilenet.ALL_PARAMS_CLSS:
       params = params_cls()
-      params.INFERENCE_BATCH_SIZE = 1
 
       class TestTable(nnmodel.ActivationsTable):
         TABLE_NAME = 'Mobilenet_test_' + params_cls.__name__

@@ -146,9 +146,8 @@ class FillActivationsTFDataset(FillActivationsBase):
     
     import Queue
     import tensorflow as tf
-    
-    log = util.create_log()
-    log.info(
+
+    util.log.info(
       "Filling activations for %s ..." % self.tigraph_factory.model_name)
     
     graph = tf.Graph()
@@ -239,8 +238,6 @@ class FillActivationsTFDataset(FillActivationsBase):
     tf.reset_default_graph()
     self.overall_thruput.stop_block()
 
-
-
 class ActivationsTable(object):
 
   TABLE_NAME = 'default'
@@ -263,7 +260,7 @@ class ActivationsTable(object):
 
     model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
     filler = FillActivationsTFDataset(model=model)
-    
+
     activated = img_rdd.mapPartitions(filler)
 
     def to_activation_rows(imagerows):
