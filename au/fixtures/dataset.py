@@ -48,7 +48,7 @@ class ImageRow(object):
     # NB: must be a list and not a tuple due to pyarrow c++ api
 
   # Old pickle API requires __{get,set}state__ for classes that define
-  # __slots__.  Some part of Spark uses this API for serializatio, so we
+  # __slots__.  Some part of Spark uses this API for serialization, so we
   # provide an impl.
   def __getstate__(self):
     return {'as_tuple': self.astuple()}
