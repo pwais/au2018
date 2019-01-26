@@ -16,6 +16,16 @@ from au import util
 class ImageRow(object):
   """For expected usage, see `test_imagerow_demo`"""
   
+
+  # NB: While pyspark uses cloudpickle for *user code*, it uses normal
+  # pickle for *data*, so the contents of ImageRow instances must be
+  # pickle-able.  I.e. attributes cannot be free functions, since only
+  # cloudpickle can serialize functions.  FMI:
+  # http://apache-spark-user-list.1001560.n3.nabble.com/pyspark-serializer-can-t-handle-functions-td7650.html
+  # https://github.com/apache/spark/blob/c3c45cbd76d91d591d98cf8411fcfd30079f5969/python/pyspark/worker.py#L50
+  # https://github.com/apache/spark/blob/c3c45cbd76d91d591d98cf8411fcfd30079f5969/python/pyspark/worker.py#L359
+  
+
   __slots__ = (
     'dataset',
     'split',
@@ -24,6 +34,7 @@ class ImageRow(object):
     '_image_bytes',  # NB: see property image_bytes
     '_cached_image_arr', # TODO: use __ for privates .. idk 
     '_cached_image_fobj',
+    '_arr_factory', # NB: must be a callable *object*; see above
     
     'label',
     'attrs',
@@ -35,7 +46,19 @@ class ImageRow(object):
   
   DEFAULT_PQ_PARTITION_COLS = ['dataset', 'split']
     # NB: must be a list and not a tuple due to pyarrow c++ api
+
+  # Old pickle API requires __{get,set}state__ for classes that define
+  # __slots__.  Some part of Spark uses this API for serializatio, so we
+  # provide an impl.
+  def __getstate__(self):
+    return {'as_tuple': self.astuple()}
   
+  def __setstate__(self, d):
+    for k, v in zip(self.__slots__, d['as_tuple']):
+      setattr(self, k, v)
+    # self._image_bytes = d.get('image_bytes', self._image_bytes)
+  
+
   def __init__(self, **kwargs):
     for k in self.__slots__:
       setattr(self, k, kwargs.get(k, ''))
@@ -52,6 +75,7 @@ class ImageRow(object):
     return tuple(getattr(self, k) for k in self.__slots__)
 
   def __lt__(self, other):
+    # Important! Otherwise Python might break ties in unexpected ways
     return self.astuple() < other.astuple()
 
   @staticmethod
@@ -61,6 +85,12 @@ class ImageRow(object):
     row.label = label
     return row
   
+  @staticmethod
+  def wrap_factory(np_img_factory, **kwargs):
+    row = ImageRow(**kwargs)
+    row._arr_factory = np_img_factory
+    return row
+
   @staticmethod
   def from_path(path, **kwargs):
     # NB: The ImageRow instance will be a flyweight for the image data
@@ -83,25 +113,32 @@ class ImageRow(object):
         attrs.append((k, v))
 
       elif k == '_image_bytes':
-        attrs.append(('image_bytes', self.image_bytes))
+        attrs.append(('image_bytes', bytearray(self.image_bytes)))
+          # NB: must be bytearray to support parquet / pyspark type inference
 #       elif k == '_label_bytes':
 #         attrs.append(('label_bytes', self.label_bytes))
     return OrderedDict(attrs)
   
   def as_numpy(self):
     if self._cached_image_arr is '':
-      image_bytes = self.image_bytes
-      if image_bytes is '':
-        # Can't make an array
-        return np.array([])
-      
-      self._cached_image_arr = imageio.imread(io.BytesIO(image_bytes))
+      if self._arr_factory is not '':
+        self._cached_image_arr = self._arr_factory()
+      else:
+        image_bytes = self.image_bytes
+        if image_bytes is '':
+          # Can't make an array
+          return np.array([])
+        
+        self._cached_image_arr = imageio.imread(io.BytesIO(image_bytes))
     return self._cached_image_arr
   
   @property
   def image_bytes(self):
     if self._image_bytes is '':
       # Read lazily
+      if self._arr_factory is not '' and self._cached_image_arr is '':
+        self._cached_image_arr = self._arr_factory()
+
       if self._cached_image_arr is not '':
         buf = io.BytesIO()
         imageio.imwrite(buf, self._cached_image_arr, format='png')
@@ -109,6 +146,7 @@ class ImageRow(object):
       elif self._cached_image_fobj is not '':
         self._image_bytes = self._cached_image_fobj.read()
         self._cached_image_fobj = ''
+    
     return self._image_bytes
 
 #   @property
@@ -196,59 +234,90 @@ class ImageRow(object):
       row.update(**kwargs)
       yield ImageRow(**row)
 
-  # @staticmethod
-  # def from_spark(df, spark, **kwargs):
-
   @staticmethod
   def write_to_parquet(
         rows,
         dest_dir,
         rows_per_file=-1,
         partition_cols=DEFAULT_PQ_PARTITION_COLS,
-        compression='snappy'):
+        compression='lz4',
+        spark=None):
     
-    import pandas as pd
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+    is_rdd, is_pyspark_df = False, False
+    try:
+      import pyspark.rdd
+      import pyspark.sql
+      is_rdd = isinstance(rows, pyspark.rdd.RDD)
+      is_pyspark_df = isinstance(rows, pyspark.sql.dataframe.DataFrame)
+      if is_pyspark_df:
+        df = rows
+    except ImportError:
+      pass
     
-    log = create_log()
-    
-    if rows_per_file >= 1:
-      irows = util.ichunked(rows, rows_per_file)
-    else:
-      rows = list(rows)
-      if not rows:
-        return
-      irows = iter([rows])
-    
-    log.info("Writing parquet to %s ..." % dest_dir)
-    for row_chunk in irows:
-      r = row_chunk[0]
-      
-      # Pandas wants dicts
-      if isinstance(r, ImageRow):
-        row_chunk = [r.to_dict() for r in row_chunk]
+    if is_rdd:
+      assert spark is not None
+      from pyspark.sql import Row
 
-      df = pd.DataFrame(row_chunk)
-      table = pa.Table.from_pandas(df)
-      util.mkdir(dest_dir)
-      pq.write_to_dataset(
-            table,
-            dest_dir,
-            partition_cols=partition_cols,
-            preserve_index=False, # Don't care about pandas index
-            compression=compression,
-            flavor='spark')
-      log.info("... wrote %s rows ..." % len(row_chunk))
-    log.info("... done writing to %s ." % dest_dir)
+      # RDD[ImageRow] -> DataFrame[ImageRow]
+      rows_rdd = rows.map(lambda r: Row(**r.to_dict()))
+      df = spark.createDataFrame(rows_rdd)
+      is_pyspark_df = True
+    
+    if is_pyspark_df:
+      util.log.info("Writing parquet to %s ..." % dest_dir)
+      df.printSchema() # NB: can't .show() b/c of binary data
+      df.write.parquet(
+        dest_dir,
+        mode='append',
+        partitionBy=partition_cols,
+        compression=compression)
+      util.log.info("... done! Wrote to %s ." % dest_dir)
+    
+    else:
+
+      # Use Pyarrow to write Parquet in this process
+
+      import pandas as pd
+      import pyarrow as pa
+      import pyarrow.parquet as pq
+      
+      log = create_log()
+      
+      if rows_per_file >= 1:
+        irows = util.ichunked(rows, rows_per_file)
+      else:
+        rows = list(rows)
+        if not rows:
+          return
+        irows = iter([rows])
+      
+      util.log.info("Writing parquet to %s ..." % dest_dir)
+      for row_chunk in irows:
+        r = row_chunk[0]
+        
+        # Pandas wants dicts
+        if isinstance(r, ImageRow):
+          row_chunk = [r.to_dict() for r in row_chunk]
+
+        df = pd.DataFrame(row_chunk)
+        table = pa.Table.from_pandas(df)
+        util.mkdir(dest_dir)
+        pq.write_to_dataset(
+              table,
+              dest_dir,
+              partition_cols=partition_cols,
+              preserve_index=False, # Don't care about pandas index
+              compression='snappy',
+                # NB: pyarrow lz4 is totes broken https://github.com/apache/arrow/issues/3491
+              flavor='spark')
+        util.log.info("... wrote %s rows ..." % len(row_chunk))
+      util.log.info("... done writing to %s ." % dest_dir)
 
   @staticmethod
   def write_to_pngs(rows, dest_root=None):
-    log = create_log()
-    
     dest_root = dest_root or conf.AU_DATA_CACHE
     
-    log.info("Writing PNGs to %s ..." % dest_root)
+    util.log.info("Writing PNGs to %s ..." % dest_root)
     n = 0
     for row in rows:
       dest_dir = os.path.join(
@@ -265,8 +334,8 @@ class ImageRow(object):
       
       n += 1
       if n % 100 == 0:
-        log.info("... write %s PNGs ..." % n)
-    log.info("... wrote %s total PNGs to %s ." % (n, dest_root))  
+        util.log.info("... write %s PNGs ..." % n)
+    util.log.info("... wrote %s total PNGs to %s ." % (n, dest_root))  
 
 
 
@@ -295,6 +364,7 @@ def _make_have_target_chan(img, nchan):
     if len(shape) == 3 and shape[-1] == 1:
       # Repeate the grey channel to create an RGB image
       # (or BGR or who knows)
+      img = np.squeeze(img, axis=-1)
       return np.stack([img, img, img], axis=-1)
     else:
       raise ValueError("TODO input image has != 1 chan %s" % (shape,))
@@ -311,24 +381,28 @@ class FillNormalized(object):
                             log_on_del=True)
   
   def __call__(self, row):
-    with self.thruput.observe(n=1, num_bytes=len(row.image_bytes)):
-      normalized = row.as_numpy()
-      
-      if self.target_hw is not None:
-        h, w = self.target_hw
-        normalized = cv2.resize(normalized, (w, h)) # Sneaky, opencv!
-      
-      if self.target_nchan is not None:
-        normalized = _make_have_target_chan(normalized, self.target_nchan)
-      
-      if self.norm_func is not None:
-        normalized = self.norm_func(normalized)
-      
-      row.attrs = row.attrs or {}
-      
-      row.attrs.update({
-        'normalized': normalized,
-      })
+    self.thruput.start_block()
+    
+    normalized = row.as_numpy()
+    bytes_in = normalized.nbytes
+
+    if self.target_hw is not None:
+      h, w = self.target_hw
+      normalized = cv2.resize(normalized, (w, h)) # Sneaky, opencv!
+    
+    if self.target_nchan is not None:
+      normalized = _make_have_target_chan(normalized, self.target_nchan)
+    
+    if self.norm_func is not None:
+      normalized = self.norm_func(normalized)
+    
+    row.attrs = row.attrs or {}
+    
+    row.attrs.update({
+      'normalized': normalized,
+    })
+    
+    self.thruput.stop_block(n=1, num_bytes=bytes_in)
     return row
 
 ##
@@ -343,7 +417,7 @@ class ImageTable(object):
   ROWS_PER_FILE = 100
   
   @classmethod
-  def setup(cls):
+  def setup(cls, spark=None):
     """Subclasses should override to create a dataset from scratch
     (e.g. download images, create a table, etc).  The base class
     is just a bunch of images from ImageNet.

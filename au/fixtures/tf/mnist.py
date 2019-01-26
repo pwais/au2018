@@ -218,18 +218,28 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
     
   def create_inference_graph(self, input_image, base_graph):
     log = util.create_log()
-    self.graph = base_graph
-    with self.graph.as_default():
-      # Create ops and load weights
-      self.tf_model = create_model()
-      root = tf.train.Checkpoint(model=self.tf_model)
-      root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
-      log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
-            
-      self.pred = self.tf_model(
-                      tf.cast(input_image, tf.float32),
-                      training=False)
-      
+    
+    with base_graph.as_default():  
+      sess = util.tf_cpu_session()
+      with sess.as_default():
+        tf_model = create_model()
+
+        # Create ops and load weights
+        
+        # root = tf.train.Checkpoint(model=tf_model)
+        # root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
+        # log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
+          
+        pred = tf_model(tf.cast(input_image, tf.float32), training=False)
+        checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
+        saver = tf.train.import_meta_graph(checkpoint + '.meta', clear_devices=True)
+        self.graph = util.give_me_frozen_graph(
+                            checkpoint,
+                            nodes=self.output_names,
+                            saver=saver,
+                            base_graph=base_graph,
+                            sess=sess)
+
     import pprint
     log.info("Loaded graph:")
     log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(self.graph)))
@@ -272,6 +282,11 @@ class MNIST(nnmodel.INNModel):
 
     if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
       log.info("Training!")
+      # subprocess allows recovery of gpu memory!  See TFSessionPool comments
+      # import multiprocessing
+      # p = multiprocessing.Process(target=mnist_train, args=(params,))
+      # p.start()
+      # p.join()
       mnist_train(params)
       log.info("Done training!")
 
@@ -281,77 +296,6 @@ class MNIST(nnmodel.INNModel):
   def get_inference_graph(self):
     return self.igraph
 
-# #     
-# #     
-# #     model.tf_graph = tf.Graph()
-# #     with model.tf_graph.as_default():
-# #       
-# #       # Load saved model
-# #       # 
-# #       # sess = tf.get_default_session() or tf.Session()
-# #       model.tf_model = create_model()
-# #       # saver = tf.train.Saver()
-# #       # saver.restore(sess, 
-# #       
-# #   
-# #       # model.predictor = predictor.from_saved_model(params.MODEL_BASEDIR)
-# #   #     print(model.graph)
-# #     import pprint
-# #     log.info("Loaded graph:")
-# #     log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(model.tf_graph)))
-# #     return model
-
-#   def compute_activations_df(self, imagerow_df):
-#     pass
-
-
-#   def iter_activations(self):
-
-#     #     igraph = self.igraph_cls(images, labels)
-    
-#     with self.igraph.graph.as_default():
-#       dataset = test_dataset(self.params)
-#       iterator = dataset.make_one_shot_iterator()
-#       images, labels = iterator.get_next()
-      
-#       config = util.tf_create_session_config()
-#       with tf.train.MonitoredTrainingSession(config=config) as sess:
-        
-#         # Sometimes saved model / saved graphs are finalized ...
-# #         sess.graph._unsafe_unfinalize()
-        
-#   #       tf.keras.summary()
-        
-#   #       print(tf.contrib.graph_editor.get_tensors(tf.get_default_graph()))
-        
-        
-# #         pred = self.tf_model((images, labels), training=False)
-# #         
-# #         TENSOR_NAMES = (
-# #          'sequential/conv2d/Relu:0',
-# #          'sequential/conv2d_1/Relu:0',
-# #          'sequential/dense/Relu:0',
-# #          'sequential/dense_1/MatMul:0',
-# #         )
-# #         tensors = [sess.graph.get_tensor_by_name(n) for n in TENSOR_NAMES]
-# #         
-# #         args = [pred] + tensors
-#         args = self.igraph.output_tensor_name_to_t.values()
-        
-#         while not sess.should_stop():
-#           moof = sess.run(images)
-#           import numpy as np
-#           moof = np.reshape(moof, (10, 28, 28, 1))
-#           res = sess.run(args, feed_dict={self.igraph.input: moof})
-#           name_to_val = zip(self.igraph.output_tensor_name_to_t.keys(), res)
-#           yield dict(name_to_val)
-# #         yield {
-# #           'pred': ,#args),
-# # #           'conv1/Relu:0': tf.keras.activations.get('conv1/Relu:0'),
-# # #           'conv2/Relu:0': tf.keras.activations.get('conv2/Relu:0'),
-# # #           'fc1/Relu:0': tf.keras.activations.get('fc1/Relu:0'),
-# # #           'fc2/Relu:0': tf.keras.activations.get('fc2/Relu:0'),
-# #         }
 
 class MNISTDataset(dataset.ImageTable):
   TABLE_NAME = 'MNIST'

@@ -19,6 +19,15 @@ Now develop!  Run tests locally:
 Outside of the dockerized environment, use:
   ./aucli --build-env
 
+## Tag and publish your Docker images as the latest version:
+  ./aucli --push-as-latest
+
+Use the following env vars to override behavior:
+  * AU_ROOT - location of AU codebase
+  * AU_DOCKER_IMAGE - create a shell or push the au docker image with
+      this image name
+  * AU_CONTAINER_NAME - create or use a container with this name
+
 """
 
 import os
@@ -26,8 +35,13 @@ import subprocess
 import sys
 
 AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
-DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:v1.1')
+DOCKER_IMAGE_VERSION = 'v1.3'
+DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:' + DOCKER_IMAGE_VERSION)
 CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
+
+SPARK_WORKER_IMAGE = os.environ.get(
+                          'AU_SPARK_WORKER_IMAGE',
+                          'au2018/spark:' + DOCKER_IMAGE_VERSION)
 
 ## Logging
 import logging
@@ -53,10 +67,15 @@ class DockerEnv(object):
   @classmethod
   def build(cls, image=DOCKER_IMAGE, and_push=True):
     run_cmd(
-      'docker build -t ' + image + ' -f ' + AU_ROOT + '/docker/Dockerfile ' + AU_ROOT)
+      'docker build --network=host -t ' + image + ' -f ' + AU_ROOT + '/docker/Dockerfile ' + AU_ROOT)
     if and_push:
-      run_cmd(
-        'docker push ' + image)
+      run_cmd('docker push ' + image)
+
+  @classmethod
+  def push_as_latest(cls, image=DOCKER_IMAGE):
+    latest = image.split(':')[0]
+    run_cmd('docker tag ' + image + ' ' + latest)
+    run_cmd('docker push ' + latest)
 
   @classmethod
   def start(cls, container_name=CONTAINER_NAME, image=DOCKER_IMAGE):
@@ -164,22 +183,38 @@ def setup_tf_models():
         cd /opt/au/external/tensorflow_models/research &&
         /opt/protobuf3/bin/protoc object_detection/protos/*.proto --python_out=. &&
         python object_detection/builders/model_builder_test.py )
-    """ % TF_MODELS_PATH)
+    """)
   
   #run_cmd("""
   #  ls -lhat /tmp/raw-data &&
   #  bash object_detection/dataset_tools/download_and_preprocess_mscoco.sh /tmp
   #""")
 
+def setup_bdd100k():
+  assert os.path.exists('/opt/au/cache/data/bdd100k/zips/bdd100k_info.zip'), 'TODO: provide formal copy / audit mechanism'
 
+def setup_mscoco():
+  # also need from pycocotools import mask !!!
+  setup_tf_models()
+  
+  # # pycoco tools -- todo fix docker i.e. add protobuf above
+  # run_cmd("""
+  #   cd /tmp &&
+  #   git clone https://github.com/cocodataset/cocoapi.git &&
+  #   cd cocoapi/PythonAPI &&
+  #   make &&
+  #   cp -r pycocotools /opt/au/external/tensorflow_models/research/models/research/
+  # """)
+
+  assert os.path.exists('/opt/au/cache/data/mscoco/zips/annotations_trainval2017.zip'), 'TODO: provide formal copy / audit mechanism'
 
 ## Services
 
-def test_spark():  
-  log.info("Finding spark ...")
+def test_spark_local():  
+  log.info("Do we have Spark installed ? ...")
   import findspark
   findspark.init()
-  log.info("... found!")
+  log.info("... found Spark!")
   
   log.info("Running PI locally ...")
   import pyspark
@@ -290,6 +325,124 @@ def alluxio_start_local():
         /opt/alluxio/bin/alluxio runTests --directory /gcs
   """ % ALLUXIO_HOST)
 
+
+## K8s-based Cluster
+
+class KubeCluster(object):
+
+  SSH_KEYFILE = os.path.join(AU_ROOT, 'kubespray/cluster_ssh_key')
+
+  HOSTS_INI = os.path.join(AU_ROOT, 'kubespray/inventory/default/hosts.ini')
+  HOSTS_INI_TEMPLATE = HOSTS_INI + '.example'
+
+  KUBESPRAY_SRC = os.path.join(AU_ROOT, 'external/kubespray')
+  KUBESPRAY_CLUSTER_UP = os.path.join(KUBESPRAY_SRC, 'cluster.yml')
+
+  ARTIFACTS = os.path.join(
+                AU_ROOT, 'kubespray/inventory/default/artifacts')
+  KUBECTL = os.path.join(ARTIFACTS, 'kubectl')
+  ADMIN_CONF = os.path.join(ARTIFACTS, 'admin.conf')
+
+  @classmethod
+  def init(cls):
+    assert os.path.exists(cls.HOSTS_INI_TEMPLATE), \
+      "Are you in an aucli --shell ?"
+    
+    if not os.path.exists(cls.SSH_KEYFILE):
+      print
+      print
+      print "\t\tPlease copy or symlink a cluster SSH private key to "
+      print "\t\t\t" + cls.SSH_KEYFILE
+      print "\t\t(e.g. ln -s /outer_root/home/au/.ssh/your_key_file "  + cls.SSH_KEYFILE + " )"
+      print "\t\tand run ./aucli --kube-init again."
+      print
+      sys.exit(1)
+    
+    if not os.path.exists(cls.HOSTS_INI):
+      run_cmd('cp -v ' + cls.HOSTS_INI_TEMPLATE + ' ' + cls.HOSTS_INI)
+    
+    print
+    print
+    print "\t\tNow please edit " + cls.HOSTS_INI + " to spec your cluster."
+    print "\t\tAfterwards, run $ aucli --kube-up"
+    print
+    print
+    sys.exit(0)
+  
+  @classmethod
+  def up(cls):
+    assert os.path.exists(cls.KUBESPRAY_CLUSTER_UP), (
+      "Do you have submodules pulled?  Use $ git submodule update --init "
+      "outside the AU dockerized shell")
+    
+    cmd = """
+      cd {KUBESPRAY_SRC} &&
+      ansible-playbook \
+        -v --become \
+        --key-file {SSH_KEYFILE} \
+        -i {HOSTS_INI} \
+                cluster.yml 
+    """.format(**cls.__dict__)
+    run_cmd(cmd)
+
+  @classmethod
+  def with_proxy(cls, cmd):
+    import time
+
+    pcmd = '{KUBECTL} --kubeconfig {ADMIN_CONF} proxy'.format(**cls.__dict__)
+    log.info("Starting proxy: %s" % pcmd)
+    p = subprocess.Popen(pcmd.split())
+    try:
+      run_cmd(cmd)
+    finally:
+      # This is a mess and may leak zombies.  TODO: find a cleaner way
+      # to start the proxy ...
+      time.sleep(2)
+      log.info("... SIGKILLing proxy ...")
+      p.terminate()
+      p.kill()
+      for _ in range(3):
+        time.sleep(1)
+        p.poll()
+        log.info("... waiting ...")
+      log.info("... done.")
+    
+  @classmethod
+  def test(cls):
+    assert os.path.exists(cls.ADMIN_CONF), "Did cluster bring-up succeed?"
+
+    print
+    print
+    print "Path to kubectl:"
+    print cls.KUBECTL
+    print
+    print
+
+    cmd = """
+      {KUBECTL} --kubeconfig {ADMIN_CONF} get all --all-namespaces && \
+      echo && echo && \
+      {KUBECTL} --kubeconfig {ADMIN_CONF} cluster-info
+    """.format(**cls.__dict__)
+    run_cmd(cmd)
+
+    test_spark = "python -c 'from au.spark import K8SSpark; K8SSpark.selftest()'"
+    cls.with_proxy(test_spark)
+
+  @classmethod
+  def build_spark_env(cls, image=SPARK_WORKER_IMAGE, and_push=True):
+    run_cmd(
+      'cd ' + os.path.join(AU_ROOT, 'cluster/spark') + ' && '
+      'docker build --network=host  --build-arg base_img=' + DOCKER_IMAGE + ' -t ' + image + ' .')
+    if and_push:
+      run_cmd('docker push ' + image)
+  
+  @classmethod
+  def push_as_latest(cls, image=SPARK_WORKER_IMAGE):
+    cls.build_spark_env(image=image)
+    latest = image.split(':')[0]
+    run_cmd('docker tag ' + image + ' ' + latest)
+    run_cmd('docker push ' + latest)
+
 ## CLI
 
 def create_arg_parser():
@@ -308,8 +461,13 @@ def create_arg_parser():
     '--build-env', default=False, action='store_true',
     help='Build the dockerized dev env image %s' % DOCKER_IMAGE)
   parser.add_argument(
+    '--push-as-latest', default=False, action='store_true',
+    help='Tag Docker images at latest and push them')
+
+  parser.add_argument(
     '--alluxio-local', default=False, action='store_true',
     help='Start Alluxio local node (e.g. for GFS access & caching)')
+  
   parser.add_argument(
     '--test-spark', default=False, action='store_true',
     help='Ensure Spark works locally')
@@ -318,6 +476,20 @@ def create_arg_parser():
     help='Run the full set of tests with the local source tree in a '
          'containerized environment')
   
+  parser.add_argument(
+    '--kube-init', default=False, action='store_true',
+    help='Prepare kubespray cluster launch')
+  parser.add_argument(
+    '--kube-up', default=False, action='store_true',
+    help='Bring up the k8s cluster via Kubespray')
+  parser.add_argument(
+    '--kube-test', default=False, action='store_true',
+    help='Show k8s pods and provide kubectl usage')
+
+  parser.add_argument(
+    '--setup-external', default=False, action='store_true',
+    help='Set up external projects and datasets')
+
   return parser
 
 def main(args=None):
@@ -327,18 +499,35 @@ def main(args=None):
   
   if args.build_env:
     DockerEnv.build()
+    KubeCluster.build_spark_env()
   elif args.shell:
     DockerEnv.shell()
   elif args.shell_rm:
     DockerEnv.rm_shell()
+  elif args.push_as_latest:
+    DockerEnv.push_as_latest()
+    KubeCluster.push_as_latest()
+  
   elif args.alluxio_local:
     alluxio_start_local()
+  
   elif args.test_spark:
-    test_spark()
+    test_spark_local()
   elif args.test_full:
     DockerEnv.run_cmd(
       'pytest au -s --runslow',
       container_name='aucli_full_test')
+  
+  elif args.kube_init:
+    KubeCluster.init()
+  elif args.kube_up:
+    KubeCluster.up()
+  elif args.kube_test:
+    KubeCluster.test()
+
+  elif args.setup_external:
+    setup_tf_models()
+    # setup_bdd100k()
 
 if __name__ == '__main__':
   main()

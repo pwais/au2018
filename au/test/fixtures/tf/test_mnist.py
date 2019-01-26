@@ -15,12 +15,9 @@ TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist')
 #   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
 
 #   params = mnist.MNIST.Params()
-#   params.TRAIN_EPOCHS = 1
-#   params.LIMIT = 10
+#   params.TRAIN_EPOCHS = 10
+#   params.LIMIT = 1000
 #   model = mnist.MNIST.load_or_train(params)
-  
-#   # TODO: test with more rigor
-#   assert model.igraph
 
 @pytest.mark.slow
 def test_mnist_dataset(monkeypatch):

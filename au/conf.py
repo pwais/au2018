@@ -37,3 +37,15 @@ AU_IMAGENET_SAMPLE_IMGS_DIR = os.environ.get(
 AU_IMAGENET_SAMPLE_LABELS_PATH = os.environ.get(
                 'AU_IMAGENET_SAMPLE_LABELS_PATH',
                 os.path.join(AU_IMAGES_SAMPLE, 'imagenet_fname_to_label.json'))
+
+AU_DY_TEST_FIXTURES = os.environ.get(
+                    'AU_DY_TEST_FIXTURES',
+                    os.path.join(AU_CACHE, 'test'))
+
+# Assume kubectl proxy is active
+AU_K8S_SPARK_MASTER = os.environ.get(
+                        'AU_K8S_SPARK_MASTER',
+                        'k8s://http://127.0.0.1:8001')
+AU_SPARK_WORKER_IMAGE = os.environ.get(
+                            'AU_SPARK_WORKER_IMAGE',
+                            'au2018/spark')

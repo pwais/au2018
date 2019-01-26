@@ -4,6 +4,19 @@
 ## anything else. In the opposite, Debian has already all its dependencies fullfiled, then bootstrap_os should be set to `none`.
 bootstrap_os: none
 
+# docker_versioned_pkg: 
+
+# Docker changed their version naming scheme again :P
+# We need 18.09 because nvidia-docker wants that version.
+docker_version: '18.09'
+# docker_versioned_pkg:
+#   'latest': docker-ce
+#   '18.03': docker-ce=18.03.1~ce-3-0~ubuntu
+#   '18.06': docker-ce=18.06.1~ce~3-0~ubuntu
+#   '18.09': docker-ce=5:18.09.0~3-0~ubuntu-xenial
+#   'stable': docker-ce=18.06.1~ce~3-0~ubuntu
+#   'edge': docker-ce=18.06.1~ce~3-0~ubuntu
+
 ## Directory where etcd data stored
 etcd_data_dir: /var/lib/etcd
 
@@ -16,7 +29,6 @@ bin_dir: /usr/local/bin
 ## environments where the nodes are accessed remotely by the "public" ip,
 ## but don't know about that address themselves.
 #access_ip: 1.1.1.1
-
 
 ## External LB example config
 ## apiserver_loadbalancer_domain_name: "elb.some.domain"
@@ -39,9 +51,9 @@ bin_dir: /usr/local/bin
 #kubelet_load_modules: false
 
 ## Upstream dns servers used by dnsmasq
-#upstream_dns_servers:
-#  - 8.8.8.8
-#  - 8.8.4.4
+upstream_dns_servers:
+  - 8.8.8.8
+  - 1.1.1.1
 
 ## There are some changes specific to the cloud providers
 ## for instance we need to encapsulate packets with some network plugins

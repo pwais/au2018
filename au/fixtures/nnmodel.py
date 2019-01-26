@@ -112,7 +112,6 @@ class FillActivationsBase(object):
       row['activations'] = row.get('activations', [])
       yield row
 
-
 class Activations(object):
   """A pyspark-SQL-friendly wrapper for a set of activations"""
 
@@ -138,35 +137,32 @@ class Activations(object):
   
   tensor_to_value = property(get_tensor_to_value, set_tensor_to_value)
 
-
 class FillActivationsTFDataset(FillActivationsBase):
   """A `FillActivationsBase` impl that leverages Tensorflow
   tf.Dataset to feed data into a tf.Graph""" 
   
   def __call__(self, iter_imagerows):
-
     self.overall_thruput.start_block()
     
     import Queue
     import tensorflow as tf
-    
-    log = util.create_log()
-    log.info(
+
+    util.log.info(
       "Filling activations for %s ..." % self.tigraph_factory.model_name)
     
     graph = tf.Graph()
-    total_rows_bytes = [0, 0]
     processed_rows = Queue.Queue()
+
     def iter_normalized_np_images():
       normalize = self.tigraph_factory.make_normalize_ftor()
       for row in iter_imagerows:
-        row = normalize(row)
-        
+        row = normalize(row)        
         processed_rows.put(row, block=True)
-        total_rows_bytes[0] += 1
-        total_rows_bytes[1] += row.attrs['normalized'].nbytes
+        arr = row.attrs['normalized']
+        yield arr
         
-        yield row.attrs['normalized']
+        self.tf_thruput.update_tallies(num_bytes=arr.nbytes)
+        self.overall_thruput.update_tallies(num_bytes=arr.nbytes)
     
     # We'll use the tf.Dataset.from_generator facility to read ImageRows
     # (which have the image bytes in Python memory) into the graph.  The use
@@ -177,7 +173,9 @@ class FillActivationsTFDataset(FillActivationsBase):
     # additional subclass).  Using tf.Dataset here should at least allow
     # Tensorflow to push reading into a background thread so that Spark and/or
     # Python execution won't block inference if inference dominates. To achieve
-    # multi-threaded I/O, we lean on Spark. 
+    # multi-threaded I/O, we lean on Spark, which will typically run one
+    # instance of this functor per core (thus providing some
+    # cache-friendliness).
     with graph.as_default():
       # Hack: let us handle batch size here ...
       input_shape = list(self.tigraph_factory.input_tensor_shape)
@@ -189,28 +187,29 @@ class FillActivationsTFDataset(FillActivationsBase):
       d = d.batch(self.tigraph_factory.batch_size)
       input_image = d.make_one_shot_iterator().get_next()
     
+    util.log.info("Creating inference graph ...")
     final_graph = self.tigraph_factory.create_inference_graph(
                                               input_image,
                                               graph)
+    util.log.info("... done creating inference graph.")
 
     with final_graph.as_default():
-      config = util.tf_create_session_config()
-      
-      # TODO: can we just use vanilla Session? & handle a tf.Dataset Stop?
-      with tf.train.MonitoredTrainingSession(config=config) as sess:
-#         log.info("Session devices: %s" % ','.join(
-#                                   (d.name for d in sess.list_devices())))
-        
+      # TODO: support using single GPUs; requires running in a subprocess
+      # due to Tensorflow memory madness :( 
+      with util.tf_cpu_session() as sess:
+          
         tensors_to_eval = self.tigraph_factory.output_names
         assert tensors_to_eval
         
-#         import pprint
-#         log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(final_graph)))
-        
-        while not sess.should_stop():
-          with self.tf_thruput.observe():
+        while True:
+          try:
+            self.tf_thruput.start_block()
             result = sess.run(tensors_to_eval)
-              # NB: processes batch_size rows in one run()
+            self.tf_thruput.stop_block()
+                # NB: above will processes `batch_size` rows in one run()
+          except (tf.errors.OutOfRangeError, StopIteration):
+            # see MonitoredTrainingSession.StepContext
+            break
           
           assert len(result) >= 1
           batch_size = result[0].shape[0]
@@ -234,15 +233,10 @@ class FillActivationsTFDataset(FillActivationsBase):
             row.attrs['activations'].append(act)
             yield row
     
-    total_rows, total_bytes = total_rows_bytes
-    self.tf_thruput.update_tallies(n=total_rows, num_bytes=total_bytes)
-    self.overall_thruput.stop_block(n=total_rows, num_bytes=total_bytes)
-
-
-
-
-
-
+            self.tf_thruput.update_tallies(n=1)
+            self.overall_thruput.update_tallies(n=1)
+    tf.reset_default_graph()
+    self.overall_thruput.stop_block()
 
 class ActivationsTable(object):
 
@@ -261,90 +255,43 @@ class ActivationsTable(object):
     log.info("Building table %s ..." % cls.TABLE_NAME)
 
     spark = spark or util.Spark.getOrCreate()
-
-    img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
     
+    img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
+
     model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
     filler = FillActivationsTFDataset(model=model)
 
-    # img_rdd = img_rdd.repartition(parallel)
     activated = img_rdd.mapPartitions(filler)
 
     def to_activation_rows(imagerows):
+      from pyspark.sql import Row
       for row in imagerows:
         if row.attrs is '':
           continue
 
-        activation_to_val = row.attrs.get('activation_to_val')
-        if not activation_to_val:
+        activations = row.attrs.get('activations')
+        if not activations:
           continue
         
-        import pickle
-        yield {
-          'model_name': model.params.MODEL_NAME,
-          'dataset': row.dataset,
-          'split': row.split,
-          'uri': row.uri,
-          'activations': dict(
-            (k, pickle.dumps(v))
-            for k, v in activation_to_val.iteritems()),
-        }
+        for act in activations:
+          for tensor_name, value in act._tensor_to_value.iteritems():
+            yield Row(
+              model_name=model.params.MODEL_NAME,
+              tensor_name=tensor_name,
+              tensor_value=value,
+              
+              dataset=row.dataset,
+              split=row.split,
+              uri=row.uri,
+            )
     
     activation_row_rdd = activated.mapPartitions(to_activation_rows)
-    
+
     df = spark.createDataFrame(activation_row_rdd)
     df.show()
     writer = df.write.parquet(
                 path=cls.table_root(),
                 mode='overwrite',
-                compression='snappy',
+                compression='lz4',
                 partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
     log.info("... wrote to %s ." % cls.table_root())
-
-  # @classmethod
-  # def get_as_imagerow_rdd(cls, spark=None, include_images=True):
-  #   log = util.create_log()
-  #   log.info("Reading from %s ..." % cls.table_root())
-
-  #   spark = spark or util.Spark.getOrCreate()
-
-  #   df = spark.read.parquet(cls.table_root())
-  #   df.registerTempTable("tmp_activations_df_%s" % cls.TABLE_NAME)
-  #   if include_images:
-  #     df = spark.read.parquet(cls.IMAGE_TABLE_CLS.table_root())
-  #     df.registerTempTable("tmp_images_%s" % cls.TABLE_NAME)
-
-  #     query = """
-  #       SELECT
-
-  #     img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
-
-
-  #   else:
-  #     df = activations_df
-    
-
-
-        
-
-
-"""
-
-au_image_bytes = tf.placeholder(tf.string, [], name="au_image_bytes")
-image_uint8 = tf.decode_raw(image_buffer, tf.uint8, name="decode_raw")
-image_float = tf.to_float(image_uint8)
-
-
-make these things pluggable so we can test ... :)
-
-a ftor that takes in image rows and manipulates them-- preprocess:
-  * decode to numpy
-  * resize
-  * mebbe do mean sub on numpy array
-  * mebbe FILL the resized numpy... see if parrow likes that?
-
-a ftor that takes in image rows, runs inference, and fills each image
-  row with activations and stuff.  use tf.Dataset.from_tensor_slices
-  and feed_dict to feed in numpy.
-
-"""

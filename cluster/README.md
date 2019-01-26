@@ -9,7 +9,7 @@ Requirements:
  4. Run [sudo setup.sh](setup.sh) script to install basic packages and nvidia
       drivers (if possible).  You will need to reboot for Nvidia driver
       changes to take effect.
- 5. Passwordless `ssh` and `sudo` for cluster deployment and operation.
+ 5. Passwordless `ssh` cluster deployment.
 
 We've tested these utilites with bare metal machines as well as GCE intances
 (using Google's own Ubuntu 16.04 image -- `ubuntu-minimal-1604-xenial-v20180814`).
@@ -33,17 +33,28 @@ GCE GPU offerings are a useful compute resource.
 ### Why?
 
 We use `kubespray` and k8s for the following reasons:
- * `kubespray` makes k8s deployment extremely easy with Ubuntu; one can
-        add and remove nodes without major issue.
+ * `kubespray` makes k8s deployment easy with Ubuntu; one can add and remove
+        nodes without major issues, and ansible is fairly effective at
+        handling machine state.
  * `kubespray` is cloud-agnostic.
  * k8s can serve as a [Spark cluster manager](https://spark.apache.org/docs/latest/running-on-kubernetes.html)
 
 ### How?
 
- 1. Create and edit [hosts.ini](kubespray/inventory/default/hosts.ini) to suit
-        your needs.  See [the example](kubespray/inventory/default/hosts.ini.example).
- 2. Run setup:
-        ```
-        cd external/kubespray
-        ansible-playbook -v --become -i kubespray/inventory/default/hosts.ini external/kubespray/cluster.yml
-        ```
+ 1. Run `./aucli --shell` to drop into a dockerized shell.
+ 2. Use `./aucli --kube-init` to step through cluster configuation set-up.
+       You'll need a cluster ssh key and a [hosts.ini](kubespray/inventory/default/hosts.ini.example)
+       file to spec the cluster.
+ 3. Use `./aucli --kube-up` to bring up the cluster via kubespray.  Kubespray
+       may fail the first time or two, or you may have other bugs.  `aucli`
+       will print out the commands it runs, so try reviewing stdout in order
+       to debug.
+ 4. The inventory config in the `au` repo includes `kubectl_localhost: true`
+       and `kubeconfig_localhost: true` to allow local k8s access.  To test
+       your cluster as well as get the path to `kubectl`, use:
+              ```./aucli --kube-test```
+       inside the shell and look for "Path to kubectl".
+
+#### Useful Links
+ * https://github.com/kubernetes-sigs/kubespray/blob/master/docs/getting-started.md
+ * To debug ansible, try `ansible-playbook -vvv` (more verbosity)

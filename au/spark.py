@@ -1,12 +1,15 @@
 """A module with Spark-related utilities"""
 
+from au import conf
 from au import util
 
+import os
 import pickle
 from contextlib import contextmanager
 
 import numpy as np
 
+# Try to provide a helpful error message if we can't find Spark / Java
 try:
   import findspark
   findspark.init()
@@ -28,21 +31,122 @@ except Exception as e:
 
 
 class Spark(object):
+  # Default to local Spark master
   MASTER = None
   CONF = None
   CONF_KV = None
   HIVE = False
+
+  # Optional
+  SRC_ROOT = os.path.join(conf.AU_ROOT, 'au')
   
   @classmethod
+  def _create_egg(cls, src_root=None, tmp_path=None):
+    """Build a Python Egg from the current project and return a path
+    to the artifact.  
+
+    Why an Egg?  `pyspark` supports zipfiles and egg files as Python artifacts.
+    One might wish to use a wheel instead of an egg.  See this excellent
+    article and repo:
+     * https://bytes.grubhub.com/managing-dependencies-and-artifacts-in-pyspark-7641aa89ddb7
+     * https://github.com/alekseyig/spark-submit-deps
+    
+    The drawbacks to using a wheel include:
+     * wheels often require native libraries to be installed (e.g. via
+        `apt-get`), and those deps are typically best baked into the Spark
+        Worker environment (versus installed every job run).
+     * The `BdistSpark` example above is actually rather slow, especially
+        when Tensorflow is a dependency, and `BdistSpark` must run before
+        every job is submitted.
+     * Spark treats wheels as zip files and unzips them on every run; this
+        unzip operation can be very expensive if the zipfile contains large
+        binaries (e.g. tensorflow)
+    
+    In comparison, an Egg provides the main benefits we want (to ship project
+    code, often pre-committed code, to workers).
+    """
+
+    log = util.create_log()
+
+    if tmp_path is None:
+      import tempfile
+      tempdir = tempfile.gettempdir()
+
+      SUBDIR_NAME = 'au_eggs'
+      tmp_path = os.path.join(tempdir, SUBDIR_NAME)
+      util.cleandir(tmp_path)
+
+    if src_root is None:
+      log.info("Trying to auto-resolve path to src root ...")
+      try:
+        import inspect
+        path = inspect.getfile(inspect.currentframe())
+        src_root = os.path.dirname(os.path.abspath(path))
+      except Exception as e:
+        log.info(
+          "Failed to auto-resolve src root, "
+          "falling back to %s" % cls.SRC_ROOT)
+        src_root = cls.SRC_ROOT
+    
+    src_root = '/opt/au'
+    log.info("Using source root %s " % src_root)
+
+    # Below is a programmatic way to run something like:
+    # $ cd /opt/au && python setup.py clearn bdist_egg
+    # Based upon https://github.com/pypa/setuptools/blob/a94ccbf404a79d56f9b171024dee361de9a948da/setuptools/tests/test_bdist_egg.py#L30
+    # See also: 
+    # * https://github.com/pypa/setuptools/blob/f52b3b1c976e54df7a70db42bf59ca283412b461/setuptools/dist.py
+    # * https://github.com/pypa/setuptools/blob/46af765c49f548523b8212f6e08e1edb12f22ab6/setuptools/tests/test_sdist.py#L123
+    # * https://github.com/pypa/setuptools/blob/566f3aadfa112b8d6b9a1ecf5178552f6e0f8c6c/setuptools/__init__.py#L51
+    from setuptools.dist import Distribution
+    from setuptools import PackageFinder
+    MODNAME = os.path.split(src_root)[-1]
+    dist = Distribution(attrs=dict(
+        script_name='setup.py',
+        script_args=[
+          'clean',
+          'bdist_egg', 
+            '--dist-dir', tmp_path,
+            '--bdist-dir', os.path.join(tmp_path, 'workdir'),
+        ],
+        name=MODNAME,
+        src_root=src_root,
+        packages=PackageFinder.find(where=src_root),
+    ))
+    log.info("Generating egg to %s ..." % tmp_path)
+    with util.quiet():
+      dist.parse_command_line()
+      dist.run_commands()
+
+    egg_path = os.path.join(tmp_path, MODNAME + '-0.0.0-py2.7.egg')
+    assert os.path.exists(egg_path)
+    log.info("... done.  Egg at %s" % egg_path)
+    return egg_path
+
+    # This didn't work so well ...
+    # Typically we want to give spark the egg from:
+    #  $ python setup.py bdist_egg
+    # from setuptools.command import bdist_egg
+    # cmd = bdist_egg.bdist_egg(bdist_dir=os.path.dirname(setup_py_path), editable=True)
+    # cmd.run()
+
+  @classmethod
+  def egg_path(cls):
+    if not hasattr(cls, '_cached_egg_path'):
+      cls._cached_egg_path = cls._create_egg()
+    return cls._cached_egg_path
+
+  @classmethod
   def _setup(cls):
-    # TODO set up egg to ship to workers ...
-    pass
-  
+    # Warm the cache
+    egg_path = cls.egg_path()
+
   @classmethod
   def getOrCreate(cls):
     cls._setup()
 
     import pyspark
+    
     from pyspark import sql
     builder = sql.SparkSession.builder
     if cls.MASTER is not None:
@@ -57,13 +161,54 @@ class Spark(object):
       # builder = builder.config("hive.metastore.warehouse.dir", '/tmp') 
       # builder = builder.config("spark.sql.warehouse.dir", '/tmp')
       builder = builder.enableHiveSupport()
-    return builder.getOrCreate()
+    spark = builder.getOrCreate()
+
+    # spark.sparkContext.setLogLevel('INFO')
+
+    spark.sparkContext.addPyFile(cls.egg_path())
+    return spark
   
   @classmethod
   @contextmanager
   def sess(cls):
     spark = cls.getOrCreate()
     yield spark
+
+  @staticmethod
+  def archive_rdd(spark, path):
+    fws = util.ArchiveFileFlyweight.fws_from(path)
+    return spark.sparkContext.parallelize(fws)
+
+  @staticmethod
+  def thruput_accumulator(spark, **thruputKwargs):
+    from pyspark.accumulators import AccumulatorParam
+    class ThruputObsAccumulator(AccumulatorParam):
+      def zero(self, v):
+        return v or util.ThruputObserver()
+      def addInPlace(self, value1, value2):
+        value1 += value2
+        return value1
+    
+    return spark.sparkContext.accumulator(
+                util.ThruputObserver(**thruputKwargs),
+                ThruputObsAccumulator())
+
+
+  @staticmethod
+  def num_executors(spark):
+    # NB: Not a public API! But likely stable.
+    # https://stackoverflow.com/a/42064557
+    return spark.sparkContext._jsc.sc().getExecutorMemoryStatus().size()
+
+  ### Test Utilities (for unit tests and more!)
+
+  @classmethod
+  def selftest(cls):
+    with cls.sess() as spark:
+      # spark.sparkContext.setLogLevel("INFO")
+      cls.test_pi(spark)
+      cls.test_egg(spark)
+      cls.test_tensorflow(spark)
 
   @staticmethod
   def test_pi(spark):
@@ -79,7 +224,134 @@ class Spark(object):
     util.log.info("Pi estimate: %s" % pi)
     assert abs(pi - 3.14) < 0.1, "Spark program had an error?"
 
+  @staticmethod
+  def test_egg(spark):
+    EXPECTED_EGG_NAME = 'au-0.0.0-py2.7.egg'
 
+    def worker_test(_):
+      # Normally, pytest puts the local source tree on the PYTHONPATH.  That
+      # setting gets inherited when Spark forks a python subprocess to run
+      # this function.  Remove the source tree from the PYTHONPATH here
+      # in order to force pyspark to read from the egg file / SparkFiles.
+      # We may safely edit the PYTHONPATH here because this code is run in a
+      # child python process that will soon exit.
+      import sys
+      if '/opt/au' in sys.path:
+        sys.path.remove('/opt/au')
+      if '' in sys.path:
+        sys.path.remove('')
+
+      ## Check for the egg, which Spark puts on the PYTHONPATH
+      egg_path = ''
+      for p in sys.path:
+        if EXPECTED_EGG_NAME in p:
+          egg_path = p
+      assert egg_path, 'Egg not found in sys.path %s' % (sys.path,)
+
+      ## Is the egg any good?
+      import zipfile
+      f = zipfile.ZipFile(egg_path)
+      egg_contents = f.namelist()
+      assert any('au' in fname for fname in egg_contents), egg_contents
+
+      ## Use the egg!
+      from au import util
+      s = util.ichunked([1, 2, 3], 3)
+      assert list(s) == [(1, 2, 3)]
+      
+      return util.get_sys_info()
+  
+    util.log.info("Testing egg ...")
+    
+    sc = spark.sparkContext
+    N = max(1, Spark.num_executors(spark)) # Try to test all executors
+    rdd = sc.parallelize(range(N), numSlices=N)
+    res = rdd.map(worker_test).collect()
+    assert len(res) == N
+    paths = [info['filepath'] for info in res]
+    assert all(EXPECTED_EGG_NAME in p for p in paths)
+
+    util.log.info("Test success!  Worker info:")
+    def format_info(info):
+      s = """
+        Host: {hostname} {host}
+        Egg: {filepath}
+
+        Num CPUs: {n_cpus}
+        Memory:
+        {memory}
+        
+        PYTHONPATH:
+        {PYTHONPATH}
+
+        nvidia-smi:
+        {nvidia_smi}
+        
+        Disk:
+        {disk_free}
+        """.format(**info)
+      return '\n'.join(l.lstrip() for l in s.split('\n'))
+    info_str = '\n\n'.join(format_info(info) for info in res)
+    util.log.info('\n\n' + info_str)
+  
+  @staticmethod
+  def test_tensorflow(spark):
+
+    # Tensorflow Devices
+    # TODO this util can crash with 'failed to allocate 2.2K' :P even with
+    # a lock? wat??
+    #with atomic_ignore_exceptions():
+    #  from tensorflow.python.client import device_lib
+    #  devs = device_lib.list_local_devices()
+    #  info['tensorflow_devices'] = [str(v) for v in devs]
+
+    def foo(x):
+      import tensorflow as tf
+
+      a = tf.constant(x)
+      b = tf.constant(3)
+
+      from au import util
+      sess = util.tf_create_session()
+      res = sess.run(a * b)
+
+      assert res == 3 * x
+      
+      import socket
+      info = {
+        'hostname': socket.gethostname(),
+        'gpu': tf.test.gpu_device_name(),
+      }
+      return info
+
+    util.log.info("Testing Tensorflow ...")
+    
+    sc = spark.sparkContext
+    N = max(1, Spark.num_executors(spark)) # Try to test all executors
+    y = range(N)
+    rdd = sc.parallelize(y)
+    res = rdd.map(foo).collect()
+    assert len(res) == N
+
+    util.log.info("... Tensorflow success!  Info:")
+    import pprint
+    util.log.info('\n\n' + pprint.pformat(res) + '\n\n')
+
+
+class K8SSpark(Spark):
+  MASTER = conf.AU_K8S_SPARK_MASTER
+  CONF_KV = {
+    'spark.kubernetes.container.image':
+      conf.AU_SPARK_WORKER_IMAGE,
+
+    # In practice, we need to set this explicitly in order to get the
+    # proper driver IP address to the workers.  This choice may break
+    # cluster mode where the driver process will run in the cluster
+    # instead of locally.  This choice may also break in certain networking
+    # setups.  Spark networking is a pain :(
+    'spark.driver.host':
+      os.environ.get('SPARK_LOCAL_IP', util.get_non_loopback_iface()),
+  }
 
 ## Spark UDTs
 # These utils are based upon Spark's DenseVector:

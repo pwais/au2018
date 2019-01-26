@@ -1,9 +1,10 @@
-FROM tensorflow/tensorflow:1.11.0-gpu
+FROM tensorflow/tensorflow:1.12.0-gpu
 
 # We don't care for __pycache__ and .pyc files; sometimes VSCode doesn't clean
 # up properly when deleting things and the cache gets stale.
 ENV PYTHONDONTWRITEBYTECODE 1
 
+# Use GCloud mirrors because they're faster, especially in gcloud
 COPY docker/sources.list /etc/apt/sources.list
 
 ## Required for installing things
@@ -40,7 +41,7 @@ RUN \
 
 
 ## Spark & Hadoop
-ENV HADOOP_VERSION 2.9.1
+ENV HADOOP_VERSION 3.1.1
 ENV HADOOP_HOME /opt/hadoop
 ENV HADOOP_CONF_DIR $HADOOP_HOME/etc/hadoop
 ENV PATH $PATH:$HADOOP_HOME/bin
@@ -52,7 +53,7 @@ RUN curl -L --retry 3 \
  && mv /opt/hadoop-$HADOOP_VERSION $HADOOP_HOME \
  && rm -rf $HADOOP_HOME/share/doc
 
-ENV SPARK_VERSION 2.3.2
+ENV SPARK_VERSION 2.4.0
 ENV SPARK_PACKAGE spark-${SPARK_VERSION}-bin-without-hadoop
 ENV SPARK_HOME /opt/spark
 ENV SPARK_DIST_CLASSPATH "$HADOOP_HOME/etc/hadoop/*:$HADOOP_HOME/share/hadoop/common/lib/*:$HADOOP_HOME/share/hadoop/common/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/hdfs/lib/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/yarn/lib/*:$HADOOP_HOME/share/hadoop/yarn/*:$HADOOP_HOME/share/hadoop/mapreduce/lib/*:$HADOOP_HOME/share/hadoop/mapreduce/*:$HADOOP_HOME/share/hadoop/tools/lib/*"
@@ -64,7 +65,6 @@ RUN curl -L --retry 3 \
  && mv /opt/$SPARK_PACKAGE $SPARK_HOME \
  && pip install findspark
 COPY docker/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
-
 
 ## Alluxio
 RUN \
@@ -89,7 +89,9 @@ RUN \
   apt-get update && \
   apt-get install -y \
     curl \
+    dnsutils \
     git \
+    gsutil \
     net-tools \
     screen \
     ssh \
@@ -104,6 +106,7 @@ RUN \
 ## AU Python
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
+RUN python -c 'import imageio; imageio.plugins.ffmpeg.download()'
 
 
 ## TF Models
@@ -125,6 +128,7 @@ RUN pip install scipy h5py wget Pillow six scikit-image
 # See docker/kubespray_requirements.txt for notes
 COPY docker/kubespray_requirements.txt /tmp/kubespray_requirements.txt
 RUN pip install -r /tmp/kubespray_requirements.txt
+ENV PATH $PATH:/opt/au/kubespray/inventory/default/artifacts/
 
 
 ## Gcloud

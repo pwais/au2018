@@ -10,6 +10,7 @@ from au.fixtures.dataset import FillNormalized
 from au.fixtures.dataset import ImageRow
 from au.fixtures.dataset import ImageTable
 from au.test import testconf
+from au.test import testutils
 
 
 
@@ -42,13 +43,19 @@ def test_imagerow_demo(monkeypatch):
   }
   assert ImageRow().to_dict() == empty_row_as_dict
   
+  ## We can wrap a closure that generates an image
+  def gen_img():
+    return np.zeros((32, 32))
+  row = ImageRow.wrap_factory(gen_img)
+  assert len(row.image_bytes) == 75
+  assert row.as_numpy().shape == (32, 32)
   
   ## We can instantiate from a file on disk
   row = ImageRow.from_path(testconf.MNIST_TEST_IMG_PATH, dataset='test2')
   assert row.dataset == 'test2'
   assert len(row.image_bytes) == 250
   assert row.as_numpy().shape == (28, 28)
-  
+
   ## We can dump a row to disk for quick inspection
   with monkeypatch.context() as m: 
     m.setattr(conf, 'AU_CACHE_TMP', testconf.TEST_TEMPDIR_ROOT)
@@ -83,8 +90,7 @@ def test_imagerow_demo(monkeypatch):
     r.split = 'test'
   
   PQ_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'ImageRow_pq_demo')
-  util.mkdir(PQ_TEMPDIR)
-  util.rm_rf(PQ_TEMPDIR)
+  util.cleandir(PQ_TEMPDIR)
   
   ImageRow.write_to_parquet(train, PQ_TEMPDIR)
   ImageRow.write_to_parquet(test, PQ_TEMPDIR)
@@ -142,8 +148,7 @@ def test_imagetable_demo(monkeypatch):
   TABLE_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
                       'ImageTable_pq_demo')
-  util.mkdir(TABLE_TEMPDIR)
-  util.rm_rf(TABLE_TEMPDIR)
+  util.cleandir(TABLE_TEMPDIR)
   
   with monkeypatch.context() as m: 
     m.setattr(conf, 'AU_TABLE_CACHE', TABLE_TEMPDIR)
@@ -162,6 +167,10 @@ def test_imagetable_demo(monkeypatch):
     assert row.label == 'coffee'
     
     assert len(list(ImageTable.iter_all_rows())) == 6
+
+###
+### TODO: spark version of above
+###
 
 class TestFillNormalized(unittest.TestCase):
   def test_identity(self):
@@ -200,3 +209,38 @@ class TestFillNormalized(unittest.TestCase):
     expected = row.as_numpy() - 10
     np.testing.assert_array_equal(expected, row.attrs['normalized'])
   
+  def test_greyscale_to_rgb(self):
+    # Jpeg can have greyscale color mode!  See e.g.
+    # mscoco/zips/val2017.zip|val2017/000000007888.jpg
+    img = np.zeros((10, 10))
+    
+    row = ImageRow.from_np_img_labels(img)
+    assert row.as_numpy().shape == (10, 10)
+
+    f = FillNormalized(target_nchan=3)
+    row = f(row)
+    assert row.attrs['normalized'].shape == (10, 10, 3)
+
+def test_create_video():
+  v = testutils.VideoFixture()
+  
+  VID_TEMPDIR = os.path.join(
+                      testconf.TEST_TEMPDIR_ROOT,
+                      'test_create_video')
+  util.cleandir(VID_TEMPDIR)
+  path = os.path.join(VID_TEMPDIR, 'test_video.mov')
+  with open(path, 'wc') as f:
+    f.write(v.get_bytes())
+    print "Wrote video to %s for inspection" % path
+
+  import imageio
+  reader = imageio.get_reader(path)
+  meta = reader.get_meta_data()
+  assert meta['fps'] == v.fps
+  assert meta['nframes'] == v.n
+  
+  import itertools
+  expected_imgs = itertools.cycle(testutils.iter_video_images(v.n, v.w, v.h))
+  for im, expected in zip(reader, expected_imgs):
+    assert im.shape == (v.w, v.h, 3)
+    assert (im - expected).sum() == 0
