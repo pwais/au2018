@@ -1,8 +1,6 @@
 import os
 
-from au import conf
 from au import util
-from au.fixtures import nnmodel
 from au.fixtures.tf import mnist
 from au.test import testconf
 from au.test import testutils
@@ -97,6 +95,8 @@ class TestMNISTDataset(unittest.TestCase):
       self._check_test_0_img(rows=df.collect())
 
       df = mnist.MNISTDataset.get_class_freq(spark)
+      print 'MNISTDataset.get_class_freq:'
+      df.show()
       for row in df.collect():
         # We should have a reasonable sample ...
         assert row.frac >= 0.01
@@ -124,6 +124,8 @@ class TestMNISTDataset(unittest.TestCase):
 
 @pytest.mark.slow
 def test_mnist_igraph(monkeypatch):
+  from au.fixtures import nnmodel
+
   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
   
   # TODO: model fixture

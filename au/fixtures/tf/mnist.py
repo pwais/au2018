@@ -83,22 +83,34 @@ class MNISTDataset(dataset.ImageTable):
     cls.save_to_image_table(cls._datasets_iter_image_rows(params=params))
   
   @classmethod
-  def get_class_freq(cls, spark, and_show=True):
+  def get_class_freq(cls, spark, raw_counts=False):
     df = cls.as_imagerow_df(spark)
     table = cls.__name__.lower()
     df.createOrReplaceTempView(table)
 
-    query_base = """
-      SELECT
-        FIRST(split) split,
-        label, 
-        COUNT(*) / 
-          (SELECT COUNT(*) FROM {table} WHERE split = '{split}') frac
-      FROM {table}
-      WHERE split = '{split}'
-      GROUP BY label
-      ORDER BY label, split
-    """
+    if raw_counts:
+      query_base = """
+        SELECT
+          FIRST(split) split,
+          label, 
+          COUNT(*) num
+        FROM {table}
+        WHERE split = '{split}'
+        GROUP BY label
+        ORDER BY label, split
+      """
+    else:  
+      query_base = """
+        SELECT
+          FIRST(split) split,
+          label, 
+          COUNT(*) / 
+            (SELECT COUNT(*) FROM {table} WHERE split = '{split}') frac
+        FROM {table}
+        WHERE split = '{split}'
+        GROUP BY label
+        ORDER BY label, split
+      """
     
     query = """
       SELECT * FROM ( ( {train_query} ) UNION ( {test_query} ) )
@@ -108,8 +120,6 @@ class MNISTDataset(dataset.ImageTable):
           test_query=query_base.format(table=table, split='test'))
 
     res = spark.sql(query)
-    if and_show:
-      res.show()
     return res
 
   @classmethod
