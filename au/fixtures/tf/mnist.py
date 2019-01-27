@@ -22,6 +22,146 @@ from au.fixtures import nnmodel
 
 MNIST_INPUT_SIZE = (28, 28)
 
+
+###
+### Data
+###
+
+class MNISTDataset(dataset.ImageTable):
+  TABLE_NAME = 'MNIST'
+  
+  SPLIT = '' # Or 'train' or 'test'
+
+  @classmethod
+  def _datasets_iter_image_rows(cls, params=None):
+    params = params or MNIST.Params()
+    
+    log = util.create_log()
+    
+    def gen_dataset(ds, split):
+      import imageio
+      import numpy as np
+    
+      n = 0
+      with util.tf_data_session(ds) as (sess, iter_dataset):
+        for image, label in iter_dataset():
+          image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
+          label = int(label)
+          row = dataset.ImageRow.from_np_img_labels(
+                                      image,
+                                      label,
+                                      dataset=cls.TABLE_NAME,
+                                      split=split,
+                                      uri='mnist_%s_%s' % (split, n))
+          yield row
+          
+          n += 1
+          if params.LIMIT >= 0 and n == params.LIMIT:
+            break
+
+          if n % 100 == 0:
+            log.info("Read %s records from tf.Dataset" % n)
+    
+    from official.mnist import dataset as mnist_dataset
+    
+    # Keep our dataset ops in an isolated graph
+    g = tf.Graph()
+    with g.as_default():
+      gens = itertools.chain(
+          gen_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train'),
+          gen_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test'))
+      for row in gens:
+        yield row
+  
+  @classmethod
+  def save_datasets_as_png(cls, params=None):
+    dataset.ImageRow.write_to_pngs(
+        cls._datasets_iter_image_rows(params=params))
+  
+  @classmethod
+  def setup(cls, params=None):
+    cls.save_to_image_table(cls._datasets_iter_image_rows(params=params))
+  
+  @classmethod
+  def get_class_freq(cls, spark, and_show=True):
+    df = cls.as_imagerow_df(spark)
+    table = cls.__name__.lower()
+    df.createOrReplaceTempView(table)
+
+    query_base = """
+      SELECT
+        FIRST(split) split,
+        label, 
+        COUNT(*) / 
+          (SELECT COUNT(*) FROM {table} WHERE split = '{split}') frac
+      FROM {table}
+      WHERE split = '{split}'
+      GROUP BY label
+      ORDER BY label, split
+    """
+    
+    query = """
+      SELECT * FROM ( ( {train_query} ) UNION ( {test_query} ) )
+      ORDER BY split, label
+    """.format(
+          train_query=query_base.format(table=table, split='train'),
+          test_query=query_base.format(table=table, split='test'))
+
+    res = spark.sql(query)
+    if and_show:
+      res.show()
+    return res
+
+  @classmethod
+  def to_mnist_tf_dataset(cls, spark=None):
+    iter_image_rows = cls.create_iter_all_rows(spark=spark)
+    def iter_mnist_tuples():
+      t = util.ThruputObserver(name='iter_mnist_tuples')
+      norm = MNIST.Params().make_normalize_ftor()
+      for row in iter_image_rows():
+        # TODO: a faster filter.  For mnist this is plenty fast.
+        if cls.SPLIT is not '':
+          if cls.SPLIT.lower() != row.split:
+            continue
+
+        # TODO standardize this stuff
+        row = norm(row)
+        arr = row.attrs['normalized']
+
+        # # Based upon official/mnist/dataset.py
+        # def normalize_image(image):
+        #   # # Normalize from [0, 255] to [0.0, 1.0]
+        #   # # image = tf.decode_raw(image, tf.uint8) `image` is already an array
+        #   # image = tf.cast(image, tf.float32)
+        #   # image = tf.reshape(image, [784])
+        #   image = image.astype(float) / 255.0
+        #   return np.reshape(image, (784,))
+
+        # def decode_label(label):
+        #   # NB: `label` is already an int
+        #   # label = tf.decode_raw(label, tf.uint8)  # tf.string -> [tf.uint8]
+        #   label = tf.reshape(label, [])  # label is a scalar
+        #   return tf.to_int32(label)
+
+        yield arr, int(row.label), row.uri
+
+        t.update_tallies(n=1, num_bytes=arr.nbytes)
+        t.maybe_log_progress(n=1000)
+
+    d = tf.data.Dataset.from_generator(
+              generator=iter_mnist_tuples,
+              output_types=(tf.float32, tf.int32, tf.string),
+              output_shapes=([784], [], []))
+    return d
+
+class MNISTTrainDataset(MNISTDataset):
+  SPLIT = 'train'
+
+class MNISTTestDataset(MNISTDataset):
+  SPLIT = 'test'
+
+
+
 ## From mnist.py
 
 def create_model(data_format='channels_last'):
@@ -154,8 +294,69 @@ def test_dataset(params):
   test_ds = test_ds.batch(params.BATCH_SIZE)
   return test_ds
 
-def mnist_train(params):
-  log = util.create_log()
+# def mnist_train(params):
+#   log = util.create_log()
+#   tf.logging.set_verbosity(tf.logging.DEBUG)
+  
+#   ## Model
+#   model_dir = params.MODEL_BASEDIR
+#   tf.gfile.MakeDirs(params.MODEL_BASEDIR)
+  
+#   mnist_classifier = tf.estimator.Estimator(
+#     model_fn=model_fn,
+#     params=None,
+#     config=tf.estimator.RunConfig(
+#       model_dir=model_dir,
+#       save_summary_steps=10,
+#       save_checkpoints_secs=10,
+#       session_config=util.tf_create_session_config(),
+#       log_step_count_steps=10))
+    
+#   ## Data
+#   def train_input_fn():
+#     from official.mnist import dataset as mnist_dataset
+    
+#     # Load the datasets
+#     train_ds = mnist_dataset.train(params.DATA_BASEDIR)
+#     if params.LIMIT >= 0:
+#       train_ds = train_ds.take(params.LIMIT)
+#     train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
+#     return train_ds
+  
+#   def eval_input_fn():
+#     test_ds = test_dataset(params)
+#     # No idea why we return an interator thingy instead of a dataset ...
+#     return test_ds.make_one_shot_iterator().get_next()
+
+#   # Set up hook that outputs training logs every 100 steps.
+#   from official.utils.logs import hooks_helper
+#   train_hooks = hooks_helper.get_train_hooks(
+#       ['ExamplesPerSecondHook',
+#        'LoggingTensorHook'],
+#       model_dir=model_dir,
+#       batch_size=params.BATCH_SIZE)
+
+#   # Train and evaluate model.
+#   for _ in range(params.TRAIN_EPOCHS):
+#     mnist_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
+#     eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
+#     log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+
+#   # Export the model
+#   # TODO do we need this placeholder junk?
+#   image = tf.placeholder(tf.float32, [None, 28, 28, 1], name='input_image')
+#   input_fn = tf.estimator.export.build_raw_serving_input_receiver_fn({
+#       'image': image,
+#   })
+#   mnist_classifier.export_savedmodel(params.MODEL_BASEDIR, input_fn)
+
+
+def mnist_train(params, train_table=None, test_table=None):
+  if train_table is None:
+    train_table = MNISTTrainDataset
+  if test_table is None:
+    test_table = MNISTTestDataset
+
   tf.logging.set_verbosity(tf.logging.DEBUG)
   
   ## Model
@@ -173,18 +374,28 @@ def mnist_train(params):
       log_step_count_steps=10))
     
   ## Data
-  def train_input_fn():
-    from official.mnist import dataset as mnist_dataset
-    
-    # Load the datasets
-    train_ds = mnist_dataset.train(params.DATA_BASEDIR)
+  def train_input_fn():    
+    # Load the dataset
+    train_ds = train_table.to_mnist_tf_dataset()
+
+    # Flow doesn't need uri
+    train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
+
     if params.LIMIT >= 0:
       train_ds = train_ds.take(params.LIMIT)
     train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
     return train_ds
   
   def eval_input_fn():
-    test_ds = test_dataset(params)
+    test_ds = test_table.to_mnist_tf_dataset()
+
+    # Flow doesn't need uri
+    test_ds = test_ds.map(lambda arr, label, uri: (arr, label))
+
+    if params.LIMIT >= 0:
+      test_ds = test_ds.take(params.LIMIT)
+    test_ds = test_ds.batch(params.BATCH_SIZE)
+    
     # No idea why we return an interator thingy instead of a dataset ...
     return test_ds.make_one_shot_iterator().get_next()
 
@@ -200,7 +411,7 @@ def mnist_train(params):
   for _ in range(params.TRAIN_EPOCHS):
     mnist_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
     eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
-    log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+    util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
 
   # Export the model
   # TODO do we need this placeholder junk?
@@ -209,7 +420,6 @@ def mnist_train(params):
       'image': image,
   })
   mnist_classifier.export_savedmodel(params.MODEL_BASEDIR, input_fn)
-
 
 
 ## AU Interface
@@ -348,98 +558,11 @@ class MNIST(nnmodel.INNModel):
 
 
 
-class MNISTDataset(dataset.ImageTable):
-  TABLE_NAME = 'MNIST'
-  
-  @classmethod
-  def _datasets_iter_image_rows(cls, params=None):
-    params = params or MNIST.Params()
-    
-    log = util.create_log()
-    
-    def gen_dataset(ds, split):
-      import imageio
-      import numpy as np
-    
-      n = 0
-      with util.tf_data_session(ds) as (sess, iter_dataset):
-        for image, label in iter_dataset():
-          image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
-          label = int(label)
-          row = dataset.ImageRow.from_np_img_labels(
-                                      image,
-                                      label,
-                                      dataset=cls.TABLE_NAME,
-                                      split=split,
-                                      uri='mnist_%s_%s' % (split, n))
-          yield row
-          
-          n += 1
-          if params.LIMIT >= 0 and n == params.LIMIT:
-            break
-
-          if n % 100 == 0:
-            log.info("Read %s records from tf.Dataset" % n)
-    
-    from official.mnist import dataset as mnist_dataset
-    
-    # Keep our dataset ops in an isolated graph
-    g = tf.Graph()
-    with g.as_default():
-      gens = itertools.chain(
-          gen_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train'),
-          gen_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test'))
-      for row in gens:
-        yield row
-  
-  @classmethod
-  def save_datasets_as_png(cls, params=None):
-    dataset.ImageRow.write_to_pngs(
-        cls._datasets_iter_image_rows(params=params))
-  
-  @classmethod
-  def setup(cls, params=None):
-    cls.save_to_image_table(cls._datasets_iter_image_rows(params=params))
-  
-  @classmethod
-  def to_mnist_tf_dataset(cls, spark=None):
-    iter_image_rows = cls.create_iter_all_rows(spark=spark)
-    def iter_mnist_tuples():
-      t = util.ThruputObserver(name='iter_mnist_tuples')
-      norm = MNIST.Params().make_normalize_ftor()
-      for row in iter_image_rows():
-        row = norm(row)
-        arr = row.attrs['normalized']
-
-        # # Based upon official/mnist/dataset.py
-        # def normalize_image(image):
-        #   # # Normalize from [0, 255] to [0.0, 1.0]
-        #   # # image = tf.decode_raw(image, tf.uint8) `image` is already an array
-        #   # image = tf.cast(image, tf.float32)
-        #   # image = tf.reshape(image, [784])
-        #   image = image.astype(float) / 255.0
-        #   return np.reshape(image, (784,))
-
-        # def decode_label(label):
-        #   # NB: `label` is already an int
-        #   # label = tf.decode_raw(label, tf.uint8)  # tf.string -> [tf.uint8]
-        #   label = tf.reshape(label, [])  # label is a scalar
-        #   return tf.to_int32(label)
-
-        yield arr, int(row.label), row.uri
-
-        t.update_tallies(n=1, num_bytes=arr.nbytes)
-        t.maybe_log_progress(n=1000)
-
-    d = tf.data.Dataset.from_generator(
-              generator=iter_mnist_tuples,
-              output_types=(tf.float32, tf.int32, tf.string),
-              output_shapes=([784], [], []))
-    return d
-
 def setup_caches():
   MNIST.load_or_train()
   MNISTDataset.setup()
+
+
 
 if __name__ == '__main__':
   # self-test / demo mode!

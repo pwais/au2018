@@ -15,14 +15,15 @@ import pytest
 
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist') 
 
-# @pytest.mark.slow
-# def test_mnist_train(monkeypatch):
-#   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+@pytest.mark.slow
+def test_mnist_train(monkeypatch):
+  testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
 
-#   params = mnist.MNIST.Params()
-#   params.TRAIN_EPOCHS = 10
-#   params.LIMIT = 1000
-#   model = mnist.MNIST.load_or_train(params)
+  params = mnist.MNIST.Params()
+  params.TRAIN_EPOCHS = 10
+  params.LIMIT = 1000
+  model = mnist.MNIST.load_or_train(params)
+
 
 class TestMNISTDataset(unittest.TestCase):
 
@@ -94,6 +95,12 @@ class TestMNISTDataset(unittest.TestCase):
       df.show()
       assert df.count() == 2 * self.params.LIMIT
       self._check_test_0_img(rows=df.collect())
+
+      df = mnist.MNISTDataset.get_class_freq(spark)
+      for row in df.collect():
+        # We should have a reasonable sample ...
+        assert row.frac >= 0.01
+
   
   @pytest.mark.slow
   def test_to_tf_dataset_no_spark(self):
