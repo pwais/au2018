@@ -56,6 +56,8 @@ class Proxy(object):
     self._on_delete()
     del self.instance
 
+
+
 class ThruputObserver(object):
   
   def __init__(self, name='', log_on_del=False, only_stats=None):
@@ -97,6 +99,13 @@ class ThruputObserver(object):
     self.ts.append(end - self._start)
     self._start = None
   
+  def maybe_log_progress(self, n=100):
+    if self.n % n == 0:
+      self.stop_block()
+      log = create_log()
+      log.info("Progress for " + self.name + "\n" + str(self))
+      self.start_block()
+
   @staticmethod
   def union(thruputs):
     u = ThruputObserver()
@@ -144,8 +153,11 @@ class ThruputObserver(object):
   
   def __del__(self):
     if self.log_on_del:
+      self.stop_block()
       log = create_log()
       log.info('\n' + str(self) + '\n')
+
+
 
 @contextmanager
 def quiet():

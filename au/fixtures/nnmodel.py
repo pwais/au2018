@@ -28,6 +28,14 @@ class INNModel(object):
       
       # For batching inference
       self.INFERENCE_BATCH_SIZE = 10
+    
+    def make_normalize_ftor(self):
+      input_dims = self.INPUT_TENSOR_SHAPE
+      target_hw = (input_dims[1], input_dims[2])
+      target_nchan = input_dims[3]
+      return dataset.FillNormalized(
+                          target_hw=target_hw,
+                          target_nchan=target_nchan)
 
 
   def __init__(self, params=None):
@@ -67,7 +75,7 @@ class TFInferenceGraphFactory(object):
     that respects `params.INPUT_TENSOR_SHAPE`.  Subclasses may simply want
     to override `create_frozen_graph_def()` above.
     
-    Subclasses can use `make_normalize_ftor()` below to specify how to
+    Subclasses can use `params.make_normalize_ftor()` to specify how to
     transform `ImageRow`s to include the desired input image format
     from arbitrary images.  The inference engine will choose how to
     create those `ImageRow`s and/or the actual `input_image` data.
@@ -97,13 +105,16 @@ class TFInferenceGraphFactory(object):
         tf.contrib.graph_editor.get_tensors(self.graph)))
     return self.graph 
   
-  def make_normalize_ftor(self):
-    input_dims = self.input_tensor_shape
-    target_hw = (input_dims[1], input_dims[2])
-    target_nchan = input_dims[3]
-    return dataset.FillNormalized(
-                        target_hw=target_hw,
-                        target_nchan=target_nchan)
+#
+#
+#
+  # def make_normalize_ftor(self):
+  #   input_dims = self.input_tensor_shape
+  #   target_hw = (input_dims[1], input_dims[2])
+  #   target_nchan = input_dims[3]
+  #   return dataset.FillNormalized(
+  #                       target_hw=target_hw,
+  #                       target_nchan=target_nchan)
   
   @property
   def input_tensor_shape(self):
@@ -194,7 +205,7 @@ class FillActivationsTFDataset(FillActivationsBase):
     # Push normalization onto the Tensorflow tf.Dataset threadpool via the
     # generator below.  Read more after the function.
     def iter_normalized_np_images():
-      normalize = self.tigraph_factory.make_normalize_ftor()
+      normalize = self.tigraph_factory.params.make_normalize_ftor()
       for row in iter_imagerows:
         row = normalize(row)
         processed_rows.put(row)

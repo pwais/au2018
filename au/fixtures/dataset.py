@@ -406,7 +406,7 @@ class FillNormalized(object):
     return row
 
 ##
-## Tables of images
+## Tables of ImageRows
 ##
 
 class ImageTable(object):
@@ -479,11 +479,100 @@ class ImageTable(object):
       yield row
   
   @classmethod
-  def as_imagerow_rdd(cls, spark):
+  def as_imagerow_df(cls, spark):
     df = spark.read.parquet(cls.table_root())
+    return df
+    row_rdd = df.rdd.map(lambda row: ImageRow(**row.asDict()))
+    return row_rdd
+
+  @classmethod
+  def as_imagerow_rdd(cls, spark):
+    df = cls.as_imagerow_df(spark)
     row_rdd = df.rdd.map(lambda row: ImageRow(**row.asDict()))
     return row_rdd
   
+  @classmethod
+  def create_iter_all_rows(cls, cycle=False, spark=None):
+    def iter_image_rows():
+      _rdd = None
+      t = util.ThruputObserver(
+              name=cls.__name__ + '.iter_rows',
+              log_on_del=True)
+      t.start_block()
+      
+      while True:
+        if spark is None:
+          iter_rows = cls.iter_all_rows
+        else:
+          _rdd = cls.as_imagerow_rdd(spark)
+          iter_rows = _rdd.toLocalIterator
+        
+        for row in iter_rows():
+          yield row
+          t.update_tallies(n=1)
+          t.maybe_log_progress(n=1000)
+        
+        if not cycle:
+          break
+    return iter_image_rows
+
+
+# class TFDatasetAdapter(object):
+
+#   def __init__(self,
+#         image_table_cls=ImageTable,
+#         cycle=False,
+#         spark=None,
+#         normalize=None,
+#         numeric_labels=False):
+    
+#     self.image_table_cls = image_table_cls
+#     self.cycle = cycle
+#     self.spark = spark
+#     self.normalize = normalize
+#     self.numeric_labels = numeric_labels
+
+#   def build(self):
+    
+    
+    
+#     # Push normalization and image/label decode onto the tf.Dataset threadpool;
+#     # should help reduce memory usage
+#     def iter_inputs():
+#       t = util.ThruputObserver(
+#               name=self.image_table_cls.__name__ + '.iter_inputs',
+#               log_on_del=True)
+#       t.start_block()
+
+#       for row in iter_image_rows():
+#         if self.normalize is None:
+#           arr = row.as_numpy()
+#         else:
+#           row = self.normalize(row)
+#           arr = row.attrs['normalized']
+        
+#         res = arr
+#         t.update_tallies(num_bytes=arr.nbytes)
+#         if self.numeric_labels:
+#           res = (arr, row.label)
+        
+#         yield res
+
+#         t.update_tallies(n=1)
+#         if t.n % 1000 == 0:
+#             util.log.info("Iter Inputs Progress:\n" + str(t))
+    
+#     import tensorflow as tf
+#     output_types = [tf.uint8]
+#     if self.numeric_labels:
+#       output_types.append(tf.float64)
+
+#     d = tf.data.Dataset.from_generator(
+#                       generator=iter_inputs,
+#                       output_types=(tf.string, tf.uint8),
+#                       output_shapes=(tf.TensorShape([]), input_shape))
+#     return d
+
 
 
 

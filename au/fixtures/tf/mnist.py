@@ -12,6 +12,8 @@ import itertools
 import os
 from collections import OrderedDict
 
+import numpy as np
+
 import tensorflow as tf
 
 from au import util
@@ -317,21 +319,19 @@ class MNIST(nnmodel.INNModel):
     self.predictor = None
 
   @classmethod
-  def load_or_train(cls, params=None):
-    log = util.create_log()
-    
+  def load_or_train(cls, params=None):    
     params = params or MNIST.Params()
     model = MNIST(params=params)
 
     if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
-      log.info("Training!")
+      util.log.info("Training!")
       # subprocess allows recovery of gpu memory!  See TFSessionPool comments
       # import multiprocessing
       # p = multiprocessing.Process(target=mnist_train, args=(params,))
       # p.start()
       # p.join()
       mnist_train(params)
-      log.info("Done training!")
+      util.log.info("Done training!")
 
     model.igraph = MNISTGraph(params)
     return model
@@ -366,9 +366,10 @@ class MNISTDataset(dataset.ImageTable):
                                       uri='mnist_%s_%s' % (split, n))
           yield row
           
+          n += 1
           if params.LIMIT >= 0 and n == params.LIMIT:
             break
-          n += 1
+
           if n % 100 == 0:
             log.info("Read %s records from tf.Dataset" % n)
     
@@ -391,6 +392,41 @@ class MNISTDataset(dataset.ImageTable):
   @classmethod
   def setup(cls, params=None):
     cls.save_to_image_table(cls.datasets_iter_image_rows(params=params))
+  
+  @classmethod
+  def to_mnist_tf_dataset(cls, spark=None):
+    iter_image_rows = cls.create_iter_all_rows(spark=spark)
+    def iter_mnist_tuples():
+      t = util.ThruputObserver(name='iter_mnist_tuples')
+      for row in iter_image_rows():
+        arr = row.as_numpy()
+        label = row.label
+
+        # Based upon official/mnist/dataset.py
+        def decode_image(image):
+          # # Normalize from [0, 255] to [0.0, 1.0]
+          # # image = tf.decode_raw(image, tf.uint8) `image` is already an array
+          # image = tf.cast(image, tf.float32)
+          # image = tf.reshape(image, [784])
+          image = image.astype(float) / 255.0
+          return np.reshape(image, (784,))
+
+        # def decode_label(label):
+        #   # NB: `label` is already an int
+        #   # label = tf.decode_raw(label, tf.uint8)  # tf.string -> [tf.uint8]
+        #   label = tf.reshape(label, [])  # label is a scalar
+        #   return tf.to_int32(label)
+
+        yield decode_image(arr), int(label)
+
+        t.update_tallies(n=1, num_bytes=arr.nbytes)
+        t.maybe_log_progress(n=1000)
+
+    d = tf.data.Dataset.from_generator(
+              generator=iter_mnist_tuples,
+              output_types=(tf.float32, tf.int32),
+              output_shapes=([784], []))
+    return d
 
 def setup_caches():
   MNIST.load_or_train()

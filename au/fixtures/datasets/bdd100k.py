@@ -659,9 +659,7 @@ class _VideoReaderCache(object):
         self.thruput.start_block()
         d = self.reader.get_data(i)
         self.thruput.stop_block(n=1, num_bytes=d.nbytes)
-
-        if self.thruput.n % 100 == 0:
-          print str(self.thruput)
+        self.thruput.maybe_log_progress(n=100)
 
         return d
     
