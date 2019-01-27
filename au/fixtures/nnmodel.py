@@ -23,6 +23,8 @@ class INNModel(object):
 
       # For tensorflow models
       self.INPUT_TENSOR_SHAPE = [None, None, None, None]
+      self.INPUT_TENSOR_NAME = 'au_inference_input'
+      self.INPUT_URIS_NAME = 'au_inference_uris'
       
       # For batching inference
       self.INFERENCE_BATCH_SIZE = 10
@@ -50,18 +52,50 @@ class TFInferenceGraphFactory(object):
 
   def __init__(self, params=None):
     self.params = params or INNModel.ParamsBase()
+    self.graph = None
   
-  def create_inference_graph(self, input_image, base_graph):
+  def create_frozen_graph_def(self):
+    """Create and return a string that represents a frozen GraphDef
+    for the inference graph.  The graph should include input tensors
+    with names `params.INPUT_TENSOR_NAME` and `params.INPUT_URIS_NAME`
+    """
+    return None
+
+  def create_inference_graph(self, uris, input_image, base_graph):
     """Create and return an inference graph based upon `base_graph`.
     Use `input_image` as a tensor of uint8 [batch, height, width, chan]
-    that respects `params.INPUT_TENSOR_SHAPE`.  
+    that respects `params.INPUT_TENSOR_SHAPE`.  Subclasses may simply want
+    to override `create_frozen_graph_def()` above.
     
     Subclasses can use `make_normalize_ftor()` below to specify how to
     transform `ImageRow`s to include the desired input image format
     from arbitrary images.  The inference engine will choose how to
     create those `ImageRow`s and/or the actual `input_image` data.
     """
-    return base_graph
+    gdef_frozen = self.create_frozen_graph_def()
+    if gdef_frozen is None:
+      return base_graph
+
+    import tensorflow as tf
+
+    self.graph = base_graph
+    with self.graph.as_default():
+      tf.import_graph_def(
+        gdef_frozen,
+        name='',
+        input_map={
+          self.params.INPUT_TENSOR_NAME: input_image,
+          self.params.INPUT_URIS_NAME: uris,
+              # https://stackoverflow.com/a/33770771
+        })
+
+    import pprint
+    util.log.info("Loaded graph:")
+    util.log.info(
+      '\n' +
+      pprint.pformat(
+        tf.contrib.graph_editor.get_tensors(self.graph)))
+    return self.graph 
   
   def make_normalize_ftor(self):
     input_dims = self.input_tensor_shape
@@ -75,6 +109,10 @@ class TFInferenceGraphFactory(object):
   def input_tensor_shape(self):
     return self.params.INPUT_TENSOR_SHAPE
   
+  @property
+  def input_uri_tensor_name(self):
+    return self.params.INPUT_URIS_NAME
+
   @property
   def batch_size(self):
     return self.params.INFERENCE_BATCH_SIZE
@@ -153,6 +191,8 @@ class FillActivationsTFDataset(FillActivationsBase):
     graph = tf.Graph()
     processed_rows = Queue.Queue()
 
+    # Push normalization onto the Tensorflow tf.Dataset threadpool via the
+    # generator below.  Read more after the function.
     def iter_normalized_np_images():
       normalize = self.tigraph_factory.make_normalize_ftor()
       for row in iter_imagerows:
@@ -176,6 +216,8 @@ class FillActivationsTFDataset(FillActivationsBase):
     # multi-threaded I/O, we lean on Spark, which will typically run one
     # instance of this functor per core (thus providing some
     # cache-friendliness).
+    uris_op_name = self.tigraph_factory.input_uri_tensor_name
+    uris_tensor_name = uris_op_name + ':0'
     with graph.as_default():
       # Hack: let us handle batch size here ...
       input_shape = list(self.tigraph_factory.input_tensor_shape)
@@ -186,13 +228,14 @@ class FillActivationsTFDataset(FillActivationsBase):
                       output_shapes=(tf.TensorShape([]), input_shape))
       d = d.batch(self.tigraph_factory.batch_size)
       uris, input_image = d.make_one_shot_iterator().get_next()
-      uris = tf.identity(uris, name='au_inf_uris')
+      uris = tf.identity(uris, name=uris_op_name)
     
     util.log.info("Creating inference graph ...")
     final_graph = self.tigraph_factory.create_inference_graph(
-      uris,
+                                              uris,
                                               input_image,
                                               graph)
+    
     # with final_graph.as_default() as g:
     #   uris = tf.identity(uris, name='au_uris')
     #   assert uris.graph is g
@@ -205,7 +248,7 @@ class FillActivationsTFDataset(FillActivationsBase):
           
         tensors_to_eval = list(self.tigraph_factory.output_names)
         assert tensors_to_eval
-        tensors_to_eval.append('au_inf_uris:0')
+        tensors_to_eval.append(uris_tensor_name)
         
         uri_to_row_cache = {}
         while True:
@@ -224,7 +267,7 @@ class FillActivationsTFDataset(FillActivationsBase):
             tensor_to_value = dict(
                         (name, output[i][n,...])
                         for i, name in enumerate(tensors_to_eval))
-            row_uri = str(tensor_to_value['au_inf_uris:0'])
+            row_uri = str(tensor_to_value.pop(uris_tensor_name))
 
             # Find the row corresponding to this output
             for _ in range(100 * batch_size):

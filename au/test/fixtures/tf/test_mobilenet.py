@@ -63,23 +63,33 @@ def test_mobilenet_inference_graph(monkeypatch):
     # y = self.endpoints['Predictions'].eval(feed_dict={input_image:[imr]})
     # print y, y.max()
 
-# FIXME: CI only has 8GB of RAM, and that's not enough for this test.  We tried
-# to profile but discovered no clear Python memory issue; might be Tensorflow.
-@pytest.mark.slow
-def test_mobilenet_activation_tables(monkeypatch):
+def _test_mobilenet_activation_tables(monkeypatch, params_cls):
   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
   dataset.ImageTable.setup()
   
   with testutils.LocalSpark.sess() as spark:
-    for params_cls in mobilenet.Mobilenet.ALL_PARAMS_CLSS:
-      params = params_cls()
+    params = params_cls()
 
-      class TestTable(nnmodel.ActivationsTable):
-        TABLE_NAME = 'Mobilenet_test_' + params_cls.__name__
-        NNMODEL_CLS = mobilenet.Mobilenet
-        MODEL_PARAMS = params
-        IMAGE_TABLE_CLS = dataset.ImageTable
-    
-      TestTable.setup(spark=spark)
+    class TestTable(nnmodel.ActivationsTable):
+      TABLE_NAME = 'Mobilenet_test_' + params_cls.__name__
+      NNMODEL_CLS = mobilenet.Mobilenet
+      MODEL_PARAMS = params
+      IMAGE_TABLE_CLS = dataset.ImageTable
+  
+    TestTable.setup(spark=spark)
 
+@pytest.mark.slow
+def test_mobilenet_activation_tables_small(monkeypatch):
+  _test_mobilenet_activation_tables(monkeypatch, mobilenet.Mobilenet.Small)
 
+@pytest.mark.slow
+def test_mobilenet_activation_tables_medium(monkeypatch):
+  _test_mobilenet_activation_tables(monkeypatch, mobilenet.Mobilenet.Medium)
+
+@pytest.mark.slow
+def test_mobilenet_activation_tables_large(monkeypatch):
+  _test_mobilenet_activation_tables(monkeypatch, mobilenet.Mobilenet.Large)
+
+@pytest.mark.slow
+def test_mobilenet_activation_tables_xlarge(monkeypatch):
+  _test_mobilenet_activation_tables(monkeypatch, mobilenet.Mobilenet.XLarge)

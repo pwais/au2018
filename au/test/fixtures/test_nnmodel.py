@@ -22,12 +22,45 @@ class Sobel(nnmodel.INNModel):
       self.INPUT_TENSOR_SHAPE = [None, 200, 300, 3]
     
   class GraphFactory(nnmodel.TFInferenceGraphFactory):
-    def create_inference_graph(self, input_image, base_graph):
-      with base_graph.as_default():
+    def create_frozen_graph_def(self):
+      g = tf.Graph()
+      with g.as_default():
+        input_image = tf.placeholder(
+          tf.uint8,
+          self.params.INPUT_TENSOR_SHAPE,
+          name=self.params.INPUT_TENSOR_NAME)
+        uris = tf.placeholder(
+          tf.string,
+          [None],
+          name=self.params.INPUT_URIS_NAME)
+          
+        input_image_f = tf.cast(input_image, tf.float32)
+
         # FMI see impl https://github.com/tensorflow/tensorflow/blob/r1.11/tensorflow/python/ops/image_ops_impl.py#L2770
-        sobel = tf.image.sobel_edges(tf.cast(input_image, tf.float32))
-        self.out = tf.identity(sobel, name='sobel')
-      return base_graph
+        sobel = tf.image.sobel_edges(input_image_f)
+        out = tf.identity(sobel, name='sobel')
+      return g.as_graph_def()
+
+
+    #       pred = tf_model(input_image_f, training=False)
+    #       checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
+    #       saver = tf.train.import_meta_graph(
+    #                             checkpoint + '.meta',
+    #                             clear_devices=True)
+    #       return util.give_me_frozen_graph(
+    #                           checkpoint,
+    #                           nodes=list(self.output_names) + [input_image, uris],
+    #                           saver=saver,
+    #                           base_graph=g,
+    #                           sess=sess)
+
+
+    # def create_inference_graph(self, input_image, base_graph):
+    #   with base_graph.as_default():
+        
+    #     sobel = tf.image.sobel_edges(tf.cast(input_image, tf.float32))
+    #     self.out = tf.identity(sobel, name='sobel')
+    #   return base_graph
     
     @property
     def output_names(self):
