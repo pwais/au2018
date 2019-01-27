@@ -299,6 +299,12 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
       'sequential/dense_1/MatMul:0',
     )
 
+# Based upon official/mnist/dataset.py
+def normalize_image(image):
+  # # Normalize from [0, 255] to [0.0, 1.0]
+  image = image.astype(np.float32) / 255.0
+  return np.reshape(image, (784,))
+
 class MNIST(nnmodel.INNModel):
 
   class Params(nnmodel.INNModel.ParamsBase):
@@ -311,6 +317,7 @@ class MNIST(nnmodel.INNModel):
       self.LIMIT = -1
       self.INPUT_TENSOR_SHAPE = [
                   None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1]
+      self.NORM_FUNC = normalize_image
 
   def __init__(self, params=None):
     super(MNIST, self).__init__(params=params)
@@ -340,11 +347,12 @@ class MNIST(nnmodel.INNModel):
     return self.igraph
 
 
+
 class MNISTDataset(dataset.ImageTable):
   TABLE_NAME = 'MNIST'
   
   @classmethod
-  def datasets_iter_image_rows(cls, params=None):
+  def _datasets_iter_image_rows(cls, params=None):
     params = params or MNIST.Params()
     
     log = util.create_log()
@@ -387,29 +395,30 @@ class MNISTDataset(dataset.ImageTable):
   @classmethod
   def save_datasets_as_png(cls, params=None):
     dataset.ImageRow.write_to_pngs(
-        cls.datasets_iter_image_rows(params=params))
+        cls._datasets_iter_image_rows(params=params))
   
   @classmethod
   def setup(cls, params=None):
-    cls.save_to_image_table(cls.datasets_iter_image_rows(params=params))
+    cls.save_to_image_table(cls._datasets_iter_image_rows(params=params))
   
   @classmethod
   def to_mnist_tf_dataset(cls, spark=None):
     iter_image_rows = cls.create_iter_all_rows(spark=spark)
     def iter_mnist_tuples():
       t = util.ThruputObserver(name='iter_mnist_tuples')
+      norm = MNIST.Params().make_normalize_ftor()
       for row in iter_image_rows():
-        arr = row.as_numpy()
-        label = row.label
+        row = norm(row)
+        arr = row.attrs['normalized']
 
-        # Based upon official/mnist/dataset.py
-        def decode_image(image):
-          # # Normalize from [0, 255] to [0.0, 1.0]
-          # # image = tf.decode_raw(image, tf.uint8) `image` is already an array
-          # image = tf.cast(image, tf.float32)
-          # image = tf.reshape(image, [784])
-          image = image.astype(float) / 255.0
-          return np.reshape(image, (784,))
+        # # Based upon official/mnist/dataset.py
+        # def normalize_image(image):
+        #   # # Normalize from [0, 255] to [0.0, 1.0]
+        #   # # image = tf.decode_raw(image, tf.uint8) `image` is already an array
+        #   # image = tf.cast(image, tf.float32)
+        #   # image = tf.reshape(image, [784])
+        #   image = image.astype(float) / 255.0
+        #   return np.reshape(image, (784,))
 
         # def decode_label(label):
         #   # NB: `label` is already an int
@@ -417,15 +426,15 @@ class MNISTDataset(dataset.ImageTable):
         #   label = tf.reshape(label, [])  # label is a scalar
         #   return tf.to_int32(label)
 
-        yield decode_image(arr), int(label)
+        yield arr, int(row.label), row.uri
 
         t.update_tallies(n=1, num_bytes=arr.nbytes)
         t.maybe_log_progress(n=1000)
 
     d = tf.data.Dataset.from_generator(
               generator=iter_mnist_tuples,
-              output_types=(tf.float32, tf.int32),
-              output_shapes=([784], []))
+              output_types=(tf.float32, tf.int32, tf.string),
+              output_shapes=([784], [], []))
     return d
 
 def setup_caches():

@@ -9,6 +9,8 @@ from au.test import testutils
 
 import unittest
 
+import imageio
+import numpy as np
 import pytest
 
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist') 
@@ -26,7 +28,6 @@ class TestMNISTDataset(unittest.TestCase):
 
   @classmethod
   def setUpClass(cls):
-
     # Use /tmp for test fixtures
     from _pytest.monkeypatch import MonkeyPatch
     monkeypatch = MonkeyPatch()
@@ -37,13 +38,43 @@ class TestMNISTDataset(unittest.TestCase):
     
     mnist.MNISTDataset.setup(params=cls.params)
 
+    cls.TEST_PATH = os.path.join(
+                  TEST_TEMPDIR,
+                  'data/MNIST/test/MNIST-test-label_7-mnist_test_0.png') 
+    assert os.path.exists(cls.TEST_PATH)
+
+    cls.expected_test_0_bytes = open(testconf.MNIST_TEST_IMG_PATH, 'r').read()
+    cls.expected_test_0 = imageio.imread(testconf.MNIST_TEST_IMG_PATH)
+
+  def _check_test_0_img(self, rows=None, tuples=None):
+    tested = False
+    for row in rows or []:
+      if 'mnist_test_0' in row.uri:
+        assert row.image_bytes == self.expected_test_0_bytes
+        tested = True
+        break
+
+    for t in tuples or []:
+      arr, label, uri = t
+      if 'mnist_test_0' in uri:
+        expected = mnist.normalize_image(self.expected_test_0)
+        assert arr.shape == expected.shape
+        np.testing.assert_array_equal(arr, expected)
+        tested = True
+        break
+    
+    assert tested, "Row not found?"
+
   @pytest.mark.slow
-  def test_get_rows(self):  
-    rows = mnist.MNISTDataset.get_rows_by_uris(
-                                    ('mnist_train_0',
-                                    'mnist_test_0',
-                                    'not_in_mnist'))
+  def test_get_rows(self):
+    uris = (
+      'mnist_train_0',
+      'mnist_test_0',
+      'not_in_mnist',
+    )
+    rows = mnist.MNISTDataset.get_rows_by_uris(uris)
     assert len(rows) == 2
+    
     rows = sorted(rows)
     assert rows[0].uri == 'mnist_test_0'
     assert rows[1].uri == 'mnist_train_0'
@@ -53,25 +84,16 @@ class TestMNISTDataset(unittest.TestCase):
   @pytest.mark.slow
   def test_image_contents(self):
     mnist.MNISTDataset.save_datasets_as_png(params=self.params)
-    TEST_PATH = os.path.join(
-                  TEST_TEMPDIR,
-                  'data/MNIST/test/MNIST-test-label_7-mnist_test_0.png') 
-    assert os.path.exists(TEST_PATH)
-
-    import imageio
-    expected = imageio.imread(testconf.MNIST_TEST_IMG_PATH)
-
-    import numpy as np
-    image = imageio.imread(TEST_PATH)
-    np.testing.assert_array_equal(image, expected)
+    image = imageio.imread(self.TEST_PATH)
+    np.testing.assert_array_equal(image, self.expected_test_0)
 
   @pytest.mark.slow
   def test_spark_df(self):
-    # Test smoke!
     with testutils.LocalSpark.sess() as spark:
       df = mnist.MNISTDataset.as_imagerow_df(spark)
       df.show()
       assert df.count() == 2 * self.params.LIMIT
+      self._check_test_0_img(rows=df.collect())
   
   @pytest.mark.slow
   def test_to_tf_dataset_no_spark(self):
@@ -79,6 +101,7 @@ class TestMNISTDataset(unittest.TestCase):
     with util.tf_data_session(d) as (sess, iter_dataset):
       tuples = list(iter_dataset())
     assert len(tuples) == 2 * self.params.LIMIT
+    self._check_test_0_img(tuples=tuples)
   
   @pytest.mark.slow
   def test_to_tf_dataset_spark(self):
@@ -86,7 +109,8 @@ class TestMNISTDataset(unittest.TestCase):
       d = mnist.MNISTDataset.to_mnist_tf_dataset(spark=spark)
       with util.tf_data_session(d) as (sess, iter_dataset):
         tuples = list(iter_dataset())
-      assert len(tuples) == 2 * self.params.LIMIT
+      self._check_test_0_img(tuples=tuples)
+
 
 
 

@@ -25,6 +25,7 @@ class INNModel(object):
       self.INPUT_TENSOR_SHAPE = [None, None, None, None]
       self.INPUT_TENSOR_NAME = 'au_inference_input'
       self.INPUT_URIS_NAME = 'au_inference_uris'
+      self.NORM_FUNC = None
       
       # For batching inference
       self.INFERENCE_BATCH_SIZE = 10
@@ -35,7 +36,8 @@ class INNModel(object):
       target_nchan = input_dims[3]
       return dataset.FillNormalized(
                           target_hw=target_hw,
-                          target_nchan=target_nchan)
+                          target_nchan=target_nchan,
+                          norm_func=self.NORM_FUNC)
 
 
   def __init__(self, params=None):
