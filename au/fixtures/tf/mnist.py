@@ -553,11 +553,21 @@ class MNIST(nnmodel.INNModel):
     if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
       util.log.info("Training!")
       # subprocess allows recovery of gpu memory!  See TFSessionPool comments
-      # import multiprocessing
-      # p = multiprocessing.Process(target=mnist_train, args=(params,))
-      # p.start()
-      # p.join()
-      mnist_train(params)
+      ## import multiprocessing
+      ## p = multiprocessing.Process(target=mnist_train, args=(params,))
+      ## p.start()
+      ## p.join()
+      # mnist_train(params)
+      class MNISTWorker(util.Worker):
+        PROCESS_ISOLATED = True
+        N_GPUS = util.GPUPool.ALL_GPUS
+        def __init__(self, params):
+          self.params=params
+        def run(self):
+          mnist_train(self.params)
+      w = MNISTWorker(params)
+      w()
+
       util.log.info("Done training!")
 
     model.igraph = MNISTGraph(params)

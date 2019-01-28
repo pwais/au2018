@@ -139,8 +139,8 @@ def test_gpu_pool_no_gpus(monkeypatch):
 
   # We should never get any handles
   for _ in range(10):
-    h = pool.get_free_gpu()
-    assert h is None
+    hs = pool.get_free_gpus()
+    assert len(hs) == 0
 
 def test_gpu_pool_one_gpu(monkeypatch):
   # Pretend we have one GPU
@@ -151,20 +151,20 @@ def test_gpu_pool_one_gpu(monkeypatch):
   pool = util.GPUPool()
   
   # We can get one GPU
-  h = pool.get_free_gpu()
-  assert h is not None
-  assert h.index == 0
+  hs = pool.get_free_gpus()
+  assert len(hs) == 1
+  assert hs[0].index == 0
 
   # Subsequent fetches will fail
   for _ in range(10):
-    h2 = pool.get_free_gpu()
-    assert h2 is None
+    h2 = pool.get_free_gpus()
+    assert len(h2) == 0
   
   # Free the GPU
-  del h
+  del hs
 
   # Now we can get it again
-  h3 = pool.get_free_gpu()
-  assert h3 is not None
-  assert h3.index == 0
+  hs3 = pool.get_free_gpus()
+  assert len(hs3) == 1
+  assert hs3[0].index == 0
 

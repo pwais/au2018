@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -394,9 +395,7 @@ def download(uri, dest, try_expand=True):
     import urllib2 as urllib
     HTTPError = urllib.HTTPError
     URLError = urllib.URLError
-  
-  import tempfile
-  
+    
   import patoolib
  
   if os.path.exists(dest):
@@ -452,7 +451,8 @@ def download(uri, dest, try_expand=True):
   log.info("Downloaded to %s" % dest)
 
 
-### Tensorflow
+
+### GPU Utils
 
 class GPUInfo(object):
   __slots__ = (
@@ -554,17 +554,23 @@ class GPUPool(object):
     def _on_delete(self):
       self._parent._release(self.instance)
 
-  def get_free_gpu(self):
-    """Return a handle to a free GPU or None if none available"""
+  ALL_GPUS = -1
+  def get_free_gpus(self, n=1):
+    """Return up to `n` handles to free GPU(s) or [] if none available.
+    Use `n` = -1 to retain *all* GPUs."""
     with self.lock:
+      if n == self.ALL_GPUS:
+        n = GPUInfo.num_total_gpus()
+      handles = []
       gpus = self._get_gpus()
-      handle = None
-      if gpus:
+      n = min(n, len(gpus))
+      while gpus and len(handles) != n:
         gpu = gpus.pop(0)
-        handle = GPUPool._InfoProxy(gpu)
-        handle._parent = self
+        h = GPUPool._InfoProxy(gpu)
+        h._parent = self
+        handles.append(h)
       self._set_gpus(gpus)
-      return handle
+      return handles
 
   # Make pickle-able for interop with Spark
   def __getstate__(self):
@@ -593,9 +599,102 @@ class GPUPool(object):
     with self.lock:
       gpus = self._get_gpus()
       gpus.append(gpu)
-      print 'release', gpu
+      util.log.info("Released GPU %s" % gpu)
       self._set_gpus(gpus)
 
+def _Worker_run(inst_datum_bytes):
+  import cloudpickle
+  inst_datum = cloudpickle.loads(inst_datum_bytes)
+  inst, datum = inst_datum
+  inst.run(*datum['args'], **datum['kwargs'])
+
+class Worker(object):
+  N_GPUS = 0
+  SYSTEM_EXCLUSIVE = False
+  PROCESS_ISOLATED = False
+  
+  _GPU_POOL = None
+  _SYSTEM_LOCK_PATH = os.path.join(tempfile.gettempdir(), 'au.Worker')
+  _SYSTEM_LOCK = fasteners.InterProcessLock(_SYSTEM_LOCK_PATH)
+
+  # For non-exclusive workers
+  # https://stackoverflow.com/a/45187287
+  class _NullContextManager(object):
+    def __init__(self, x=None):
+        self.x = x
+    def __enter__(self):
+        return self.x
+    def __exit__(self, *args):
+        pass
+
+  def __init__(self, *args, **kwargs):
+    self._gpu_handles = []
+  
+  def __release_gpus(self):
+    if hasattr(self, '_gpu_handles'):
+      self._gpu_handles = []
+
+  @classmethod
+  def __gpu_pool(cls):
+    if cls._GPU_POOL is None:
+      flockpath = os.path.join(tempfile.gettempdir(), 'au.Worker.GPUPool')
+      cls._GPU_POOL = GPUPool(path=flockpath)
+    return cls._GPU_POOL
+
+  def __call__(self, *args, **kwargs):
+    ctx = Worker._NullContextManager()
+    if self.SYSTEM_EXCLUSIVE:
+      ctx = self._SYSTEM_LOCK
+    
+    with ctx:
+      log.info("Starting worker %s ..." % self._name)
+      if self.PROCESS_ISOLATED:
+        import cloudpickle
+        import multiprocessing
+        pool = multiprocessing.Pool(processes=1)
+        inst_datum_bytes = cloudpickle.dumps(
+          (self, {'args': args, 'kwargs': kwargs}))
+        result = pool.map(_Worker_run, [inst_datum_bytes])
+      else:
+        result = self.run(*args, **kwargs)
+      log.info("... done with worker %s" % self._name)
+      self.__release_gpus()
+      return result
+
+
+  ## Subclass API
+
+  @property
+  def _name(self):
+    return self.__class__.__name__
+
+  def _create_tf_session_config(self):
+    if not hasattr(self, '_gpu_handles'):
+      self._gpu_handles = []
+
+    if self.N_GPUS == GPUPool.ALL_GPUS:
+      self.N_GPUS = util.GPUInfo.num_total_gpus()
+    
+    while self.N_GPUS != 0:
+      self._gpu_handles.extend(self.__gpu_pool().get_free_gpus(n=self.N_GPUS))
+      if len(self._gpu_handles) == self.N_GPUS:
+        util.log.info("Got %s GPUs" % self.N_GPUS)
+        break
+      else:
+        util.log.info("Waiting for %s GPUs ..." % self.N_GPUS)
+        import time
+        time.sleep(5)
+    
+    restrict_gpus = [h.index for h in self._gpu_handles]
+    return util.tf_create_session_config(restrict_gpus=[])
+
+  def run(self, *args, **kwargs):
+    # Base class worker does nothing
+    return None
+
+
+
+### Tensorflow
 
 def tf_create_session_config(restrict_gpus=None, extra_opts=None):
   extra_opts = extra_opts or {}

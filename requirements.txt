@@ -4,6 +4,7 @@ imageio
 klepto
 keras==2.2.2
 matplotlib
+multiprocess
 opencv-python
 numpy==1.15.2
 pandas
