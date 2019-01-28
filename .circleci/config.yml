@@ -9,6 +9,7 @@ jobs:
           command: git submodule update --init
       - run:
           name: "Run tests"
-          command: time ./aucli --test-full
-              timeout: 1200
+          commands: 
+              - time ./aucli --test-full
+                  timeout: 1200
 
