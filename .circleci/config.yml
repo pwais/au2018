@@ -10,4 +10,5 @@ jobs:
       - run:
           name: "Run tests"
           command: time ./aucli --test-full
+		  	timeout: 1200
 
