@@ -673,20 +673,20 @@ class Worker(object):
       self._gpu_handles = []
 
     if self.N_GPUS == GPUPool.ALL_GPUS:
-      self.N_GPUS = util.GPUInfo.num_total_gpus()
+      self.N_GPUS = GPUInfo.num_total_gpus()
     
     while self.N_GPUS != 0:
       self._gpu_handles.extend(self.__gpu_pool().get_free_gpus(n=self.N_GPUS))
       if len(self._gpu_handles) == self.N_GPUS:
-        util.log.info("Got %s GPUs" % self.N_GPUS)
+        log.info("Got %s GPUs" % self.N_GPUS)
         break
       else:
-        util.log.info("Waiting for %s GPUs ..." % self.N_GPUS)
+        log.info("Waiting for %s GPUs ..." % self.N_GPUS)
         import time
         time.sleep(5)
     
     restrict_gpus = [h.index for h in self._gpu_handles]
-    return util.tf_create_session_config(restrict_gpus=[])
+    return tf_create_session_config(restrict_gpus=[])
 
   def run(self, *args, **kwargs):
     # Base class worker does nothing

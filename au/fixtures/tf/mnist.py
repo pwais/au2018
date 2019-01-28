@@ -361,11 +361,13 @@ def test_dataset(params):
 #   mnist_classifier.export_savedmodel(params.MODEL_BASEDIR, input_fn)
 
 
-def mnist_train(params, train_table=None, test_table=None):
+def mnist_train(params, train_table=None, test_table=None, config=None):
   if train_table is None:
     train_table = MNISTTrainDataset
   if test_table is None:
     test_table = MNISTTestDataset
+  if config is None:
+    config = util.tf_create_session_config()
 
   tf.logging.set_verbosity(tf.logging.DEBUG)
   
@@ -380,7 +382,7 @@ def mnist_train(params, train_table=None, test_table=None):
       model_dir=model_dir,
       save_summary_steps=10,
       save_checkpoints_secs=10,
-      session_config=util.tf_create_session_config(),
+      session_config=config,
       log_step_count_steps=10))
     
   ## Data
@@ -544,34 +546,30 @@ class MNIST(nnmodel.INNModel):
     self.tf_graph = None
     self.tf_model = None
     self.predictor = None
+    self.igraph = MNISTGraph(self.params)
 
   @classmethod
   def load_or_train(cls, params=None):    
     params = params or MNIST.Params()
     model = MNIST(params=params)
-
     if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
       util.log.info("Training!")
-      # subprocess allows recovery of gpu memory!  See TFSessionPool comments
-      ## import multiprocessing
-      ## p = multiprocessing.Process(target=mnist_train, args=(params,))
-      ## p.start()
-      ## p.join()
-      # mnist_train(params)
-      class MNISTWorker(util.Worker):
-        PROCESS_ISOLATED = True
-        N_GPUS = util.GPUPool.ALL_GPUS
-        def __init__(self, params):
-          self.params=params
-        def run(self):
-          mnist_train(self.params)
-      w = MNISTWorker(params)
-      w()
-
+      model.train()
       util.log.info("Done training!")
-
-    model.igraph = MNISTGraph(params)
     return model
+  
+  def train(self):
+    params = self.params
+    class MNISTWorker(util.Worker):
+      PROCESS_ISOLATED = True
+      N_GPUS = util.GPUPool.ALL_GPUS
+        # def __init__(self, params):
+        #   self.params=params
+      def run(self):
+        config = self._create_tf_session_config()
+        mnist_train(params, config=config)
+    w = MNISTWorker()
+    w()
 
   def get_inference_graph(self):
     return self.igraph

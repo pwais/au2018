@@ -49,6 +49,10 @@ class INNModel(object):
     from scratch in the process."""
     return INNModel()
   
+  def train(self):
+    """Train an instance in-place."""
+    pass
+
   def get_inference_graph(self):
     """Create and return a factory for creating inference graph(s)
     based upon this model instance."""
