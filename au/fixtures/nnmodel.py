@@ -8,7 +8,7 @@ class INNModel(object):
   """A fascade for (neural network) models. Probably needs a new name."""
   
   class ParamsBase(object):
-    def __init__(self, model_name='INNModel'):
+    def __init__(self, model_name='INNModel', **overrides):
       # Canonical places to save files
       self.MODEL_NAME = model_name
       self.MODEL_BASEDIR = os.path.join(
@@ -29,7 +29,13 @@ class INNModel(object):
       
       # For batching inference
       self.INFERENCE_BATCH_SIZE = 10
+
+      self.update(**overrides)
     
+    def update(**overrides):
+      for k, v in overrides.iteritems():
+        setattr(self, k, v)
+
     def make_normalize_ftor(self):
       input_dims = self.INPUT_TENSOR_SHAPE
       target_hw = (input_dims[1], input_dims[2])
@@ -50,7 +56,7 @@ class INNModel(object):
     return INNModel()
   
   def train(self):
-    """Train an instance in-place."""
+    """Train an instance in-place (optional; some models are inference-only)."""
     pass
 
   def get_inference_graph(self):

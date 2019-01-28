@@ -361,13 +361,9 @@ def test_dataset(params):
 #   mnist_classifier.export_savedmodel(params.MODEL_BASEDIR, input_fn)
 
 
-def mnist_train(params, train_table=None, test_table=None, config=None):
-  if train_table is None:
-    train_table = MNISTTrainDataset
-  if test_table is None:
-    test_table = MNISTTestDataset
-  if config is None:
-    config = util.tf_create_session_config()
+def mnist_train(params, tf_config=None):
+  if tf_config is None:
+    tf_config = util.tf_create_session_config()
 
   tf.logging.set_verbosity(tf.logging.DEBUG)
   
@@ -382,13 +378,13 @@ def mnist_train(params, train_table=None, test_table=None, config=None):
       model_dir=model_dir,
       save_summary_steps=10,
       save_checkpoints_secs=10,
-      session_config=config,
+      session_config=tf_config,
       log_step_count_steps=10))
     
   ## Data
   def train_input_fn():    
     # Load the dataset
-    train_ds = train_table.to_mnist_tf_dataset()
+    train_ds = params.TRAIN_TABLE.to_mnist_tf_dataset()
 
     # Flow doesn't need uri
     train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
@@ -399,7 +395,7 @@ def mnist_train(params, train_table=None, test_table=None, config=None):
     return train_ds
   
   def eval_input_fn():
-    test_ds = test_table.to_mnist_tf_dataset()
+    test_ds = params.TEST_TABLE.to_mnist_tf_dataset()
 
     # Flow doesn't need uri
     test_ds = test_ds.map(lambda arr, label, uri: (arr, label))
@@ -530,16 +526,22 @@ def normalize_image(image):
 class MNIST(nnmodel.INNModel):
 
   class Params(nnmodel.INNModel.ParamsBase):
-    def __init__(self):
+    def __init__(self, **overrides):
       super(MNIST.Params, self).__init__(model_name='MNIST')
       self.BATCH_SIZE = 100
-      self.LEARNING_RATE = 0.01
-      self.MOMENTUM = 0.5
+      
+      # self.LEARNING_RATE = 0.01
+      # self.MOMENTUM = 0.5
       self.TRAIN_EPOCHS = 2
       self.LIMIT = -1
       self.INPUT_TENSOR_SHAPE = [
                   None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1]
       self.NORM_FUNC = normalize_image
+
+      self.TRAIN_TABLE = MNISTTrainDataset
+      self.TEST_TABLE = MNISTTestDataset
+
+      self.update(**overrides)
 
   def __init__(self, params=None):
     super(MNIST, self).__init__(params=params)
@@ -566,8 +568,8 @@ class MNIST(nnmodel.INNModel):
         # def __init__(self, params):
         #   self.params=params
       def run(self):
-        config = self._create_tf_session_config()
-        mnist_train(params, config=config)
+        tf_config = self._create_tf_session_config()
+        mnist_train(params, tf_config=tf_config)
     w = MNISTWorker()
     w()
 

@@ -13,14 +13,14 @@ import pytest
 
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist') 
 
-# @pytest.mark.slow
-# def test_mnist_train(monkeypatch):
-#   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+@pytest.mark.slow
+def test_mnist_train(monkeypatch):
+  testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
 
-#   params = mnist.MNIST.Params()
-#   params.TRAIN_EPOCHS = 10
-#   params.LIMIT = 1000
-#   model = mnist.MNIST.load_or_train(params)
+  params = mnist.MNIST.Params()
+  params.TRAIN_EPOCHS = 10
+  params.LIMIT = 1000
+  model = mnist.MNIST.load_or_train(params)
 
 
 class TestMNISTDataset(unittest.TestCase):

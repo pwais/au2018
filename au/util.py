@@ -41,6 +41,21 @@ def ichunked(seq, n):
     else:
       break
 
+def fname_timestamp(random_suffix=True):
+  timestr = time.strftime("%Y-%m-%d-%H_%M_%S")
+  if random_suffix:
+    # Ideally we use a UUID but idk
+    # https://stackoverflow.com/a/2257449
+    import random
+    import string
+    NUM_CHARS = 5
+    chars = (
+      random.choice(string.ascii_uppercase + string.digits)
+      for _ in range(NUM_CHARS)
+    )
+    timestr = timestr + "." + ''.join(chars)
+  return timestr
+
 class Proxy(object):
   __slots__ = ('instance',)
   
