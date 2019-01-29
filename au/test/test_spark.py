@@ -85,3 +85,5 @@ def test_spark_archive_zip():
     rdd = testutils.LocalSpark.archive_rdd(spark, fixture_path)
     name_data = rdd.map(lambda entry: (entry.name, entry.data)).collect()
     assert sorted(name_data) == sorted((s, s) for s in ss)
+
+# TODO test run_callables

@@ -95,6 +95,9 @@ build the above with mscoco / segmentation in mind, as well as bdd100k segmentat
 
 if __name__ == '__main__':
   mnist.MNISTDataset.setup()
+  
+  from au.spark import Spark
   paramss = ExperimentConfig().iter_model_params()
-  for p in paramss:
-    mnist.MNIST.load_or_train(params=p)
+  cs = (lambda: mnist.MNIST.load_or_train(params=p) for p in paramss)
+  with Spark.sess() as spark:
+    res = Spark.run_callables(spark, cs)

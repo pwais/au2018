@@ -200,6 +200,30 @@ class Spark(object):
     # https://stackoverflow.com/a/42064557
     return spark.sparkContext._jsc.sc().getExecutorMemoryStatus().size()
 
+  @staticmethod
+  def run_callables(spark, callables, parallel=-1):
+    import cloudpickle
+      # Spark uses regular pickle for data;
+      # here we need cloudpickle for code
+    callable_bytess = [cloudpickle.dumps(c) for c in callables]
+    if parallel <= 0:
+      parallel = len(callable_bytess)
+
+    rdd = spark.sparkContext.parallelize(callable_bytess, numSlices=parallel)
+    def invoke(callable_bytes):
+      import cloudpickle
+      c = cloudpickle.loads(callable_bytes)
+      res = c()
+      return callable_bytes, cloudpickle.dumps(res)
+
+    rdd = rdd.map(invoke)
+    all_results = [
+      (cloudpickle.loads(callable_bytes), cloudpickle.loads(res))
+      for callable_bytes, res in rdd.collect()
+    ]
+    return all_results
+
+
   ### Test Utilities (for unit tests and more!)
 
   @classmethod
