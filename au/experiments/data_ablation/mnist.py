@@ -1,3 +1,5 @@
+import os
+
 from au import util
 from au.experiments.data_ablation import util as exp_util
 from au.fixtures.tf import mnist
@@ -30,6 +32,7 @@ class AblatedDataset(mnist.MNISTDataset):
     return df
 
 
+
 class ExperimentConfig(object):
   DEFAULTS = {
     'exp_basedir': exp_util.experiment_basedir('mnist'),
@@ -37,25 +40,27 @@ class ExperimentConfig(object):
 
     'params_base':
       mnist.MNIST.Params(
-        TRAIN_EPOCHS=40,
-      )
+        TRAIN_EPOCHS=2,
+        TRAIN_WORKER_CLS=util.WholeMachineWorker,
+        LIMIT=100,
+      ),
     
     'uniform_ablations': (0.25, 0.5, 0.75),
   }
 
   def __init__(self, **conf):
     for k, v in self.DEFAULTS.iteritems():
-      setattr(k, v)
+      setattr(self, k, v)
     for k, v in conf.iteritems():
-      setattr(k, v)
+      setattr(self, k, v)
 
-  def iter_models(self):
+  def iter_model_params(self):
     import copy
     for ablate_frac in self.uniform_ablations:
       keep_frac = 1.0 - ablate_frac
       params = copy.deepcopy(self.params_base)
 
-      params.MODEL_NAME = 'mnist_keep_%s' % keep_frac
+      params.MODEL_NAME = 'ablated_mnist_keep_%s' % keep_frac
       params.MODEL_BASEDIR = os.path.join(
                                 self.exp_basedir,
                                 self.run_name,
@@ -65,8 +70,7 @@ class ExperimentConfig(object):
         KEEP_FRAC = keep_frac
       params.TRAIN_TABLE = ExpTable
 
-      model = mnist.MNIST(params=params)
-      yield model
+      yield params
 
 
 
@@ -88,3 +92,9 @@ build the above with mscoco / segmentation in mind, as well as bdd100k segmentat
 
 
 """
+
+if __name__ == '__main__':
+  mnist.MNISTDataset.setup()
+  paramss = ExperimentConfig().iter_model_params()
+  for p in paramss:
+    mnist.MNIST.load_or_train(params=p)

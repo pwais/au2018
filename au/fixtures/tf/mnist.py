@@ -43,6 +43,7 @@ class MNISTDataset(dataset.ImageTable):
       import numpy as np
     
       n = 0
+      log_interval = 10
       with util.tf_data_session(ds) as (sess, iter_dataset):
         for image, label in iter_dataset():
           image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
@@ -59,8 +60,10 @@ class MNISTDataset(dataset.ImageTable):
           if params.LIMIT >= 0 and n == params.LIMIT:
             break
 
-          if n % 100 == 0:
+          if n % log_interval == 0:
             log.info("Read %s records from tf.Dataset" % n)
+            if n >= 10 * log_interval:
+              log_interval *= 10
     
     from official.mnist import dataset as mnist_dataset
     
@@ -127,6 +130,7 @@ class MNISTDataset(dataset.ImageTable):
     iter_image_rows = cls.create_iter_all_rows(spark=spark)
     def iter_mnist_tuples():
       t = util.ThruputObserver(name='iter_mnist_tuples')
+      t.start_block()
       norm = MNIST.Params().make_normalize_ftor()
       for row in iter_image_rows():
         # TODO: a faster filter.  For mnist this is plenty fast.
@@ -562,11 +566,11 @@ class MNIST(nnmodel.INNModel):
   
   def train(self):
     params = self.params
-    class MNISTWorker(util.Worker):
-      PROCESS_ISOLATED = True
-      N_GPUS = util.GPUPool.ALL_GPUS
-        # def __init__(self, params):
-        #   self.params=params
+    class MNISTWorker(self.params.TRAIN_WORKER_CLS):
+      # PROCESS_ISOLATED = True
+      # N_GPUS = util.GPUPool.ALL_GPUS
+      #   # def __init__(self, params):
+      #   #   self.params=params
       def run(self):
         tf_config = self._create_tf_session_config()
         mnist_train(params, tf_config=tf_config)

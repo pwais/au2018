@@ -27,14 +27,18 @@ class INNModel(object):
       self.INPUT_URIS_NAME = 'au_inference_uris'
       self.NORM_FUNC = None
       
+      self.TRAIN_WORKER_CLS = util.Worker
+
       # For batching inference
       self.INFERENCE_BATCH_SIZE = 10
 
       self.update(**overrides)
     
-    def update(**overrides):
+    def update(self, **overrides):
       for k, v in overrides.iteritems():
         setattr(self, k, v)
+
+
 
     def make_normalize_ftor(self):
       input_dims = self.INPUT_TENSOR_SHAPE

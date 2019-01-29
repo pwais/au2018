@@ -112,7 +112,8 @@ class ThruputObserver(object):
     end = time.time()
     self.n += n
     self.num_bytes += num_bytes
-    self.ts.append(end - self._start)
+    if self._start is not None:
+      self.ts.append(end - self._start)
     self._start = None
   
   def maybe_log_progress(self, n=100):
@@ -614,20 +615,41 @@ class GPUPool(object):
     with self.lock:
       gpus = self._get_gpus()
       gpus.append(gpu)
-      util.log.info("Released GPU %s" % gpu)
+      log.info("Released GPU %s" % gpu)
       self._set_gpus(gpus)
 
+
+
 def _Worker_run(inst_datum_bytes):
-  import cloudpickle
-  inst_datum = cloudpickle.loads(inst_datum_bytes)
-  inst, datum = inst_datum
-  inst.run(*datum['args'], **datum['kwargs'])
+  import sys
+  import traceback
+
+  # Multiprocesing workers ignore System exceptions :(
+  # https://stackoverflow.com/a/23682499
+  try:
+
+    import cloudpickle
+    inst_datum = cloudpickle.loads(inst_datum_bytes)
+    inst, datum = inst_datum
+    return inst.run(*datum['args'], **datum['kwargs'])
+  
+  except:
+    cls, exc, tb = sys.exc_info()
+    if issubclass(cls, Exception):
+        raise
+    # Wrap the exception for forwarding within multiprocessing
+    msg = "Unhandled exception %s (%s):\n%s" % (
+                cls.__name__, exc, traceback.format_exc())
+    raise Exception(msg)
 
 class Worker(object):
+  # Default worker requires no GPUs and runs in parent thread
   N_GPUS = 0
   SYSTEM_EXCLUSIVE = False
   PROCESS_ISOLATED = False
-  
+
+  PROCESS_TIMEOUT_SEC = 1e9 # NB: Pi Billion is approx 1 century
+
   _GPU_POOL = None
   _SYSTEM_LOCK_PATH = os.path.join(tempfile.gettempdir(), 'au.Worker')
   _SYSTEM_LOCK = fasteners.InterProcessLock(_SYSTEM_LOCK_PATH)
@@ -642,9 +664,6 @@ class Worker(object):
     def __exit__(self, *args):
         pass
 
-  def __init__(self, *args, **kwargs):
-    self._gpu_handles = []
-  
   def __release_gpus(self):
     if hasattr(self, '_gpu_handles'):
       self._gpu_handles = []
@@ -669,7 +688,11 @@ class Worker(object):
         pool = multiprocessing.Pool(processes=1)
         inst_datum_bytes = cloudpickle.dumps(
           (self, {'args': args, 'kwargs': kwargs}))
-        result = pool.map(_Worker_run, [inst_datum_bytes])
+        # We must use async so that parent processs signals get handled
+        # https://stackoverflow.com/a/23682499
+        proxy = pool.map_async(_Worker_run, [inst_datum_bytes])
+        results = proxy.get(timeout=self.PROCESS_TIMEOUT_SEC)
+        result = results[0]
       else:
         result = self.run(*args, **kwargs)
       log.info("... done with worker %s" % self._name)
@@ -707,6 +730,10 @@ class Worker(object):
     # Base class worker does nothing
     return None
 
+class WholeMachineWorker(Worker):
+  N_GPUS = GPUPool.ALL_GPUS
+  SYSTEM_EXCLUSIVE = True
+  PROCESS_ISOLATED = True
 
 
 ### Tensorflow
