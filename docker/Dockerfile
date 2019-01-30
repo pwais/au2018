@@ -144,6 +144,11 @@ RUN \
 #  apt-get update && \
 #  apt-get install -y gcsfuse
 
+## Gluster
+RUN \
+  add-apt-repository ppa:gluster/glusterfs-3.12 && \
+  apt-get update && \
+  apt-get install glusterfs-client
 
 ## AU
 COPY aucli /opt/au/aucli

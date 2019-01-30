@@ -1,0 +1,88 @@
+# Based on https://github.com/Alluxio/alluxio/blob/4462fe8b2fb13a59dbd1775219364feae416c82a/integration/kubernetes/alluxio-master.yaml.template
+# We modify the command to set up the required directories (journal and domain 
+# socket) versus creating them on the host manually.
+apiVersion: v1
+kind: Service
+metadata:
+  name: alluxio-master
+  labels:
+    app: alluxio
+spec:
+  ports:
+  - port: 19998
+    name: rpc
+  - port: 19999
+    name: web
+  clusterIP: None
+  selector:
+    app: alluxio-master
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: alluxio-master
+spec:
+  selector:
+    matchLabels:
+      app: alluxio-master
+  serviceName: "alluxio-master"
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: alluxio-master
+    spec:
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: alluxio-master
+          image: au2018/env:v1.4
+          resources:
+            requests:
+              cpu: "0.5"
+              memory: "512M"
+            limits:
+              cpu: "1"
+              memory: "1024M"
+          command: ["/bin/sh"]
+          args: ["-c", "/opt/au/cluster/alluxio/run_alluxio.sh master"]
+          envFrom:
+          - configMapRef:
+              name: alluxio-config
+          ports:
+          - containerPort: 19998
+            name: rpc
+          - containerPort: 19999
+            name: web
+          - containerPort: 20001
+            name: job-rpc
+          - containerPort: 20002
+            name: job-web
+          volumeMounts:
+            - name: opt-alluxio-master
+              mountPath: /opt/alluxio-master
+            - name: tmp-alluxio
+              mountPath: /tmp/alluxio-master
+            - name: alluxio-cache
+              mountPath: /tmp/alluxio-cache
+          securityContext:
+            # Needed to mount gluster
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+      restartPolicy: Always
+      volumes:
+        - name: opt-alluxio-master
+          hostPath:
+            path: /opt/alluxio-master
+            type: DirectoryOrCreate
+        - name: tmp-alluxio
+          hostPath:
+            path: /tmp/alluxio
+            type: DirectoryOrCreate
+        - name: alluxio-cache
+          hostPath:
+            path: /tmp/alluxio-cache
+            type: DirectoryOrCreate

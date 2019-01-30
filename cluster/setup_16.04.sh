@@ -39,6 +39,10 @@ apt-get update
 apt-get install -y nvidia-docker2
 pkill -SIGHUP dockerd
 
+## For Alluxio
+# https://github.com/Alluxio/alluxio/tree/master/integration/kubernetes
+mkdir -p /opt
+
 # TODO only make nvidia default for cloud machines.  This might break if
 # machine does not have GPUs (I forget)
 # https://github.com/NVIDIA/k8s-device-plugin#preparing-your-gpu-nodes
