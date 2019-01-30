@@ -12,5 +12,7 @@ RUN chmod g+w /opt/spark/work-dir
 COPY entrypoint.sh /opt/
 RUN chmod +x /opt/entrypoint.sh
 
+# The Docker image must have an ENTRYPOINT in order to interop with the
+# Spark k8s scheduler.
 ENTRYPOINT [ "/opt/entrypoint.sh" ]
 USER ${spark_uid}

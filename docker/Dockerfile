@@ -80,7 +80,13 @@ RUN \
 #  mkdir -p /mnt/alluxio-ramdisk && mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk
 COPY docker/alluxio-site.properties /opt/alluxio/conf/alluxio-site.properties
 
-
+## Gluster
+RUN \
+  apt-get install -y software-properties-common && \
+  add-apt-repository ppa:gluster/glusterfs-3.13 && \
+  apt-get update && \
+  apt-get install -y glusterfs-client && \
+  glusterfs --version
 
 ## Dev tools
 COPY docker/.vimrc /root/.vimrc
@@ -146,6 +152,7 @@ RUN \
 
 
 ## AU
+COPY cluster/alluxio /opt/au/cluster/alluxio
 COPY aucli /opt/au/aucli
 WORKDIR /opt/au
 RUN SPARK_LOCAL_IP=127.0.0.1 SPARK_MASTER=local[4] /opt/au/aucli --test-spark 
