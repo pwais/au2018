@@ -1,18 +1,51 @@
 # Cluster
 
-This directory contains utilities for building a private cluster.
+This directory contains utilities for building a private cluster running
+Kubernetes (via Kubespray), Spark, and more.  The cluster design has the
+following in mind:
+ * The cluster uses Spark for running jobs, and Kubernetes as a Spark master / 
+      container orchestrator.  Some jobs (e.g. a deep learning training job)
+      may take exclusive access of an entire machine as it runs.
+      `au` facilitates exclusive access.
+ * The cluster persists long-lived data to a distributed filesystem (e.g. 
+      Gluster or S3), and the worker nodes leverage caching to make
+      read access efficient.  In particular, the cluster can leverage
+      Alluxio to provide a local-SSD-based cache on each worker.
+ * The cluster has only light security features.  Network partitioning is
+      a primary defense.  Run the cluster behind a NAT or in a VPC.
+ * The cluster is not designed to be multi-user but does not preclude
+      cooperative multi-user jobs scheduling.  (E.g. just put an Executor
+      limit on your Spark jobs).
 
 Requirements:
- 1. Docker registry (e.g. Docker Hub)
- 2. Alluxio-compatible cloud storage (e.g. S3 or GS)
- 3. Ubuntu 16.04 (at the time of writing, `kubespray` has issues with Bionic).
- 4. Run [sudo setup.sh](setup.sh) script to install basic packages and nvidia
-      drivers (if possible).  You will need to reboot for Nvidia driver
-      changes to take effect.
- 5. Passwordless `ssh` cluster deployment.
+ 1. Ideally at least 2 and as many as O(1000) machines, either bare metal, 
+      [GCE Compute Instances](https://cloud.google.com/free/), AWS EC2
+      instances, etc.  Machines should have local SSD disks for caching.
+ 2. Ubuntu 16.04 (at the time of writing, `kubespray` has issues with Bionic).
+ 3. Passwordless `ssh` cluster deployment.
+ 4. (Recommended) a large persistent filesystem, e.g. AWS S3 or Google Storage,
+      or disks for use in a Gluster-based fileystem ([see below](#Gluster)).
+ 5. Read access to a Docker registry (e.g. Docker Hub; you can use the
+      public `au` images).
+ 6. Software dependencies?  Either run [sudo setup_16.04.sh](setup_16.04.sh)
+      script to install basic packages and Nvidia drivers (if possible), or
+      install the software listed in that script.  You will need to reboot for
+      Nvidia driver changes to take effect.
 
-We've tested these utilites with bare metal machines as well as GCE intances
+These utilites have been tested with bare metal machines as well as GCE intances
 (using Google's own Ubuntu 16.04 image -- `ubuntu-minimal-1604-xenial-v20180814`).
+
+## Single Storage Drive
+
+
+
+## Gluster
+
+If your machines have a relatively fast connection to privately-managed 
+storage (e.g. a bunch of USB back-up drives attached to your boxen), then 
+we recommend you use Gluster to create a distributed filesystem spanning
+this storage.  In practice, Gluster can scale effectively to tens of 
+Petabytes of storage backing OLAP workloads.  
 
 ## GCloud Setup - Storage
 
