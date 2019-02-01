@@ -76,7 +76,7 @@ class Proxy(object):
 
 class ThruputObserver(object):
   
-  def __init__(self, name='', log_on_del=False, only_stats=None):
+  def __init__(self, name='', log_on_del=False, only_stats=None, log_freq=100):
     self.n = 0
     self.num_bytes = 0
     self.ts = []
@@ -84,6 +84,7 @@ class ThruputObserver(object):
     self.log_on_del = log_on_del
     self.only_stats = only_stats or []
     self._start = None
+    self.__log_freq = log_freq
   
   @contextmanager
   def observe(self, n=0, num_bytes=0):
@@ -116,12 +117,16 @@ class ThruputObserver(object):
       self.ts.append(end - self._start)
     self._start = None
   
-  def maybe_log_progress(self, n=100):
-    if self.n % n == 0:
+  def maybe_log_progress(self, n=-1):
+    if n >= 0:
+      self.__log_freq = n
+    if (self.n % self.__log_freq) == 0:
       self.stop_block()
-      log = create_log()
       log.info("Progress for " + self.name + "\n" + str(self))
       self.start_block()
+
+      if n == -1 and (n >= 1.7 * self.__log_freq):
+        self.__log_freq *= 1.7
 
   @staticmethod
   def union(thruputs):
@@ -635,10 +640,7 @@ def _Worker_run(inst_datum_bytes):
   
   except:
     cls, exc, tb = sys.exc_info()
-    if issubclass(cls, Exception):
-        raise
-    # Wrap the exception for forwarding within multiprocessing
-    msg = "Unhandled exception %s (%s):\n%s" % (
+    msg = "Unhandled exception in worker %s (%s):\n%s" % (
                 cls.__name__, exc, traceback.format_exc())
     raise Exception(msg)
 

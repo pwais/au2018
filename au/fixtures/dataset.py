@@ -497,7 +497,8 @@ class ImageTable(object):
       _rdd = None
       t = util.ThruputObserver(
               name=cls.__name__ + '.iter_rows',
-              log_on_del=True)
+              log_on_del=True,
+              log_freq=1000)
       t.start_block()
       
       while True:
@@ -510,7 +511,7 @@ class ImageTable(object):
         for row in iter_rows():
           yield row
           t.update_tallies(n=1)
-          t.maybe_log_progress(n=1000)
+          t.maybe_log_progress()
         
         if not cycle:
           break

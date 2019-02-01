@@ -11,10 +11,10 @@ class AblatedDataset(mnist.MNISTDataset):
     # Ablate dataset on a per-class basis to these class frequencies
   KEEP_FRAC = -1
     # Uniformly ablate the dataset to this fraction
-  SEED = 1337
+  BASE_SEED = 1337
 
   @classmethod
-  def as_imagerow_df(cls, spark):
+  def as_imagerow_df(cls, spark, extra_seed=0):
     df = spark.read.parquet(cls.table_root())
     if cls.SPLIT is not '':
       df = df.filter(df.split == cls.SPLIT)
@@ -22,13 +22,17 @@ class AblatedDataset(mnist.MNISTDataset):
     if 1.0 >= cls.KEEP_FRAC >= 0:
       df = df.sample(
               withReplacement=False,
-              fraction=cls.UNIFORM_ABLATE,
-              seed=cls.SEED)
+              fraction=cls.KEEP_FRAC,
+              seed=cls.BASE_SEED + extra_seed)
     elif cls.TARGET_DISTRIBUTION:
       df = df.sampleBy(
               "label",
               fractions=cls.TARGET_DISTRIBUTION,
-              seed=cls.SEED)
+              seed=cls.BASE_SEED + extra_seed)
+    util.log.info("Ablated to %s examples" % df.count())
+    util.log.info("New class frequencies:")
+    cls.get_class_freq(spark, df=df).show()
+
     return df
 
 
@@ -40,12 +44,12 @@ class ExperimentConfig(object):
 
     'params_base':
       mnist.MNIST.Params(
-        TRAIN_EPOCHS=2,
+        TRAIN_EPOCHS=40,
         TRAIN_WORKER_CLS=util.WholeMachineWorker,
-        LIMIT=100,
+        # LIMIT=100,
       ),
     
-    'uniform_ablations': (0.25, 0.5, 0.75),
+    'uniform_ablations': (0.9999, 0.9995, 0.999,),
   }
 
   def __init__(self, **conf):
@@ -69,6 +73,7 @@ class ExperimentConfig(object):
       class ExpTable(AblatedDataset):
         KEEP_FRAC = keep_frac
       params.TRAIN_TABLE = ExpTable
+      params.TRAIN_WORKER_CLS = util.WholeMachineWorker
 
       yield params
 

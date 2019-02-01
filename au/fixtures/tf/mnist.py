@@ -32,6 +32,8 @@ class MNISTDataset(dataset.ImageTable):
   
   SPLIT = '' # Or 'train' or 'test'
 
+  N_CLASSES = 10 # Classes are digits 0 through 9
+
   @classmethod
   def _datasets_iter_image_rows(cls, params=None):
     params = params or MNIST.Params()
@@ -86,8 +88,9 @@ class MNISTDataset(dataset.ImageTable):
     cls.save_to_image_table(cls._datasets_iter_image_rows(params=params))
   
   @classmethod
-  def get_class_freq(cls, spark, raw_counts=False):
-    df = cls.as_imagerow_df(spark)
+  def get_class_freq(cls, spark, raw_counts=False, df=None):
+    if df is None:
+      df = cls.as_imagerow_df(spark)
     table = cls.__name__.lower()
     df.createOrReplaceTempView(table)
 
@@ -129,7 +132,7 @@ class MNISTDataset(dataset.ImageTable):
   def to_mnist_tf_dataset(cls, spark=None):
     iter_image_rows = cls.create_iter_all_rows(spark=spark)
     def iter_mnist_tuples():
-      t = util.ThruputObserver(name='iter_mnist_tuples')
+      t = util.ThruputObserver(name='iter_mnist_tuples', log_freq=5000)
       t.start_block()
       norm = MNIST.Params().make_normalize_ftor()
       for row in iter_image_rows():
@@ -235,70 +238,96 @@ def create_model(data_format='channels_last'):
           l.Dense(10)
       ])
 
-def model_fn(features, labels, mode, params):
-  """The model_fn argument for creating an Estimator.
-  
-  NB: `params` is a dict but unused; Tensorflow requires this parameter
-  (and for it to be named `params`).
-  """
-  model = create_model()#params_dict['data_format'])
-  image = features
-  if isinstance(image, dict):
-    image = features['image']
-
-  if mode == tf.estimator.ModeKeys.PREDICT:
-    logits = model(image, training=False)
-    predictions = {
-        'classes': tf.argmax(logits, axis=1),
-        'probabilities': tf.nn.softmax(logits),
-    }
-    return tf.estimator.EstimatorSpec(
-        mode=tf.estimator.ModeKeys.PREDICT,
-        predictions=predictions,
-        export_outputs={
-            'classify': tf.estimator.export.PredictOutput(predictions)
-        })
-  if mode == tf.estimator.ModeKeys.TRAIN:
-    LEARNING_RATE = 1e-4
+class model_fn(object):
+  def __init__(self, au_params):
+    self.au_params = au_params
+  def __call__(self, features, labels, mode, params):
+    """The model_fn argument for creating an Estimator.
     
-    optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
+    NB: `params` is a dict but unused; Tensorflow requires this parameter
+    (and for it to be named `params`).
+    """
+    model = create_model()#params_dict['data_format'])
+    image = features
+    if isinstance(image, dict):
+      image = features['image']
 
-    # If we are running multi-GPU, we need to wrap the optimizer.
-    #if params_dict.get('multi_gpu'):
-    #  optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
+    if mode == tf.estimator.ModeKeys.PREDICT:
+      logits = model(image, training=False)
+      predictions = {
+          'classes': tf.argmax(logits, axis=1),
+          'probabilities': tf.nn.softmax(logits),
+      }
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.PREDICT,
+          predictions=predictions,
+          export_outputs={
+              'classify': tf.estimator.export.PredictOutput(predictions)
+          })
+    if mode == tf.estimator.ModeKeys.TRAIN:
+      LEARNING_RATE = 1e-4
+      
+      optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
 
-    logits = model(image, training=True)
-    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
-    accuracy = tf.metrics.accuracy(
-        labels=labels, predictions=tf.argmax(logits, axis=1))
+      # If we are running multi-GPU, we need to wrap the optimizer.
+      #if params_dict.get('multi_gpu'):
+      #  optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
 
-    # Name tensors to be logged with LoggingTensorHook.
-    tf.identity(LEARNING_RATE, 'learning_rate')
-    tf.identity(loss, 'cross_entropy')
-    tf.identity(accuracy[1], name='train_accuracy')
+      logits = model(image, training=True)
+      loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
+      accuracy = tf.metrics.accuracy(
+          labels=labels, predictions=tf.argmax(logits, axis=1))
 
-    # Save accuracy scalar to Tensorboard output.
-    tf.summary.scalar('train_accuracy', accuracy[1])
-    
-    global_step = tf.train.get_or_create_global_step()
-    tf.summary.scalar('global_step', global_step)
+      # Name tensors to be logged with LoggingTensorHook.
+      tf.identity(LEARNING_RATE, 'learning_rate')
+      tf.identity(loss, 'cross_entropy')
+      tf.identity(accuracy[1], name='train_accuracy')
 
-    return tf.estimator.EstimatorSpec(
-        mode=tf.estimator.ModeKeys.TRAIN,
-        loss=loss,
-        train_op=optimizer.minimize(loss, global_step))
+      # Save accuracy scalar to Tensorboard output.
+      tf.summary.scalar('train_accuracy', accuracy[1])
+      
+      global_step = tf.train.get_or_create_global_step()
+      tf.summary.scalar('global_step', global_step)
 
-  elif mode == tf.estimator.ModeKeys.EVAL:
-    logits = model(image, training=False)
-    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
-    return tf.estimator.EstimatorSpec(
-        mode=tf.estimator.ModeKeys.EVAL,
-        loss=loss,
-        eval_metric_ops={
-            'accuracy':
-                tf.metrics.accuracy(
-                    labels=labels, predictions=tf.argmax(logits, axis=1)),
-        })
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.TRAIN,
+          loss=loss,
+          train_op=optimizer.minimize(loss, global_step))
+
+    elif mode == tf.estimator.ModeKeys.EVAL:
+      logits = model(image, training=False)
+      loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
+      
+      preds = tf.argmax(logits, axis=1)
+      classes = labels#tf.argmax(labels, axis=1)
+
+      eval_metric_ops = {
+        'accuracy':
+            tf.metrics.accuracy(labels=labels, predictions=preds),
+      }
+
+      # Added in au
+      for k in range(self.au_params.TEST_TABLE.N_CLASSES):
+        k_name = str(k)
+        metric_kwargs = {
+          'labels': tf.cast(tf.equal(classes, k), tf.int64),
+          'predictions': tf.cast(tf.equal(preds, k), tf.int64),
+        }
+        name_to_ftor = {
+          'accuracy': tf.metrics.accuracy,
+          'auc': tf.metrics.auc,
+          'precision': tf.metrics.precision,
+          'recall': tf.metrics.recall,
+        }
+        for name, ftor in name_to_ftor.iteritems():
+          full_name = name + '_' + k_name
+          eval_metric_ops[full_name] = ftor(name=full_name, **metric_kwargs)
+
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.EVAL,
+          loss=loss,
+          eval_metric_ops=eval_metric_ops,
+      )
 
 def test_dataset(params):
   from official.mnist import dataset as mnist_dataset
@@ -376,7 +405,7 @@ def mnist_train(params, tf_config=None):
   tf.gfile.MakeDirs(params.MODEL_BASEDIR)
   
   mnist_classifier = tf.estimator.Estimator(
-    model_fn=model_fn,
+    model_fn=model_fn(params),
     params=None,
     config=tf.estimator.RunConfig(
       model_dir=model_dir,
@@ -385,21 +414,30 @@ def mnist_train(params, tf_config=None):
       session_config=tf_config,
       log_step_count_steps=10))
     
+  have_whole_machine = issubclass(
+                          params.TRAIN_WORKER_CLS,
+                          util.WholeMachineWorker)
+  spark = None
+  if have_whole_machine:
+    from au.spark import Spark
+    spark = Spark.getOrCreate()
+
   ## Data
-  def train_input_fn():    
+  def train_input_fn():
     # Load the dataset
-    train_ds = params.TRAIN_TABLE.to_mnist_tf_dataset()
+    train_ds = params.TRAIN_TABLE.to_mnist_tf_dataset(spark=spark)
 
     # Flow doesn't need uri
     train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
 
     if params.LIMIT >= 0:
       train_ds = train_ds.take(params.LIMIT)
-    train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
+    # train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
+    train_ds = train_ds.batch(params.BATCH_SIZE)
     return train_ds
   
   def eval_input_fn():
-    test_ds = params.TEST_TABLE.to_mnist_tf_dataset()
+    test_ds = params.TEST_TABLE.to_mnist_tf_dataset(spark=spark)
 
     # Flow doesn't need uri
     test_ds = test_ds.map(lambda arr, label, uri: (arr, label))
