@@ -11,10 +11,10 @@ class AblatedDataset(mnist.MNISTDataset):
     # Ablate dataset on a per-class basis to these class frequencies
   KEEP_FRAC = -1
     # Uniformly ablate the dataset to this fraction
-  BASE_SEED = 1337
+  SEED = 1337
 
   @classmethod
-  def as_imagerow_df(cls, spark, extra_seed=0):
+  def as_imagerow_df(cls, spark):
     df = spark.read.parquet(cls.table_root())
     if cls.SPLIT is not '':
       df = df.filter(df.split == cls.SPLIT)
@@ -23,12 +23,12 @@ class AblatedDataset(mnist.MNISTDataset):
       df = df.sample(
               withReplacement=False,
               fraction=cls.KEEP_FRAC,
-              seed=cls.BASE_SEED + extra_seed)
+              seed=cls.SEED)
     elif cls.TARGET_DISTRIBUTION:
       df = df.sampleBy(
               "label",
               fractions=cls.TARGET_DISTRIBUTION,
-              seed=cls.BASE_SEED + extra_seed)
+              seed=cls.SEED)
     util.log.info("Ablated to %s examples" % df.count())
     util.log.info("New class frequencies:")
     cls.get_class_freq(spark, df=df).show()
@@ -44,12 +44,23 @@ class ExperimentConfig(object):
 
     'params_base':
       mnist.MNIST.Params(
-        TRAIN_EPOCHS=40,
+        TRAIN_EPOCHS=100,
         TRAIN_WORKER_CLS=util.WholeMachineWorker,
-        # LIMIT=100,
       ),
     
-    'uniform_ablations': (0.9999, 0.9995, 0.999,),
+    'trials_per_treatment': 10,
+
+    'uniform_ablations': (
+        0.9999,
+        0.9995,
+        0.999,
+        0.995,
+        0.99,
+        0.95,
+        0.9,
+        0.5,
+        0,
+      ),
   }
 
   def __init__(self, **conf):
@@ -69,13 +80,15 @@ class ExperimentConfig(object):
                                 self.exp_basedir,
                                 self.run_name,
                                 params.MODEL_NAME)
-
-      class ExpTable(AblatedDataset):
-        KEEP_FRAC = keep_frac
-      params.TRAIN_TABLE = ExpTable
       params.TRAIN_WORKER_CLS = util.WholeMachineWorker
 
-      yield params
+      for i in range(self.trials_per_treatment):
+        class ExpTable(AblatedDataset):
+          KEEP_FRAC = keep_frac
+          SEED = AblatedDataset.SEED + i
+        params.TRAIN_TABLE = ExpTable
+        params.MODEL_NAME = params.MODEL_NAME + '_trial_' + str(i)
+        yield params
 
 
 
