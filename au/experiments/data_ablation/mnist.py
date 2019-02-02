@@ -75,11 +75,6 @@ class ExperimentConfig(object):
       keep_frac = 1.0 - ablate_frac
       params = copy.deepcopy(self.params_base)
 
-      params.MODEL_NAME = 'ablated_mnist_keep_%s' % keep_frac
-      params.MODEL_BASEDIR = os.path.join(
-                                self.exp_basedir,
-                                self.run_name,
-                                params.MODEL_NAME)
       params.TRAIN_WORKER_CLS = util.WholeMachineWorker
 
       for i in range(self.trials_per_treatment):
@@ -87,7 +82,12 @@ class ExperimentConfig(object):
           KEEP_FRAC = keep_frac
           SEED = AblatedDataset.SEED + i
         params.TRAIN_TABLE = ExpTable
-        params.MODEL_NAME = params.MODEL_NAME + '_trial_' + str(i)
+        params.MODEL_NAME = (
+          'ablated_mnist_keep_%s' % keep_frac + '_trial_' + str(i))
+        params.MODEL_BASEDIR = os.path.join(
+                                self.exp_basedir,
+                                self.run_name,
+                                params.MODEL_NAME)
         yield params
 
 
