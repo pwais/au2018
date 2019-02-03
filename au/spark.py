@@ -263,8 +263,8 @@ class Spark(object):
               else:
                   raise TypeError(
                     "Union failed. Nullability conflict on field %s. right nullable %s, left nullable %s" % (r_name, r_nullable, not(r_nullable)))
-          df = df.withColumn(r_name, lit(None).cast(r_type))       
-      df = df.union(df_other)
+          df = df.withColumn(r_name, lit(None).cast(r_type))
+      df = df.unionByName(df_other)
     return df
 
 

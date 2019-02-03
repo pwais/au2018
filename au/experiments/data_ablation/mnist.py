@@ -69,9 +69,10 @@ class ExperimentConfig(object):
       setattr(self, k, v)
 
   def create_tf_summary_df(self, spark):
-    df = Spark.union_dfs(*(
-      exp_util.params_to_tf_summary_df(spark, p)
-      for p in self.iter_model_params()))
+    df = exp_util.params_to_tf_summary_df(spark, self.iter_model_params())
+    # df = Spark.union_dfs(*(
+    #   exp_util.params_to_tf_summary_df(spark, p)
+    #   for p in self.iter_model_params()))
     return df
 
   def iter_model_params(self):
@@ -83,6 +84,8 @@ class ExperimentConfig(object):
       params.TRAIN_WORKER_CLS = util.WholeMachineWorker
 
       for i in range(self.trials_per_treatment):
+        params = copy.deepcopy(params)
+
         class ExpTable(AblatedDataset):
           KEEP_FRAC = keep_frac
           SEED = AblatedDataset.SEED + i

@@ -15,14 +15,30 @@ import pytest
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist_ablation') 
 
 
-def test_my_fun_tassst():
-  from au.experiments.data_ablation import mnist
-  from au.spark import Spark
-  spark = Spark.getOrCreate()
-  conf = mnist.ExperimentConfig(run_name='default.2019-02-02-07_21_03.8SAZ7')
-  df = conf.create_tf_summary_df(spark)
-  import ipdb; ipdb.set_trace()
+# def test_my_fun_tassst():
+#   from au.experiments.data_ablation import mnist
+#   from au.spark import Spark
+#   spark = Spark.getOrCreate()
+#   conf = mnist.ExperimentConfig(run_name='default.2019-02-02-07_21_03.8SAZ7')
+#   df = conf.create_tf_summary_df(spark)
+#   import ipdb; ipdb.set_trace()
 
+# """
+
+# spark.sql("select t.keep_frac, avg(100. * t.acc), std(100. * t.acc), count(*) support from ( select TRAIN_TABLE_KEEP_FRAC keep_frac, params_hash, max(simple_value) acc from data where tag = 'accur
+# acy'  group by TRAIN_TABLE_KEEP_FRAC, params_hash order by TRAIN_TABLE_KEEP_FRAC, params_hash) as t group by keep_frac order by keep_frac").show()
+
+# +--------------------+--------------------------------+----------------------------------------+-------+
+# |           keep_frac|avg((CAST(100 AS DOUBLE) * acc))|stddev_samp((CAST(100 AS DOUBLE) * acc))|support|
+# +--------------------+--------------------------------+----------------------------------------+-------+
+# |9.999999999998899E-5|              32.166999876499176|                      7.6488477810816695|     10|
+# |4.999999999999449E-4|               62.59899973869324|                       4.393402116711541|     10|
+# |0.001000000000000...|               73.41899991035461|                       3.094451494289516|     10|
+# |0.005000000000000...|                 89.211110273997|                      0.8508874872703646|      9|
+# |0.010000000000000009|                92.8199997970036|                     0.34477090306163716|      7|
+# |0.050000000000000044|               97.08999991416931|                                     NaN|      1|
+# +--------------------+--------------------------------+----------------------------------------+-------+
+# """
 
 class TestMNISTAblatedDataset(unittest.TestCase):
 
