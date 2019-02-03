@@ -2,6 +2,7 @@ import os
 
 from au import util
 from au.experiments.data_ablation import util as exp_util
+from au.spark import Spark
 from au.fixtures.tf import mnist
 
 class AblatedDataset(mnist.MNISTDataset):
@@ -35,8 +36,6 @@ class AblatedDataset(mnist.MNISTDataset):
 
     return df
 
-
-
 class ExperimentConfig(object):
   DEFAULTS = {
     'exp_basedir': exp_util.experiment_basedir('mnist'),
@@ -69,6 +68,12 @@ class ExperimentConfig(object):
     for k, v in conf.iteritems():
       setattr(self, k, v)
 
+  def create_tf_summary_df(self, spark):
+    df = Spark.union_dfs(*(
+      exp_util.params_to_tf_summary_df(spark, p)
+      for p in self.iter_model_params()))
+    return df
+
   def iter_model_params(self):
     import copy
     for ablate_frac in self.uniform_ablations:
@@ -81,6 +86,7 @@ class ExperimentConfig(object):
         class ExpTable(AblatedDataset):
           KEEP_FRAC = keep_frac
           SEED = AblatedDataset.SEED + i
+        params.TRIAL = i
         params.TRAIN_TABLE = ExpTable
         params.MODEL_NAME = (
           'ablated_mnist_keep_%s' % keep_frac + '_trial_' + str(i))
@@ -114,7 +120,6 @@ build the above with mscoco / segmentation in mind, as well as bdd100k segmentat
 if __name__ == '__main__':
   mnist.MNISTDataset.setup()
   
-  from au.spark import Spark
   paramss = ExperimentConfig().iter_model_params()
   cs = (lambda: mnist.MNIST.load_or_train(params=p) for p in paramss)
   with Spark.sess() as spark:

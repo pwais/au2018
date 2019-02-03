@@ -494,13 +494,7 @@ class ImageTable(object):
   @classmethod
   def create_iter_all_rows(cls, cycle=False, spark=None):
     def iter_image_rows():
-      _rdd = None
-      t = util.ThruputObserver(
-              name=cls.__name__ + '.iter_rows',
-              log_on_del=True,
-              log_freq=1000)
-      t.start_block()
-      
+      _rdd = None      
       while True:
         if spark is None:
           iter_rows = cls.iter_all_rows
@@ -510,8 +504,6 @@ class ImageTable(object):
         
         for row in iter_rows():
           yield row
-          t.update_tallies(n=1)
-          t.maybe_log_progress()
         
         if not cycle:
           break

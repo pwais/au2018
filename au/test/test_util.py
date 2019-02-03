@@ -25,6 +25,71 @@ def test_ichunked():
   
   assert list_ichunked('abcde', 4) == [('a', 'b', 'c', 'd'), ('e',)]
 
+def test_row_of_constants():
+  as_row = util.as_row_of_constants
+
+  # Don't row-ify junk
+  assert as_row(5) == {}
+  assert as_row('moof') == {}
+  assert as_row(dict) == {}
+  assert as_row([]) == {}
+
+  # Row-ify class and instance constants
+  class Foo(object):
+    nope = 1
+    _NOPE = 2
+    YES = 3
+    YES2 = {'bar': 'baz'}
+    def __init__(self):
+      self.YUP = 4
+      self._nope = 5
+  
+  assert as_row(Foo) == {
+                      'YES': 3,
+                      'YES2': {'bar': 'baz'},
+                    }
+  assert as_row(Foo()) == {
+                      'YES': 3,
+                      'YES2': {'bar': 'baz'},
+                      'YUP': 4,
+                    }
+  
+  # Don't row-ify containers of stuff
+  assert as_row([Foo()]) == {}
+
+  # Do recursively row-ify
+  class Bar(object):
+    FOO_CLS = Foo
+    FOO_INST = Foo()
+    def __init__(self):
+      self.MY_FOO = Foo()
+
+  assert as_row(Bar) == {
+                      'FOO_CLS': 'Foo',
+                      'FOO_CLS_YES': 3,
+                      'FOO_CLS_YES2': {'bar': 'baz'},
+
+                      'FOO_INST': 'Foo',
+                      'FOO_INST_YES': 3,
+                      'FOO_INST_YES2': {'bar': 'baz'},
+                      'FOO_INST_YUP': 4,
+                    }
+  assert as_row(Bar()) == {
+                      'FOO_CLS': 'Foo',
+                      'FOO_CLS_YES': 3,
+                      'FOO_CLS_YES2': {'bar': 'baz'},
+
+                      'FOO_INST': 'Foo',
+                      'FOO_INST_YES': 3,
+                      'FOO_INST_YES2': {'bar': 'baz'},
+                      'FOO_INST_YUP': 4,
+
+                      'MY_FOO': 'Foo',
+                      'MY_FOO_YES': 3,
+                      'MY_FOO_YES2': {'bar': 'baz'},
+                      'MY_FOO_YUP': 4,
+                    }
+
 
 
 class TextProxy(unittest.TestCase):

@@ -223,6 +223,52 @@ class Spark(object):
     ]
     return all_results
 
+  @staticmethod
+  def union_dfs(*dfs):
+    """Return the union of a sequence DataFrames and attempt to merge
+    the schemas of each (i.e. union of all columns).
+    Based upon https://stackoverflow.com/a/40404249
+    """
+    if not dfs:
+      return dfs
+    
+    df = dfs[0]
+    for df_other in dfs[1:]:
+      left_types = {f.name: f.dataType for f in df.schema}
+      right_types = {f.name: f.dataType for f in df_other.schema}
+      left_fields = set((f.name, f.dataType, f.nullable) for f in df.schema)
+      right_fields = set((f.name, f.dataType, f.nullable) for f in df_other.schema)
+
+      from pyspark.sql.functions import lit
+
+      # First go over `df`-unique fields
+      for l_name, l_type, l_nullable in left_fields.difference(right_fields):
+          if l_name in right_types:
+              r_type = right_types[l_name]
+              if l_type != r_type:
+                  raise TypeError(
+                    "Union failed. Type conflict on field %s. left type %s, right type %s" % (l_name, l_type, r_type))
+              else:
+                  raise TypeError(
+                    "Union failed. Nullability conflict on field %s. left nullable %s, right nullable %s"  % (l_name, l_nullable, not(l_nullable)))
+          df_other = df_other.withColumn(l_name, lit(None).cast(l_type))
+
+      # Now go over `df_other`-unique fields
+      for r_name, r_type, r_nullable in right_fields.difference(left_fields):
+          if r_name in left_types:
+              l_type = right_types[r_name]
+              if r_type != l_type:
+                  raise TypeError(
+                    "Union failed. Type conflict on field %s. right type %s, left type %s" % (r_name, r_type, l_type))
+              else:
+                  raise TypeError(
+                    "Union failed. Nullability conflict on field %s. right nullable %s, left nullable %s" % (r_name, r_nullable, not(r_nullable)))
+          df = df.withColumn(r_name, lit(None).cast(r_type))       
+      df = df.union(df_other)
+    return df
+
+
+
 
   ### Test Utilities (for unit tests and more!)
 
@@ -388,6 +434,8 @@ class K8SSpark(Spark):
 class NumpyArrayUDT(types.UserDefinedType):
   """SQL User-Defined Type (UDT) for *opaque* numpy arrays.  Unlike Spark's
   DenseVector, this class preserves array shape.
+
+  TODO: make an arbitrary pickleable wrapper ....
   """
 
   @classmethod

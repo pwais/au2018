@@ -41,6 +41,29 @@ def ichunked(seq, n):
     else:
       break
 
+def as_row_of_constants(inst):
+  from collections import OrderedDict
+  row = OrderedDict()
+  
+  def is_constant_field(name):
+    return not name.startswith('_') and name.isupper()
+
+  for attr in sorted(dir(inst)):
+    if is_constant_field(attr):
+      v = getattr(inst, attr)
+      if isinstance(v, (basestring, unicode, float, int, list, dict)):
+        row[attr] = v
+      else:
+        subrow = as_row_of_constants(v)
+        if subrow:
+          if hasattr(v, '__name__'):
+            row[attr] = v.__name__
+          else:
+            row[attr] = v.__class__.__name__
+        for col, colval in subrow.iteritems():
+          row[attr + '_' + col] = colval
+  return row
+
 def fname_timestamp(random_suffix=True):
   timestr = time.strftime("%Y-%m-%d-%H_%M_%S")
   if random_suffix:
@@ -57,7 +80,7 @@ def fname_timestamp(random_suffix=True):
   return timestr
 
 class Proxy(object):
-  __slots__ = ('instance',)
+  __slots__ = ('instance')
   
   def __init__(self, instance):
     self.instance = instance
@@ -287,6 +310,9 @@ def get_sys_info():
   log.info("... got all system info.")
 
   return info
+
+
+
 
 ### ArchiveFileFlyweight
 
@@ -929,4 +955,100 @@ def give_me_frozen_graph(
   # with g.as_default():
   #   tf.import_graph_def(gdef_frozen, name='')
   # return g
+
+
+
+class TFSummaryRow(object):
+  __slots__ = (
+    'path',
+    'split',
+
+    'step',
+    'wall_time',
+    'tag',
+
+    'simple_value',
+    'image',
+    'tensor',
+  )
+
+  def __init__(self):
+    self.path = ''
+    self.split = ''
+    self.step = -1
+    self.wall_time = 0
+    self.tag = ''
+    self.simple_value = float('nan')
+    self.image = None
+    self.tensor = None
+
+  @staticmethod
+  def fill_simple_value(row, summary):
+    if summary.HasField('simple_value'):
+      row.simple_value = summary.simple_value
   
+  @staticmethod
+  def fill_image(row, summary):
+    if summary.HasField('image'):
+      import imageio
+      row.image = imageio.imread(summary.image.encoded_image_string)
+  
+  @staticmethod
+  def fill_tensor(row, summary):
+    if summary.HasField('tensor'):
+      import tensorflow as tf
+      row.tensor = tf.make_ndarray(summary.tensor)
+  
+  def as_dict(self):
+    return dict((k, getattr(self, k)) for k in self.__slots__)
+  
+  def as_row(self):
+    from pyspark.sql import Row
+    from au.spark import NumpyArray
+    d = self.as_dict()
+    d['image'] = NumpyArray(d['image'])
+    d['tensor'] = NumpyArray(d['tensor'])
+    return Row(**d)
+    
+
+class TFSummaryReader(object):
+
+  # Subclass and use this attribute to elide / ignore some summary messages
+  FILLERS = (
+    TFSummaryRow.fill_simple_value,
+    TFSummaryRow.fill_image,
+    TFSummaryRow.fill_tensor,
+  )
+
+  def __init__(self, paths=None, glob_events_from_dir=None):
+    self._paths = paths or []
+    if glob_events_from_dir and os.path.exists(glob_events_from_dir):
+      self._paths.extend(
+        pathlib.Path(glob_events_from_dir).rglob('**/events.out*'))
+
+  def __iter__(self):
+    import tensorflow as tf
+    for path in self._paths:
+      path = str(path)
+      log.info("Reading summaries from path %s ..." % path)
+      
+      split = ''
+      # TF estimators puts eval summaries in the 'eval' subdir
+      eval_str = os.pathsep + 'eval' + os.pathsep
+      if eval_str in path:
+        split = 'eval'
+      
+      for tf_event in tf.train.summary_iterator(path):
+        for tf_summary in tf_event.summary.value:
+          row = TFSummaryRow()
+          row.path = path
+          row.split = split
+
+          row.wall_time = tf_event.wall_time
+          row.step = tf_event.step
+          row.tag = tf_summary.tag
+
+          for filler in self.FILLERS:
+            filler(row, tf_summary)
+          
+          yield row

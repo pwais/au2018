@@ -17,9 +17,6 @@ class INNModel(object):
       self.DATA_BASEDIR = os.path.join(
                               conf.AU_DATA_CACHE,
                               self.MODEL_NAME)
-      self.TENSORBOARD_BASEDIR = os.path.join(
-                                    conf.AU_TENSORBOARD_DIR,
-                                    self.MODEL_NAME)
 
       # For tensorflow models
       self.INPUT_TENSOR_SHAPE = [None, None, None, None]
@@ -37,8 +34,6 @@ class INNModel(object):
     def update(self, **overrides):
       for k, v in overrides.iteritems():
         setattr(self, k, v)
-
-
 
     def make_normalize_ftor(self):
       input_dims = self.INPUT_TENSOR_SHAPE

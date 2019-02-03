@@ -132,7 +132,7 @@ class MNISTDataset(dataset.ImageTable):
   def to_mnist_tf_dataset(cls, spark=None):
     iter_image_rows = cls.create_iter_all_rows(spark=spark)
     def iter_mnist_tuples():
-      t = util.ThruputObserver(name='iter_mnist_tuples', log_freq=5000)
+      t = util.ThruputObserver(name='iter_mnist_tuples', log_freq=20000)
       t.start_block()
       norm = MNIST.Params().make_normalize_ftor()
       for row in iter_image_rows():
@@ -329,13 +329,13 @@ class model_fn(object):
           eval_metric_ops=eval_metric_ops,
       )
 
-def test_dataset(params):
-  from official.mnist import dataset as mnist_dataset
-  test_ds = mnist_dataset.test(params.DATA_BASEDIR)
-  if params.LIMIT >= 0:
-    test_ds = test_ds.take(params.LIMIT)
-  test_ds = test_ds.batch(params.BATCH_SIZE)
-  return test_ds
+# def test_dataset(params):
+#   from official.mnist import dataset as mnist_dataset
+#   test_ds = mnist_dataset.test(params.DATA_BASEDIR)
+#   if params.LIMIT >= 0:
+#     test_ds = test_ds.take(params.LIMIT)
+#   test_ds = test_ds.batch(params.BATCH_SIZE)
+#   return test_ds
 
 # def mnist_train(params):
 #   log = util.create_log()

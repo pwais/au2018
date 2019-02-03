@@ -15,6 +15,15 @@ import pytest
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist_ablation') 
 
 
+def test_my_fun_tassst():
+  from au.experiments.data_ablation import mnist
+  from au.spark import Spark
+  spark = Spark.getOrCreate()
+  conf = mnist.ExperimentConfig(run_name='default.2019-02-02-07_21_03.8SAZ7')
+  df = conf.create_tf_summary_df(spark)
+  import ipdb; ipdb.set_trace()
+
+
 class TestMNISTAblatedDataset(unittest.TestCase):
 
   @classmethod
