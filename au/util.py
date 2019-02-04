@@ -658,7 +658,7 @@ def _Worker_run(inst_datum_bytes):
   # Multiprocesing workers ignore System exceptions :(
   # https://stackoverflow.com/a/23682499
   try:
-
+    log.info("Running in subprocess ...")
     import cloudpickle
     inst_datum = cloudpickle.loads(inst_datum_bytes)
     inst, datum = inst_datum
@@ -713,7 +713,11 @@ class Worker(object):
       if self.PROCESS_ISOLATED:
         import cloudpickle
         import multiprocessing
-        pool = multiprocessing.Pool(processes=1)
+        pool = multiprocessing.Pool(
+                    processes=1,
+                    maxtasksperchild=1)
+                      # Prevent process re-use; e.g. we need a Tensorflow
+                      # process to exist for it to ever release GPU memory :(
         inst_datum_bytes = cloudpickle.dumps(
           (self, {'args': args, 'kwargs': kwargs}))
         # We must use async so that parent processs signals get handled
@@ -752,7 +756,7 @@ class Worker(object):
         time.sleep(5)
     
     restrict_gpus = [h.index for h in self._gpu_handles]
-    return tf_create_session_config(restrict_gpus=[])
+    return tf_create_session_config(restrict_gpus=restrict_gpus)
 
   def run(self, *args, **kwargs):
     # Base class worker does nothing

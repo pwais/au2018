@@ -433,7 +433,9 @@ def mnist_train(params, tf_config=None):
     if params.LIMIT >= 0:
       train_ds = train_ds.take(params.LIMIT)
     # train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
+    # train_ds = train_ds.prefetch(10 * params.BATCH_SIZE)
     train_ds = train_ds.batch(params.BATCH_SIZE)
+    train_ds = train_ds.cache(os.path.join(params.MODEL_BASEDIR, 'train_cache'))
     return train_ds
   
   def eval_input_fn():
@@ -444,7 +446,8 @@ def mnist_train(params, tf_config=None):
 
     if params.LIMIT >= 0:
       test_ds = test_ds.take(params.LIMIT)
-    test_ds = test_ds.batch(params.BATCH_SIZE)
+    test_ds = test_ds.batch(params.EVAL_BATCH_SIZE)
+    test_ds = test_ds.cache(os.path.join(params.MODEL_BASEDIR, 'test_cache'))
     
     # No idea why we return an interator thingy instead of a dataset ...
     return test_ds.make_one_shot_iterator().get_next()
@@ -458,10 +461,11 @@ def mnist_train(params, tf_config=None):
       batch_size=params.BATCH_SIZE)
 
   # Train and evaluate model.
-  for _ in range(params.TRAIN_EPOCHS):
+  for t in range(params.TRAIN_EPOCHS):
     mnist_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
-    eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
-    util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+    if t % 10 == 0 or t >= params.TRAIN_EPOCHS - 1:
+      eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
+      util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
 
   # Export the model
   # TODO do we need this placeholder junk?
@@ -571,6 +575,7 @@ class MNIST(nnmodel.INNModel):
     def __init__(self, **overrides):
       super(MNIST.Params, self).__init__(model_name='MNIST')
       self.BATCH_SIZE = 100
+      self.EVAL_BATCH_SIZE = 100
       
       # self.LEARNING_RATE = 0.01
       # self.MOMENTUM = 0.5
@@ -596,7 +601,7 @@ class MNIST(nnmodel.INNModel):
   def load_or_train(cls, params=None):    
     params = params or MNIST.Params()
     model = MNIST(params=params)
-    if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
+    if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'checkpoint')):
       util.log.info("Training!")
       model.train()
       util.log.info("Done training!")
@@ -614,6 +619,7 @@ class MNIST(nnmodel.INNModel):
         mnist_train(params, tf_config=tf_config)
     w = MNISTWorker()
     w()
+    
 
   def get_inference_graph(self):
     return self.igraph

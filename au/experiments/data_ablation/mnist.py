@@ -39,7 +39,7 @@ class AblatedDataset(mnist.MNISTDataset):
 class ExperimentConfig(object):
   DEFAULTS = {
     'exp_basedir': exp_util.experiment_basedir('mnist'),
-    'run_name': 'default.' + util.fname_timestamp(),
+    'run_name': 'default.2019-02-03-07_25_48.GIBOB', #default.' + util.fname_timestamp(),
 
     'params_base':
       mnist.MNIST.Params(
