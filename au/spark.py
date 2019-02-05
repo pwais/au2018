@@ -259,13 +259,14 @@ class Spark(object):
         Host: {hostname} {host}
         Num CPUs: {n_cpus}
         Egg: {filepath}
-        
+        Internet connectivity: {have_internet}
+
         PYTHONPATH:
         {PYTHONPATH}
 
         nvidia-smi:
         {nvidia_smi}
-        
+
         Disk:
         {disk_free}
         """.format(**info)
