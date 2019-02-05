@@ -299,6 +299,9 @@ def get_sys_info():
   info['disk_free'] = safe_cmd('df -h')
   info['ifconfig'] = safe_cmd('ifconfig')
   info['memory'] = safe_cmd('free -h')
+  
+  TEST_URI = 'https://raw.githubusercontent.com/pwais/au2018/master/README.md'
+  info['have_internet'] = bool(safe_cmd('curl ' + TEST_URI))
 
   import socket
   info['hostname'] = socket.gethostname()
