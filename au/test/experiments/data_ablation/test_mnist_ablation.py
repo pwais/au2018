@@ -19,14 +19,13 @@ TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist_ablation')
 #   from au.experiments.data_ablation import mnist
 #   from au.spark import Spark
 #   spark = Spark.getOrCreate()
-#   conf = mnist.ExperimentConfig(run_name='default.2019-02-02-07_21_03.8SAZ7')
+#   conf = mnist.ExperimentConfig(run_name='default.2019-02-03-07_25_48.GIBOB')
 #   df = conf.create_tf_summary_df(spark)
 #   import ipdb; ipdb.set_trace()
 
 # """
 
-# spark.sql("select t.keep_frac, avg(100. * t.acc), std(100. * t.acc), count(*) support from ( select TRAIN_TABLE_KEEP_FRAC keep_frac, params_hash, max(simple_value) acc from data where tag = 'accur
-# acy'  group by TRAIN_TABLE_KEEP_FRAC, params_hash order by TRAIN_TABLE_KEEP_FRAC, params_hash) as t group by keep_frac order by keep_frac").show()
+# spark.sql("select t.keep_frac, avg(100. * t.acc), std(100. * t.acc), count(*) support from ( select TRAIN_TABLE_KEEP_FRAC keep_frac, params_hash, max(simple_value) acc from data where tag = 'accuracy'  group by TRAIN_TABLE_KEEP_FRAC, params_hash order by TRAIN_TABLE_KEEP_FRAC, params_hash) as t group by keep_frac order by keep_frac").show()
 
 # +--------------------+--------------------------------+----------------------------------------+-------+
 # |           keep_frac|avg((CAST(100 AS DOUBLE) * acc))|stddev_samp((CAST(100 AS DOUBLE) * acc))|support|
@@ -39,6 +38,25 @@ TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist_ablation')
 # |0.050000000000000044|               97.08999991416931|                                     NaN|      1|
 # +--------------------+--------------------------------+----------------------------------------+-------+
 # """
+
+
+# new results:
+"""
++--------------------+--------------------------------+----------------------------------------+-------+
+|           keep_frac|avg((CAST(100 AS DOUBLE) * acc))|stddev_samp((CAST(100 AS DOUBLE) * acc))|support|
++--------------------+--------------------------------+----------------------------------------+-------+
+|9.999999999998899E-5|               32.25024297833443|                       7.656910928219753|     10|
+|4.999999999999449E-4|               58.16700026392937|                      16.500533334416954|     10|
+|0.001000000000000...|               73.92222219043308|                       2.858039140948358|      9|
+|0.005000000000000...|               89.02199923992157|                      1.0356510705433526|     10|
+|0.010000000000000009|                92.4399995803833|                      0.6090972777065516|     10|
+|0.050000000000000044|               97.34399974346161|                      0.2977400461479309|     10|
+| 0.09999999999999998|                98.2260000705719|                     0.13150381196266359|     10|
+|                 0.5|                99.1430002450943|                     0.04498191889029135|     10|
+|                 1.0|               99.39099967479706|                    0.023309430402744788|     10|
++--------------------+--------------------------------+----------------------------------------+-------+
+
+"""
 
 class TestMNISTAblatedDataset(unittest.TestCase):
 

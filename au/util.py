@@ -1041,8 +1041,17 @@ class TFSummaryReader(object):
       eval_str = os.pathsep + 'eval' + os.pathsep
       if eval_str in path:
         split = 'eval'
+
+      def iter_events_verbose(path):
+        # When there's an error in the file, e.g. truncated record, Tensorflow
+        # doesn't print the path :(
+        try:
+          for tf_event in tf.train.summary_iterator(path):
+            yield tf_event
+        except Exception as e:
+          raise Exception(("Error reading file %s" % path, e))
       
-      for tf_event in tf.train.summary_iterator(path):
+      for tf_event in iter_events_verbose(path):
         for tf_summary in tf_event.summary.value:
           row = TFSummaryRow()
           row.path = path
