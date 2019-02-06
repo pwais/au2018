@@ -185,7 +185,7 @@ def get_sys_info():
   info['cpuinfo'] = safe_cmd('cat /proc/cpuinfo')
   info['disk_free'] = safe_cmd('df -h')
   info['ifconfig'] = safe_cmd('ifconfig')
-  info['have_internet'] = safe_cmd('curl https://raw.githubusercontent.com/pwais/au2018/master/README.md')
+  info['have_internet'] = bool(safe_cmd('curl https://raw.githubusercontent.com/pwais/au2018/master/README.md'))
 
   import socket
   info['hostname'] = socket.gethostname()
