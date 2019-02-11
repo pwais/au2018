@@ -3,6 +3,8 @@
 set -eux 
 
 # Install basics for 16.04 image: http://releases.ubuntu.com/16.04/ubuntu-16.04.5-desktop-amd64.iso
+# Sadly, the ubuntu apt servers changed recently and you may need to patch your machine prior to running
+# this script: https://askubuntu.com/a/787491
 
 apt-get update
 apt-get install -y \
