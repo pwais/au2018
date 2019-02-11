@@ -7,6 +7,7 @@ set -eux
 # this script: https://askubuntu.com/a/787491
 
 apt-get update
+service docker stop || true
 apt-get install -y \
   curl \
   git \
@@ -19,8 +20,7 @@ service ssh restart
 ubuntu-drivers autoinstall
 
 ## Docker
-#curl -fsSL https://get.docker.com | bash
-# kubespray wants this version of docker
+# nvidia-docker needs a specific version and Kubespray needs to use that version too
 service docker stop || true
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
 add-apt-repository \
@@ -28,7 +28,7 @@ add-apt-repository \
    $(lsb_release -cs) \
    stable"
 apt-get update
-apt-get install -y docker-ce=5:18.09.0~3-0~ubuntu-xenial
+apt-get install -y docker-ce=5:18.09.1~3-0~ubuntu-xenial
 usermod -aG docker au
 
 ## nvidia-docker
