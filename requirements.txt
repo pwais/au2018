@@ -1,6 +1,7 @@
 fasteners
 gmplot
 imageio
+imageio-ffmpeg
 klepto
 keras==2.2.2
 matplotlib
