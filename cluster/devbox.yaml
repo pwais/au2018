@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: Pod
+metadata:
+ name: au-devbox
+ labels:
+  name: au-devbox
+spec:
+  hostNetwork: true
+  hostPID: true
+  dnsPolicy: ClusterFirstWithHostNet
+  restartPolicy: Never
+  containers:
+  - name: au-devbox
+    image: au2018/env:v1.4
+    imagePullPolicy: Always
+    command: ["/opt/au/cluster/devbox/start_ssh.sh"]
+    securityContext:
+      privileged: true
+    ports:
+    - name: ssh
+      containerPort: 30022
+      hostPort: 30022
+      protocol: TCP
+    # A fix to run docker (daemon) in docker: -v /dev:/dev
+    # But we just run using the host's docker: -v /var/run/docker.sock:/var/run/docker.sock
+    #  to avoid loopback errors
+    volumeMounts:
+      - name: dockersock
+        mountPath: /var/run/docker.sock
+  volumes:
+    - name: dockersock
+      hostPath:
+        path: /var/run/docker.sock
+
