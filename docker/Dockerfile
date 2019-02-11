@@ -106,7 +106,6 @@ RUN \
 ## AU Python
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
-RUN python -c 'import imageio; imageio.plugins.ffmpeg.download()'
 
 
 ## TF Models
