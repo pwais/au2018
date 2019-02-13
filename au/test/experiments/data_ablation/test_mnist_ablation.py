@@ -15,16 +15,21 @@ import pytest
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist_ablation') 
 
 
-# def test_my_fun_tassst():
-#   from au.experiments.data_ablation import mnist
-#   from au.spark import Spark
-#   spark = Spark.getOrCreate()
-#   conf = mnist.ExperimentConfig(run_name='default.2019-02-03-07_25_48.GIBOB')
-#   df = conf.create_tf_summary_df(spark)
-#   import ipdb; ipdb.set_trace()
+def test_my_fun_tassst():
+  from au.spark import Spark
+  spark = Spark.getOrCreate()
+  experiment = mnist_ablated.Experiment(run_name='default.2019-02-03-07_25_48.GIBOB')
+  experiment.run(spark=spark)
+  df = experiment.as_df(spark)
+  report = mnist_ablated.ExperimentReport(spark, df)
+  report.save()
+  # import ipdb; ipdb.set_trace()
+  
+  
 
 # """
 
+# df.createOrReplaceTempView('data')
 # spark.sql("select t.keep_frac, avg(100. * t.acc), std(100. * t.acc), count(*) support from ( select TRAIN_TABLE_KEEP_FRAC keep_frac, params_hash, max(simple_value) acc from data where tag = 'accuracy'  group by TRAIN_TABLE_KEEP_FRAC, params_hash order by TRAIN_TABLE_KEEP_FRAC, params_hash) as t group by keep_frac order by keep_frac").show()
 
 # +--------------------+--------------------------------+----------------------------------------+-------+
@@ -57,6 +62,10 @@ TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist_ablation')
 +--------------------+--------------------------------+----------------------------------------+-------+
 
 """
+
+def test_gen_target_dists():
+  dists = list(mnist_ablated.gen_ablated_dists([1, 2, 3], [0.5, 0.9]))
+  assert {1: 0.5, 2: 1., 3: 1.} in dists
 
 class TestMNISTAblatedDataset(unittest.TestCase):
 

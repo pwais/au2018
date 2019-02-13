@@ -170,9 +170,13 @@ class Spark(object):
   
   @classmethod
   @contextmanager
-  def sess(cls):
-    spark = cls.getOrCreate()
-    yield spark
+  def sess(cls, *args):
+    if args and args[0]:
+      spark = args[0]
+      yield spark
+    else:
+      spark = cls.getOrCreate()
+      yield spark
 
   @staticmethod
   def archive_rdd(spark, path):

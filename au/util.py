@@ -408,11 +408,12 @@ def mkdir(path):
 def rm_rf(path):
   shutil.rmtree(path)
 
-def all_files_recursive(root_dir):
-  for path in pathlib.Path(root_dir).glob('**/*'):
-    path = str(path) # pathlib uses PosixPath thingies ...
-    if os.path.isfile(path):
-      yield path
+def all_files_recursive(root_dir, pattern='**/*'):
+  return [
+    str(path) # pathlib uses PosixPath thingies ...
+    for path in pathlib.Path(root_dir).rglob(pattern)
+    if path.is_file()
+  ]
 
 def cleandir(path):
   mkdir(path)
@@ -1009,12 +1010,13 @@ class TFSummaryRow(object):
   def as_dict(self):
     return dict((k, getattr(self, k)) for k in self.__slots__)
   
-  def as_row(self):
+  def as_row(self, extra=None):
     from pyspark.sql import Row
     from au.spark import NumpyArray
     d = self.as_dict()
     d['image'] = NumpyArray(d['image'])
     d['tensor'] = NumpyArray(d['tensor'])
+    d.update(**(extra or {}))
     return Row(**d)
     
 

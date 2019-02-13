@@ -111,7 +111,8 @@ class MNISTDataset(dataset.ImageTable):
           FIRST(split) split,
           label, 
           COUNT(*) / 
-            (SELECT COUNT(*) FROM {table} WHERE split = '{split}') frac
+            (SELECT COUNT(*) FROM {table} WHERE split = '{split}') frac,
+          COUNT(*) num
         FROM {table}
         WHERE split = '{split}'
         GROUP BY label
@@ -601,7 +602,10 @@ class MNIST(nnmodel.INNModel):
   def load_or_train(cls, params=None):    
     params = params or MNIST.Params()
     model = MNIST(params=params)
-    if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'checkpoint')):
+    checkpoint_path = os.path.join(params.MODEL_BASEDIR, 'checkpoint')
+    if os.path.exists(checkpoint_path):
+      util.log.info("Using checkpoint at %s" % checkpoint_path)
+    else:
       util.log.info("Training!")
       model.train()
       util.log.info("Done training!")
