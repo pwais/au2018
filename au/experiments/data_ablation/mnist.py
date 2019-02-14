@@ -170,35 +170,27 @@ class ExperimentReport(object):
               x_axis_type='log',
               title='Test Accuracy vs [Log-scale] Ablated Training Set Size')
     acc_df = plot_scatter(fig, 'accuracy')
-    fig.xaxis.axis_label = 'Fraction of Training Set'
+    fig.xaxis.axis_label = 'Fraction of Training Set (m)'
     fig.yaxis.axis_label = 'Test Accuracy'
     panels.append(Panel(child=fig, title="Test Accuracy"))
 
-    for delta in (1 - 0.68, 1 - 0.95):
-      import numpy as np
-      from scipy.optimize import curve_fit
-      def f(m, a):
-        # PAC, a is |H|
-        #return 1 - np.sqrt((np.log(a) + np.log(1. / delta) )/ (2. * m))
-        # VC, a is VC(H)
-        # https://courses.cs.washington.edu/courses/cse546/12wi/slides/cse546wi12LearningTheory.pdf
-        return 1 - np.sqrt(
-                      (a * (np.log(2 * m / a) + 1.)  + np.log(4. / delta)) / m)
-      
-      xdata = tuple(50000 * x for x in acc_df.keep_frac)
-      ydata = tuple(acc_df.value)
-      popt, pcov = curve_fit(f, xdata, ydata)
-      
-      for mult in (0, 1e-12, 1e-15):# 1e3, 1e6, 4 * (10 + 1024 + 5 * 64 + 5 * 32 + 28*28)):
-        if mult:
-          a = mult#4 * (10 + 1024 + 5 * 64 + 5 * 32 + 28*28)#popt[0] * mult
-        else:
-          a = popt[0]
-        N = 1e4 + 10
-        xs = np.linspace(0, 1, N)
-        ys = [f(x * 50000, a) for x in xs]
-        ys = [(y if y >= 0 else 0) for y in ys]
-        fig.line(x=xs, y=ys, line_width=3, alpha=0.5, legend='delta=%s H=%s' % (delta, a))
+    import numpy as np
+    import scipy.optimize
+    def f(m, c):
+      # PAC loose bound when Acc_Train is 1:
+      # Acc_Test > 1 - sqrt( (logH + log(1/delta))  / 2m)
+      return 1. - np.sqrt(c / m)
+    
+    xdata = tuple(acc_df.keep_frac)
+    ydata = tuple(acc_df.value)
+    popt, pcov = scipy.optimize.curve_fit(f, xdata, ydata)
+    
+    c = popt[0]
+    N = 1e4 + 10
+    xs = np.linspace(0, 1, N)
+    ys = [f(x, c) for x in xs]
+    ys = [(y if y >= 0 else 0) for y in ys]
+    fig.line(x=xs, y=ys, line_width=3, alpha=0.5, legend='Acc(m) = 1 - sqrt(c / m), c = %s' % c)
     
     fig.legend.location = 'bottom_right'
     fig.legend.click_policy = 'hide'
