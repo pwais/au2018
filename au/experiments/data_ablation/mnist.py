@@ -177,15 +177,23 @@ class ExperimentReport(object):
     for delta in (1 - 0.68, 1 - 0.95):
       import numpy as np
       from scipy.optimize import curve_fit
-      def f(x, a):
-        return 1 - np.sqrt((np.log(a) + np.log(1. / delta) )/ (2. * x))
+      def f(m, a):
+        # PAC, a is |H|
+        #return 1 - np.sqrt((np.log(a) + np.log(1. / delta) )/ (2. * m))
+        # VC, a is VC(H)
+        # https://courses.cs.washington.edu/courses/cse546/12wi/slides/cse546wi12LearningTheory.pdf
+        return 1 - np.sqrt(
+                      (a * (np.log(2 * m / a) + 1.)  + np.log(4. / delta)) / m)
       
       xdata = tuple(50000 * x for x in acc_df.keep_frac)
       ydata = tuple(acc_df.value)
       popt, pcov = curve_fit(f, xdata, ydata)
       
-      for mult in (1., 100., 1000., 10000.):
-        a = popt[0] * mult
+      for mult in (0, 1e-12, 1e-15):# 1e3, 1e6, 4 * (10 + 1024 + 5 * 64 + 5 * 32 + 28*28)):
+        if mult:
+          a = mult#4 * (10 + 1024 + 5 * 64 + 5 * 32 + 28*28)#popt[0] * mult
+        else:
+          a = popt[0]
         N = 1e4 + 10
         xs = np.linspace(0, 1, N)
         ys = [f(x * 50000, a) for x in xs]
