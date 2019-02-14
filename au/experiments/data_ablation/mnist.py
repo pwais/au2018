@@ -119,6 +119,7 @@ class ExperimentReport(object):
       """).show(n=len(METRICS) * len(self.experiment.uniform_ablations))
 
     from bokeh import plotting
+    from bokeh.models import ColumnDataSource
     from bokeh.models.widgets import Panel
     TOOLTIPS = [
         ("(x,y)", "($x{0.000000}, $y)"),
@@ -128,7 +129,6 @@ class ExperimentReport(object):
     def plot_scatter(fig, metric_name, color='blue', alpha=0.2, label=None):
       assert metric_name in METRICS # Programming error?
       util.log.info("Plotting scatter %s ..." % metric_name)
-      from bokeh.models import ColumnDataSource
       df = self.spark.sql("""
                   SELECT keep_frac, value
                   FROM experiment_uniform_ablations
@@ -160,6 +160,8 @@ class ExperimentReport(object):
           line_color='dark' + color)
       fig.add_layout(w)
 
+      return df
+
     
     ### All-class metrics
     ## Test Accuracy
@@ -167,10 +169,31 @@ class ExperimentReport(object):
               tooltips=TOOLTIPS, plot_width=1000,
               x_axis_type='log',
               title='Test Accuracy vs [Log-scale] Ablated Training Set Size')
-    plot_scatter(fig, 'accuracy')
+    acc_df = plot_scatter(fig, 'accuracy')
     fig.xaxis.axis_label = 'Fraction of Training Set'
     fig.yaxis.axis_label = 'Test Accuracy'
     panels.append(Panel(child=fig, title="Test Accuracy"))
+
+    for delta in (1 - 0.68, 1 - 0.95):
+      import numpy as np
+      from scipy.optimize import curve_fit
+      def f(x, a):
+        return 1 - np.sqrt((np.log(a) + np.log(1. / delta) )/ (2. * x))
+      
+      xdata = tuple(50000 * x for x in acc_df.keep_frac)
+      ydata = tuple(acc_df.value)
+      popt, pcov = curve_fit(f, xdata, ydata)
+      
+      for mult in (1., 100., 1000., 10000.):
+        a = popt[0] * mult
+        N = 1e4 + 10
+        xs = np.linspace(0, 1, N)
+        ys = [f(x * 50000, a) for x in xs]
+        ys = [(y if y >= 0 else 0) for y in ys]
+        fig.line(x=xs, y=ys, line_width=3, alpha=0.5, legend='delta=%s H=%s' % (delta, a))
+    
+    fig.legend.location = 'bottom_right'
+    fig.legend.click_policy = 'hide'
 
     
     ## Train Accuracy
@@ -198,6 +221,29 @@ class ExperimentReport(object):
       fig.legend.click_policy = 'hide'
 
       panels.append(Panel(child=fig, title="P/R Class %s" % c))
+
+    ### Training Runtime
+    util.log.info("Plotting runtime ...")
+    walltime_sdf = self.spark.sql("""
+      SELECT
+        TRAIN_TABLE_KEEP_FRAC keep_frac,
+        params_hash params_hash,
+        MAX(wall_time) - MIN(wall_time) train_time
+      FROM experiment
+      WHERE
+        TRAIN_TABLE_KEEP_FRAC >= 0
+      GROUP BY TRAIN_TABLE_KEEP_FRAC, params_hash
+    """)
+    walltime_df = walltime_sdf.toPandas()
+    fig = plotting.figure(
+              tooltips=TOOLTIPS, plot_width=1000, x_axis_type='log',
+              title='Train Time vs Ablated Training Set Size')
+    fig.circle(
+      x='keep_frac', y='train_time', source=ColumnDataSource(walltime_df),
+      size=10)
+    fig.xaxis.axis_label = 'Fraction of Training Set'
+    fig.yaxis.axis_label = 'Train Time (sec)'
+    panels.append(Panel(child=fig, title="Train Walltime"))
 
     from bokeh.models.widgets import Tabs
     return Tabs(tabs=panels)
