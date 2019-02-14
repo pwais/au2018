@@ -5,6 +5,7 @@ from au.experiments.data_ablation import util as exp_util
 from au.spark import Spark
 from au.fixtures.tf import mnist
 
+
 def gen_ablated_dists(classes, ablations):
   for c in classes:
     for frac in ablations:
@@ -14,6 +15,8 @@ def gen_ablated_dists(classes, ablations):
       for k in dist.iterkeys():
         dist[k] /= total
       yield dist
+
+
 
 class AblatedDataset(mnist.MNISTDataset):
   
@@ -47,71 +50,157 @@ class AblatedDataset(mnist.MNISTDataset):
     return df
 
 class ExperimentReport(object):
-  def __init__(self, spark, experiment_df):
+  def __init__(self, spark, experiment):
     self.spark = spark
-    self.experiment_df = experiment_df
+    self.experiment = experiment
+    self.experiment_df = self.experiment.as_df(self.spark)
   
   def save(self, outdir=None):
     if not outdir:
       row = self.experiment_df.first()
       outdir = row.EXPERIMENT['exp_basedir']
   
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
+    # figs = []
+    # figs.extend()
+    tabs = self._get_uniform_ablations_figs()
+    
+    from bokeh import plotting
 
-    figs = []
-    figs.append(self._get_uniform_ablations_fig(plt))
+    plotting.output_file("report.html", title="interactive_legend.py example", mode='inline')
+    plotting.save(tabs)
 
-    from matplotlib.backends.backend_pdf import PdfPages
-    pp = PdfPages(os.path.join(outdir, 'report.pdf'))
-    for fig in figs:
-      pp.savefig(fig)
-    pp.close()
-    for fig in figs:
-      plt.close(fig) # Prevent Python from OOMing
+    # from matplotlib.backends.backend_pdf import PdfPages
+    # pp = PdfPages(os.path.join(outdir, 'report.pdf'))
+    # for fig in figs:
+    #   pp.savefig(fig)
+    # pp.close()
+    # for fig in figs:
+    #   plt.close(fig) # Prevent Python from OOMing
 
   
   
-  def _get_uniform_ablations_fig(self, plt, debug=True):
+  def _get_uniform_ablations_figs(self, debug=True):
+    METRICS = [
+      'accuracy',
+      'train_accuracy_1',
+    ]
+    METRICS.extend('precision_%s' % c for c in self.experiment.all_classes)
+    METRICS.extend('recall_%s' % c for c in self.experiment.all_classes)
+
+    tags_str = ','.join("'%s'" % t for t in METRICS)
+
     self.experiment_df.createOrReplaceTempView('experiment')
     df = self.spark.sql("""
       SELECT
         TRAIN_TABLE_KEEP_FRAC keep_frac,
-        MAX(simple_value) acc,
+        FIRST(tag) metric_name,
+        MAX(simple_value) value,
         params_hash params_hash
       FROM experiment
       WHERE
-        tag = 'accuracy' AND TRAIN_TABLE_KEEP_FRAC >= 0
-      GROUP BY TRAIN_TABLE_KEEP_FRAC, params_hash
-    """)
+        tag in ( %s ) AND
+        TRAIN_TABLE_KEEP_FRAC >= 0
+      GROUP BY TRAIN_TABLE_KEEP_FRAC, tag, params_hash
+    """ % tags_str)
+    df.createOrReplaceTempView('experiment_uniform_ablations')
+    df.cache()
 
     if debug:
-      df.createOrReplaceTempView('experiment_uniform_ablations')
       self.spark.sql("""
         SELECT
+          t.metric_name,
           t.keep_frac,
-          AVG(100. * t.acc) avg,
-          STD(100. * t.acc) std,
+          AVG(100. * t.value) avg,
+          STD(100. * t.value) std,
           COUNT(*) support
         FROM experiment_uniform_ablations AS t
-        GROUP BY keep_frac
-        ORDER BY keep_frac
-      """).show()
+        GROUP BY metric_name, keep_frac
+        ORDER BY metric_name, keep_frac
+      """).show(n=len(METRICS) * len(self.experiment.uniform_ablations))
 
-    rows = df.collect()
-    
-    fig = plt.figure()    
-    
-    accs = [row.acc for row in rows]
-    keep_fracs = [row.keep_frac for row in rows]
+    from bokeh import plotting
+    from bokeh.models.widgets import Panel
+    TOOLTIPS = [
+        ("(x,y)", "($x{0.000000}, $y)"),
+    ]
+    panels = []
 
-    plt.scatter(keep_fracs, accs, marker='+', alpha=0.3)
-    plt.xlabel('Fraction of Training Set')
-    plt.xscale('log') # Typically we only nearly log-scale ablations
-    plt.ylabel('Test Accuracy')
-    plt.title('Ablated Training Set Size vs Test Accuracy')
-    return fig
+    def plot_scatter(fig, metric_name, color='blue', alpha=0.2, label=None):
+      assert metric_name in METRICS # Programming error?
+      util.log.info("Plotting scatter %s ..." % metric_name)
+      from bokeh.models import ColumnDataSource
+      df = self.spark.sql("""
+                  SELECT keep_frac, value
+                  FROM experiment_uniform_ablations
+                  WHERE metric_name = '%s'
+                """ % metric_name).toPandas()
+      source = ColumnDataSource(df)
+      fig.circle(
+        x='keep_frac', y='value', source=source,
+        size=10,
+        color=color, alpha=alpha, legend=label)
+      
+      # Add whiskers
+      errors = []
+      for keep_frac in df.keep_frac.unique():
+        values = df[df['keep_frac'] == keep_frac]['value']
+        mu = values.mean()
+        std = values.std()
+        errors.append({
+          'base': keep_frac,
+          'lower': mu - std,
+          'upper': mu + std,
+        })
+
+      import pandas as pd
+      from bokeh.models import Whisker
+      w = Whisker(
+          source=ColumnDataSource(pd.DataFrame(errors)),
+          base='base', lower='lower', upper='upper',
+          line_color='dark' + color)
+      fig.add_layout(w)
+
+    
+    ### All-class metrics
+    ## Test Accuracy
+    fig = plotting.figure(
+              tooltips=TOOLTIPS, plot_width=1000,
+              x_axis_type='log',
+              title='Test Accuracy vs [Log-scale] Ablated Training Set Size')
+    plot_scatter(fig, 'accuracy')
+    fig.xaxis.axis_label = 'Fraction of Training Set'
+    fig.yaxis.axis_label = 'Test Accuracy'
+    panels.append(Panel(child=fig, title="Test Accuracy"))
+
+    
+    ## Train Accuracy
+    fig = plotting.figure(
+              tooltips=TOOLTIPS, plot_width=1000,
+              title='Train Accuracy vs Ablated Training Set Size')
+    plot_scatter(fig, 'train_accuracy_1')
+    fig.xaxis.axis_label = 'Fraction of Training Set'
+    fig.yaxis.axis_label = 'Train Accuracy'
+    panels.append(Panel(child=fig, title="Train Accuracy"))
+    
+
+    ### Per-class metrics
+    for c in self.experiment.all_classes:
+      title = 'Precision / Recall vs Ablated Training Set Size (Class: %s)' % c
+      fig = plotting.figure(title=title, x_axis_type='log',
+                tooltips=TOOLTIPS, plot_width=1000)
+      plot_scatter(fig, 'precision_%s' % c, color='blue', label='Precision')
+      plot_scatter(fig, 'recall_%s' % c, color='red', label='Recall')
+
+      fig.xaxis.axis_label = 'Fraction of Training Set'
+      fig.yaxis.axis_label = 'Metric'
+
+      fig.legend.location = 'bottom_right'
+      fig.legend.click_policy = 'hide'
+
+      panels.append(Panel(child=fig, title="P/R Class %s" % c))
+
+    from bokeh.models.widgets import Tabs
+    return Tabs(tabs=panels)
 
 
   
@@ -215,12 +304,8 @@ class Experiment(object):
       def meta_to_rows(meta_row):
         model_dir = meta_row.MODEL_BASEDIR
         if os.path.exists(model_dir):
-          i = 0
           for r in util.TFSummaryReader(glob_events_from_dir=model_dir):
             yield r.as_row(extra={'params_hash': meta_row.params_hash})
-            i += 1
-            if i == 100:
-              break
       tf_summary_df = spark.createDataFrame(meta_df.rdd.flatMap(meta_to_rows))
 
       df = meta_df.join(tf_summary_df, on='params_hash', how='inner')
@@ -256,7 +341,7 @@ class Experiment(object):
       keep_frac = 1.0 - ablate_frac
       params = copy.deepcopy(self.params_base)
 
-      params.TRAIN_WORKER_CLS = util.WholeMachineWorker
+      params.TRAIN_WORKER_CLS = util.SingleGPUWorker
 
       for i in range(self.trials_per_treatment):
         params = copy.deepcopy(params)

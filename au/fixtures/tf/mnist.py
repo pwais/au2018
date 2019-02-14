@@ -415,11 +415,9 @@ def mnist_train(params, tf_config=None):
       session_config=tf_config,
       log_step_count_steps=10))
     
-  have_whole_machine = issubclass(
-                          params.TRAIN_WORKER_CLS,
-                          util.WholeMachineWorker)
+  can_spawn_spark = params.TRAIN_WORKER_CLS.PROCESS_ISOLATED
   spark = None
-  if have_whole_machine:
+  if can_spawn_spark:
     from au.spark import Spark
     spark = Spark.getOrCreate()
 

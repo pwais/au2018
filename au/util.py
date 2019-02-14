@@ -771,6 +771,10 @@ class WholeMachineWorker(Worker):
   SYSTEM_EXCLUSIVE = True
   PROCESS_ISOLATED = True
 
+class SingleGPUWorker(Worker):
+  N_GPUS = 1
+  SYSTEM_EXCLUSIVE = False
+  PROCESS_ISOLATED = True
 
 ### Tensorflow
 

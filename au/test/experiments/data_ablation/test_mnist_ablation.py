@@ -21,7 +21,7 @@ def test_my_fun_tassst():
   experiment = mnist_ablated.Experiment(run_name='default.2019-02-03-07_25_48.GIBOB')
   experiment.run(spark=spark)
   df = experiment.as_df(spark)
-  report = mnist_ablated.ExperimentReport(spark, df)
+  report = mnist_ablated.ExperimentReport(spark, experiment)
   report.save()
   # import ipdb; ipdb.set_trace()
   
