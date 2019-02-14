@@ -11,9 +11,6 @@ def gen_ablated_dists(classes, ablations):
     for frac in ablations:
       dist = dict((c, 1. / len(classes)) for c in classes)
       dist[c] *= (1. - frac)
-      total = sum(dist.itervalues())
-      for k in dist.iterkeys():
-        dist[k] /= total
       yield dist
 
 
@@ -60,22 +57,13 @@ class ExperimentReport(object):
       row = self.experiment_df.first()
       outdir = row.EXPERIMENT['exp_basedir']
   
-    # figs = []
-    # figs.extend()
-    tabs = self._get_uniform_ablations_figs()
+    # tabs = self._get_uniform_ablations_figs()
+    tabs = self._get_single_class_ablations_plots()
     
     from bokeh import plotting
 
     plotting.output_file("report.html", title="interactive_legend.py example", mode='inline')
     plotting.save(tabs)
-
-    # from matplotlib.backends.backend_pdf import PdfPages
-    # pp = PdfPages(os.path.join(outdir, 'report.pdf'))
-    # for fig in figs:
-    #   pp.savefig(fig)
-    # pp.close()
-    # for fig in figs:
-    #   plt.close(fig) # Prevent Python from OOMing
 
   
   
@@ -250,9 +238,53 @@ class ExperimentReport(object):
 
 
   
-  def _get_uniform_ablations_plot(self, spark, experiment_df):
-    df = _get_uniform_ablations_df
-  
+  def _get_single_class_ablations_plots(self, debug=True):
+    METRICS = [
+      'accuracy',
+      'train_accuracy_1',
+    ]
+    METRICS.extend('precision_%s' % c for c in self.experiment.all_classes)
+    METRICS.extend('recall_%s' % c for c in self.experiment.all_classes)
+
+    tags_str = ','.join("'%s'" % t for t in METRICS)
+
+    self.experiment_df.createOrReplaceTempView('experiment')
+    df = self.spark.sql("""
+      SELECT
+        TRAIN_TABLE_TARGET_DISTRIBUTION class_dist,
+        FIRST(tag) metric_name,
+        MAX(simple_value) value,
+        params_hash params_hash
+      FROM experiment
+      WHERE
+        tag in ( %s ) AND
+        TRAIN_TABLE_KEEP_FRAC < 0
+      GROUP BY TRAIN_TABLE_TARGET_DISTRIBUTION, tag, params_hash
+    """ % tags_str)
+    
+    from pyspark.sql.functions import udf
+    from pyspark.sql.types import StringType
+    def get_ablated_class(class_dist):
+      # pyspark gives us a Row() instead of a dict :P
+      from pyspark.sql import Row
+      if isinstance(class_dist, Row):
+        class_dist = class_dist.asDict()
+      min_key, min_value = None, None
+      for k, v in class_dist.iteritems():
+        if min_value is None or v < min_value:
+          min_key = k
+          min_value = v
+      return str(min_key)
+    get_ablated_class_udf = udf(get_ablated_class, StringType())
+
+    df = df.withColumn('ablated_class', get_ablated_class_udf(df.class_dist))
+
+    df.createOrReplaceTempView('experiment_single_class_ablations')
+    df.show()
+    import pdb; pdb.set_trace()
+    df.cache()
+
+
 
 
 class Experiment(object):
@@ -267,29 +299,29 @@ class Experiment(object):
         TRAIN_WORKER_CLS=util.WholeMachineWorker,
       ),
     
-    'trials_per_treatment': 10,
+    'trials_per_treatment': 3,#10,
 
-    'uniform_ablations': #tuple(),
-    (
-        0.9999,
-        0.9995,
-        0.999,
-        0.995,
-        0.99,
-        0.95,
-        0.9,
-        0.5,
-        0.0,
-      ),
-    
-    'single_class_ablations': tuple(),
+    'uniform_ablations': tuple(),
     # (
-    #   0.9999,
-    #   0.999,
-    #   0.99,
-    #   0.9,
-    #   0.5,
-    # ),
+    #     0.9999,
+    #     0.9995,
+    #     0.999,
+    #     0.995,
+    #     0.99,
+    #     0.95,
+    #     0.9,
+    #     0.5,
+    #     0.0,
+    #   ),
+    
+    'single_class_ablations': #tuple(),
+    (
+      0.9999,
+      0.999,
+      0.99,
+      0.9,
+      0.5,
+    ),
     'all_classes': range(10),
   }
 
