@@ -62,12 +62,15 @@ class ExperimentReport(object):
     
     from bokeh import plotting
 
-    plotting.output_file("report.html", title="interactive_legend.py example", mode='inline')
+    plotting.output_file("report2.html", title="interactive_legend.py example", mode='inline')
     plotting.save(tabs)
+
+    import pdb; pdb.set_trace()
 
   
   
   def _get_uniform_ablations_figs(self, debug=True):
+    util.log.info("Plotting uniform ablation figs ...")
     METRICS = [
       'accuracy',
       'train_accuracy_1',
@@ -239,6 +242,7 @@ class ExperimentReport(object):
 
   
   def _get_single_class_ablations_plots(self, debug=True):
+    util.log.info("Plotting single-class ablation figs ...")
     METRICS = [
       'accuracy',
       'train_accuracy_1',
@@ -263,26 +267,207 @@ class ExperimentReport(object):
     """ % tags_str)
     
     from pyspark.sql.functions import udf
-    from pyspark.sql.types import StringType
+    from pyspark.sql import types
     def get_ablated_class(class_dist):
       # pyspark gives us a Row() instead of a dict :P
       from pyspark.sql import Row
       if isinstance(class_dist, Row):
         class_dist = class_dist.asDict()
-      min_key, min_value = None, None
-      for k, v in class_dist.iteritems():
-        if min_value is None or v < min_value:
-          min_key = k
-          min_value = v
-      return str(min_key)
-    get_ablated_class_udf = udf(get_ablated_class, StringType())
+      min_key, min_value = min(class_dist.iteritems(), key=lambda k_v: k_v[-1])
+      return Row(class_id=str(min_key), keep_frac=min_value)
+    
+    get_ablated_class_udf = udf(
+      get_ablated_class,
+      types.StructType([
+        types.StructField("class_id", types.StringType(), False),
+        types.StructField("keep_frac", types.FloatType(), False)
+      ]))
 
     df = df.withColumn('ablated_class', get_ablated_class_udf(df.class_dist))
-
     df.createOrReplaceTempView('experiment_single_class_ablations')
-    df.show()
-    import pdb; pdb.set_trace()
     df.cache()
+    
+
+    
+    from bokeh import plotting
+    from bokeh.models import ColumnDataSource
+    from bokeh.models.widgets import Panel
+    TOOLTIPS = [
+        ("(x,y)", "($x{0.000000}, $y)"),
+    ]
+    panels = []
+
+    def hash_to_color(class_id):
+      # Bokeh colorsys usage appears broken, and Bokeh embedding CSS
+      # color strings appears broken ...
+      import colorsys
+      h = hash(str(class_id)) % 255
+      r, g, b = colorsys.hsv_to_rgb(h / 255., 1., 1.)
+      return 255. * r, 255. * b, 255. * g
+
+    ALPHA = 0.2
+
+    ### Target Class vs Others
+    ## Test Accuracy
+    fig = plotting.figure(
+      tooltips=TOOLTIPS, plot_width=1000,
+      x_axis_type='log',
+      title='Test Accuracy vs [Log-scale] Class-Ablated Training Set Size')
+    for class_id in self.experiment.all_classes:
+      target_class = class_id
+      other_classes = set(self.experiment.all_classes) - set([target_class])
+
+      util.log.info("Plotting %s Test Accuracy ..." % target_class)
+      df = self.spark.sql("""
+                    SELECT ablated_class.keep_frac, value
+                    FROM experiment_single_class_ablations
+                    WHERE
+                      metric_name = 'accuracy' AND
+                      ablated_class.class_id = '%s'
+                  """ % target_class).toPandas()
+      source = ColumnDataSource(df)
+      fig.circle(
+          x='keep_frac', y='value', source=source,
+          size=10,
+          color=hash_to_color(target_class),
+          alpha=ALPHA,
+          legend='%s ablated' % target_class)
+    fig.legend.location = 'bottom_right'
+    fig.legend.click_policy = 'hide'
+    fig.xaxis.axis_label = 'Fraction of Training Set'
+    fig.yaxis.axis_label = 'Test Accuracy'
+    panels.append(Panel(child=fig, title="Test Accuracy"))
+
+    ## Relative Precision and Recall
+    for class_id in sorted(self.experiment.all_classes):
+      target_class = class_id
+      other_classes = set(self.experiment.all_classes) - set([target_class])
+
+      def plot_metric(metric_prefix):
+        util.log.info("Plotting %s %s ..." % (target_class, metric_prefix))
+        # Target class
+        metric_name = '%s_%s' % (metric_prefix, target_class)
+        df = self.spark.sql("""
+                    SELECT ablated_class.keep_frac, value
+                    FROM experiment_single_class_ablations
+                    WHERE
+                      metric_name = '%s' AND
+                      ablated_class.class_id = '%s'
+                  """ % (metric_name, target_class)).toPandas()
+        source = ColumnDataSource(df)
+        fig.circle(
+            x='keep_frac', y='value', source=source,
+            size=10,
+            color=hash_to_color(target_class),
+            alpha=ALPHA,
+            legend='%s ablated' % target_class)
+        
+        # Other classes
+        metric_names = ('%s_%s' % (metric_prefix, c) for c in other_classes)
+        metric_names_clause = ','.join("'%s'" % n for n in metric_names)
+        df = self.spark.sql("""
+                    SELECT
+                      ablated_class.keep_frac,
+                      AVG(value) mean_value,
+                      AVG(value) - STD(value) std_lower,
+                      AVG(value) + STD(value) std_upper
+                    FROM experiment_single_class_ablations
+                    WHERE
+                      metric_name in ( %s ) AND
+                      ablated_class.class_id = '%s'
+                    GROUP BY ablated_class.keep_frac
+                  """ % (metric_names_clause, target_class)).toPandas()
+        source = ColumnDataSource(df)
+        fig.circle(
+            x='keep_frac', y='mean_value', source=source,
+            size=10,
+            color='black',
+            alpha=ALPHA,
+            legend='Non-%s classes (Mean)' % target_class)
+        
+        from bokeh.models import Whisker
+        w = Whisker(
+            source=source,
+            base='mean_value', lower='std_lower', upper='std_upper',
+            line_color='black')
+        fig.add_layout(w)
+
+      # Precision
+      fig = plotting.figure(
+        tooltips=TOOLTIPS, plot_width=1000,
+        x_axis_type='log',
+        title='Precision vs [Log-scale] Class-Ablated Training Set Size')
+      plot_metric('precision')
+      fig.xaxis.axis_label = (
+        'Fraction of %s Retained in Training Set' % target_class)
+      fig.yaxis.axis_label = 'Precision'
+      panels.append(Panel(child=fig, title="Precision %s" % target_class))
+
+      # Recall
+      fig = plotting.figure(
+        tooltips=TOOLTIPS, plot_width=1000,
+        x_axis_type='log',
+        title='Recall vs [Log-scale] Class-Ablated Training Set Size')
+      plot_metric('recall')
+      fig.xaxis.axis_label = (
+        'Fraction of %s Retained in Training Set' % target_class)
+      fig.yaxis.axis_label = 'Recall'
+      panels.append(Panel(child=fig, title="Recall %s" % target_class))
+
+
+    ### Overall Metrics
+    ## Train Accuracy
+    fig = plotting.figure(
+              tooltips=TOOLTIPS, plot_width=1000,
+              title='Train Accuracy vs Ablated Training Set Size')
+    for class_id in self.experiment.all_classes:
+      target_class = class_id
+
+      util.log.info("Plotting %s Train Accuracy ..." % target_class)
+      df = self.spark.sql("""
+                    SELECT ablated_class.keep_frac, value
+                    FROM experiment_single_class_ablations
+                    WHERE
+                      metric_name = 'train_accuracy_1' AND
+                      ablated_class.class_id = '%s'
+                  """ % target_class).toPandas()
+      source = ColumnDataSource(df)
+      fig.circle(
+          x='keep_frac', y='value', source=source,
+          size=10,
+          color=hash_to_color(target_class),
+          alpha=ALPHA,
+          legend='%s ablated' % target_class)
+    fig.legend.location = 'bottom_right'
+    fig.legend.click_policy = 'hide'
+    fig.xaxis.axis_label = 'Fraction of Training Set'
+    fig.yaxis.axis_label = 'Train Accuracy'
+    panels.append(Panel(child=fig, title="Train Accuracy"))
+    
+    ### Training Runtime
+    util.log.info("Plotting runtime ...")
+    fig = plotting.figure(
+              tooltips=TOOLTIPS, plot_width=1000,
+              title='Train Times')
+    walltime_sdf = self.spark.sql("""
+      SELECT
+        params_hash params_hash,
+        MAX(wall_time) - MIN(wall_time) train_time
+      FROM experiment
+      WHERE
+        TRAIN_TABLE_KEEP_FRAC < 0
+      GROUP BY params_hash
+    """)
+    walltimes = [row.train_time for row in walltime_sdf.collect()]
+    import numpy as np
+    hist, edges = np.histogram(walltimes, density=True, bins=50)
+    fig.quad(top=hist, bottom=0, left=edges[:-1], right=edges[1:], alpha=0.4)
+    fig.xaxis.axis_label = 'Train Time (sec)'
+    fig.yaxis.axis_label = 'Density'
+    panels.append(Panel(child=fig, title="Train Walltime"))
+
+    from bokeh.models.widgets import Tabs
+    return Tabs(tabs=panels)
 
 
 
