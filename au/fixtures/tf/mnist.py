@@ -88,6 +88,13 @@ class MNISTDataset(dataset.ImageTable):
     cls.save_to_image_table(cls._datasets_iter_image_rows(params=params))
   
   @classmethod
+  def as_imagerow_df(cls, spark):
+    df = super(MNISTDataset, cls).as_imagerow_df(spark)
+    if cls.SPLIT is not '':
+      df = df.filter("split = '%s'" % cls.SPLIT)
+    return df
+
+  @classmethod
   def get_class_freq(cls, spark, raw_counts=False, df=None):
     if df is None:
       df = cls.as_imagerow_df(spark)
@@ -566,7 +573,8 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
 def normalize_image(image):
   # # Normalize from [0, 255] to [0.0, 1.0]
   image = image.astype(np.float32) / 255.0
-  return np.reshape(image, (784,))
+  # FIXME activation table and ... training flow? disagree
+  return image #np.reshape(image, (784,))
 
 class MNIST(nnmodel.INNModel):
 

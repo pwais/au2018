@@ -228,6 +228,43 @@ class Spark(object):
     return all_results
 
   @staticmethod
+  def df_to_dstream(spark, df, *colnames):
+    assert colnames, "Need at least one column"
+    util.log.info(
+      "Fetching chunks of %s based on columns %s ..." % (df, colnames))
+    cols = df.select(*colnames)
+    chunks_rdd = cols.rdd.mapPartitions(lambda rows: [[tuple(r) for r in rows]])
+    chunks = chunks_rdd.collect()
+    util.log.info("... got %s chunks / partitions ..." % len(chunks))
+    
+    rdds = []
+    for i, chunk in enumerate(chunks):
+      chunk_df = df
+      print 'start'
+      import pandas as pd
+      qqq = spark.createDataFrame(pd.DataFrame(dict((col, colvals) for col, colvals in zip(colnames, zip(*chunk)))))
+      print 'end'
+      print 'start2'
+      # qqq.show()
+      joined = df.join(qqq.hint('broadcast'), on=[getattr(df, col) == getattr(qqq, col) for col in colnames], how='inner')
+      print 'end2'
+      # for col, colvals in zip(colnames, zip(*chunk)):
+      #   chunk_df = chunk_df.filter(chunk_df[col].isin(*colvals))
+      # rdds.append(chunk_df.rdd)
+      rdd = joined.rdd
+      # rdd = rdd.repartition(Spark.num_executors(spark))
+      rdds.append(rdd)
+      util.log.info(
+        "... prepared %s / %s chunks: %s IDs in table %s" % (
+          i + 1, len(chunks), len(chunk), chunk_df))
+    
+    from pyspark.streaming import StreamingContext
+    ssc = StreamingContext(spark.sparkContext, 1)
+    dstream = ssc.queueStream(rdds, oneAtATime=False)
+    return ssc, dstream
+
+
+  @staticmethod
   def union_dfs(*dfs):
     """Return the union of a sequence DataFrames and attempt to merge
     the schemas of each (i.e. union of all columns).

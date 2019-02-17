@@ -18,11 +18,13 @@ TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist_ablation')
 def test_my_fun_tassst():
   from au.spark import Spark
   spark = Spark.getOrCreate()
-  experiment = mnist_ablated.Experiment(run_name='default.2019-02-14-08_32_33.CJJOJ')#default.2019-02-03-07_25_48.GIBOB')
+  # experiment = mnist_ablated.Experiment(run_name='default.2019-02-14-08_32_33.CJJOJ')
+  experiment = mnist_ablated.Experiment(run_name='default.2019-02-03-07_25_48.GIBOB')
+  experiment._build_activations(spark=spark)
   # experiment.run(spark=spark)
-  df = experiment.as_df(spark)
-  report = mnist_ablated.ExperimentReport(spark, experiment)
-  report.save()
+  # df = experiment.as_df(spark)
+  # report = mnist_ablated.ExperimentReport(spark, experiment)
+  # report.save()
   # import ipdb; ipdb.set_trace()
   
   

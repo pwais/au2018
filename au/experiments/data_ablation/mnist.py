@@ -65,7 +65,6 @@ class ExperimentReport(object):
     plotting.output_file("report2.html", title="interactive_legend.py example", mode='inline')
     plotting.save(tabs)
 
-    import pdb; pdb.set_trace()
 
   
   
@@ -484,29 +483,29 @@ class Experiment(object):
         TRAIN_WORKER_CLS=util.WholeMachineWorker,
       ),
     
-    'trials_per_treatment': 3,#10,
+    'trials_per_treatment': 10,#3,#10,
 
-    'uniform_ablations': tuple(),
-    # (
-    #     0.9999,
-    #     0.9995,
-    #     0.999,
-    #     0.995,
-    #     0.99,
-    #     0.95,
-    #     0.9,
-    #     0.5,
-    #     0.0,
-    #   ),
-    
-    'single_class_ablations': #tuple(),
+    'uniform_ablations': #tuple(),
     (
-      0.9999,
-      0.999,
-      0.99,
-      0.9,
-      0.5,
-    ),
+        0.9999,
+        0.9995,
+        0.999,
+        0.995,
+        0.99,
+        0.95,
+        0.9,
+        0.5,
+        0.0,
+      ),
+    
+    'single_class_ablations': tuple(),
+    # (
+    #   0.9999,
+    #   0.999,
+    #   0.99,
+    #   0.9,
+    #   0.5,
+    # ),
     'all_classes': range(10),
   }
 
@@ -521,12 +520,47 @@ class Experiment(object):
       setattr(self, k, v)
 
   def run(self, spark=None):
+    self._train_models(spark=spark)
+    # TODO run reports
+    self._build_activations(spark=spark)
+
+  def _iter_activation_tables(self):
+    from au.fixtures import nnmodel
+    for params in self._iter_model_params():
+      class TreatmentTestActivations(nnmodel.ActivationsTable):
+        SPLIT = 'test'
+        TABLE_NAME = params.MODEL_NAME + '_test_activations'
+        NNMODEL_CLS = mnist.MNIST
+        MODEL_PARAMS = params
+        IMAGE_TABLE_CLS = params.TEST_TABLE
+      yield TreatmentTestActivations
+
+      class TreatmentFullTrainActivations(nnmodel.ActivationsTable):
+        SPLIT = 'train'
+        TABLE_NAME = params.MODEL_NAME + '_train_activations'
+        NNMODEL_CLS = mnist.MNIST
+        MODEL_PARAMS = params
+        IMAGE_TABLE_CLS = mnist.MNIST.Params().TRAIN_TABLE
+      yield TreatmentTestActivations
+
+  def _build_activations(self, spark=None):
+    tables = list(self._iter_activation_tables())
+    util.log.info("Building activation tables ...")
+    with Spark.sess(spark) as spark:
+      for i, t in enumerate(tables):
+        t.setup(spark=spark)
+
+        util.log.info(
+          "... completed %s / %s (%s) ..." % (
+            i + 1, len(tables), t.TABLE_NAME))
+
+
+  def _train_models(self, spark=None):
     ps = list(self._iter_model_params())
 
     with Spark.sess(spark) as spark:
-      
-      
-      class ModelFactory(object):
+  
+      class TreatmentFactory(object):
         def __init__(self, p, m):
           self.params = p
           self.meta = m
@@ -534,6 +568,7 @@ class Experiment(object):
         def __call__(self):
           model = mnist.MNIST.load_or_train(params=self.params)
 
+          # TODO document this stuff
           meta_path = os.path.join(self.params.MODEL_BASEDIR, 'au_meta.json')
           if not os.path.exists(meta_path):
             with open(meta_path, 'wc') as f:
@@ -544,7 +579,7 @@ class Experiment(object):
           return model
 
       callables = (
-        ModelFactory(p, self._get_params_meta(p))
+        TreatmentFactory(p, self._get_params_meta(p))
         for p in ps)
       res = Spark.run_callables(spark, callables)
     
@@ -626,7 +661,7 @@ class Experiment(object):
     for dist in gen_ablated_dists(self.all_classes, self.single_class_ablations):
       params = copy.deepcopy(self.params_base)
 
-      params.TRAIN_WORKER_CLS = util.WholeMachineWorker
+      params.TRAIN_WORKER_CLS = util.SingleGPUWorker #WholeMachineWorker
 
       ablated_frac, ablated_class = min((frac, c) for c, frac in dist.iteritems())
 

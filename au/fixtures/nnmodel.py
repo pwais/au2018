@@ -44,6 +44,17 @@ class INNModel(object):
                           target_nchan=target_nchan,
                           norm_func=self.NORM_FUNC)
 
+    def to_row(self):
+      from collections import OrderedDict
+      row = OrderedDict()
+      
+      for attrname in sorted(dir(self)):
+        if not attrname.startswith('_') and attrname.isupper():
+          v = getattr(self, attrname)
+          
+
+      return row
+
 
   def __init__(self, params=None):
     self.params = params or INNModel.ParamsBase()
@@ -202,6 +213,10 @@ class FillActivationsTFDataset(FillActivationsBase):
   tf.Dataset to feed data into a tf.Graph""" 
   
   def __call__(self, iter_imagerows):
+    iter_imagerows = list(iter_imagerows)
+    if not iter_imagerows:
+      return
+
     self.overall_thruput.start_block()
     
     import Queue
@@ -217,6 +232,7 @@ class FillActivationsTFDataset(FillActivationsBase):
     # generator below.  Read more after the function.
     def iter_normalized_np_images():
       normalize = self.tigraph_factory.params.make_normalize_ftor()
+      n = 0
       for row in iter_imagerows:
         row = normalize(row)
         processed_rows.put(row)
@@ -225,6 +241,8 @@ class FillActivationsTFDataset(FillActivationsBase):
         
         self.tf_thruput.update_tallies(num_bytes=arr.nbytes)
         self.overall_thruput.update_tallies(num_bytes=arr.nbytes)
+        n += 1
+      util.log.info("Partition had %s rows" % n)
     
     # We'll use the tf.Dataset.from_generator facility to read ImageRows
     # (which have the image bytes in Python memory) into the graph.  The use
@@ -317,6 +335,7 @@ class FillActivationsTFDataset(FillActivationsBase):
     
             self.tf_thruput.update_tallies(n=1)
             self.overall_thruput.update_tallies(n=1)
+            self.overall_thruput.maybe_log_progress(n=1000)
     tf.reset_default_graph()
     self.overall_thruput.stop_block()
 
@@ -336,44 +355,56 @@ class ActivationsTable(object):
     log = util.create_log()
     log.info("Building table %s ..." % cls.TABLE_NAME)
 
-    spark = spark or util.Spark.getOrCreate()
-    
-    img_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
+    from au.spark import Spark
+    with Spark.sess(spark) as spark:
+      ssc, dstream = cls.IMAGE_TABLE_CLS.as_imagerow_rdd_stream(spark)
 
-    model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
-    filler = FillActivationsTFDataset(model=model)
+      model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
+      filler = FillActivationsTFDataset(model=model)
 
-    activated = img_rdd.mapPartitions(filler)
+      def save_activated(t, rdd):
+        if rdd.isEmpty():
+          return
+        util.log.info("wat %s %s" % (t, rdd.getNumPartitions()))
+        activated = rdd.mapPartitions(filler)
 
-    def to_activation_rows(imagerows):
-      from pyspark.sql import Row
-      for row in imagerows:
-        if row.attrs is '':
-          continue
+        def to_activation_rows(imagerows):
+          from pyspark.sql import Row
+          for row in imagerows:
+            if row.attrs is '':
+              continue
 
-        activations = row.attrs.get('activations')
-        if not activations:
-          continue
+            activations = row.attrs.get('activations')
+            if not activations:
+              continue
+            
+            for act in activations:
+              for tensor_name, value in act._tensor_to_value.iteritems():
+                yield Row(
+                  model_name=model.params.MODEL_NAME,
+                  tensor_name=tensor_name,
+                  tensor_value=value,
+                  
+                  dataset=row.dataset,
+                  split=row.split,
+                  uri=row.uri,
+                )
         
-        for act in activations:
-          for tensor_name, value in act._tensor_to_value.iteritems():
-            yield Row(
-              model_name=model.params.MODEL_NAME,
-              tensor_name=tensor_name,
-              tensor_value=value,
-              
-              dataset=row.dataset,
-              split=row.split,
-              uri=row.uri,
-            )
-    
-    activation_row_rdd = activated.mapPartitions(to_activation_rows)
+        activation_row_rdd = activated.mapPartitions(to_activation_rows)
+        df = spark.createDataFrame(activation_row_rdd)
+        df.write.parquet(
+                    path=cls.table_root(),
+                    mode='append',
+                    compression='lz4',
+                    partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
+        # writer.start()
+        # writer.processAllAvailable()
+        # writer.stop()
+        log.info("... wrote to %s ." % cls.table_root())
+      dstream.foreachRDD(save_activated)
+      ssc.start()
+      ssc.stop(stopSparkContext=False, stopGraceFully=True)
+      # ssc.stop()
 
-    df = spark.createDataFrame(activation_row_rdd)
-    df.show()
-    writer = df.write.parquet(
-                path=cls.table_root(),
-                mode='overwrite',
-                compression='lz4',
-                partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
-    log.info("... wrote to %s ." % cls.table_root())
+  # @classmethod
+  # def to_tensorboard_
