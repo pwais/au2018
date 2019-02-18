@@ -213,9 +213,10 @@ class FillActivationsTFDataset(FillActivationsBase):
   tf.Dataset to feed data into a tf.Graph""" 
   
   def __call__(self, iter_imagerows):
-    iter_imagerows = list(iter_imagerows)
-    if not iter_imagerows:
-      return
+    # # TODO fixme
+    # iter_imagerows = list(iter_imagerows)
+    # if not iter_imagerows:
+    #   return
 
     self.overall_thruput.start_block()
     
@@ -334,6 +335,7 @@ class FillActivationsTFDataset(FillActivationsBase):
             yield row
     
             self.tf_thruput.update_tallies(n=1)
+            self.tf_thruput.maybe_log_progress(n=1000)
             self.overall_thruput.update_tallies(n=1)
             self.overall_thruput.maybe_log_progress(n=1000)
     tf.reset_default_graph()
@@ -357,54 +359,83 @@ class ActivationsTable(object):
 
     from au.spark import Spark
     with Spark.sess(spark) as spark:
-      ssc, dstream = cls.IMAGE_TABLE_CLS.as_imagerow_rdd_stream(spark)
+      # ssc, dstream = cls.IMAGE_TABLE_CLS.as_imagerow_rdd_stream(spark)
+      imagerow_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
+      imagerow_rdd = imagerow_rdd.repartition(imagerow_rdd.getNumPartitions() * 4)
 
       model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
       filler = FillActivationsTFDataset(model=model)
 
-      def save_activated(t, rdd):
-        if rdd.isEmpty():
-          return
-        util.log.info("wat %s %s" % (t, rdd.getNumPartitions()))
-        activated = rdd.mapPartitions(filler)
+      # def save_activated(t, rdd):
+        # if rdd.isEmpty():
+        #   return
+        # util.log.info("wat %s %s" % (t, rdd.getNumPartitions()))
+      activated = imagerow_rdd.mapPartitions(filler)
 
-        def to_activation_rows(imagerows):
-          from pyspark.sql import Row
-          for row in imagerows:
-            if row.attrs is '':
-              continue
+      def to_activation_rows(imagerows):
+        from pyspark.sql import Row
+        for row in imagerows:
+          if row.attrs is '':
+            continue
 
-            activations = row.attrs.get('activations')
-            if not activations:
-              continue
-            
-            for act in activations:
-              for tensor_name, value in act._tensor_to_value.iteritems():
-                yield Row(
-                  model_name=model.params.MODEL_NAME,
-                  tensor_name=tensor_name,
-                  tensor_value=value,
-                  
-                  dataset=row.dataset,
-                  split=row.split,
-                  uri=row.uri,
-                )
-        
-        activation_row_rdd = activated.mapPartitions(to_activation_rows)
-        df = spark.createDataFrame(activation_row_rdd)
-        df.write.parquet(
-                    path=cls.table_root(),
-                    mode='append',
-                    compression='lz4',
-                    partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
+          activations = row.attrs.get('activations')
+          if not activations:
+            continue
+          
+          for act in activations:
+            for tensor_name, value in act._tensor_to_value.iteritems():
+              yield Row(
+                model_name=model.params.MODEL_NAME,
+                tensor_name=tensor_name,
+                tensor_value=value,
+                
+                dataset=row.dataset,
+                split=row.split,
+                uri=row.uri,
+              )
+      
+      activation_row_rdd = activated.mapPartitions(to_activation_rows)
+      df = spark.createDataFrame(activation_row_rdd)
+      df.show()
+      df.write.parquet(
+                  path=cls.table_root(),
+                  mode='overwrite',
+                  compression='lz4',
+                  partitionBy=dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
         # writer.start()
         # writer.processAllAvailable()
         # writer.stop()
-        log.info("... wrote to %s ." % cls.table_root())
-      dstream.foreachRDD(save_activated)
-      ssc.start()
-      ssc.stop(stopSparkContext=False, stopGraceFully=True)
+      log.info("... wrote to %s ." % cls.table_root())
+      # dstream.foreachRDD(save_activated)
+      # ssc.start()
+      # ssc.stop(stopSparkContext=False, stopGraceFully=True)
       # ssc.stop()
 
+  @classmethod
+  def as_df(cls, spark):
+    df = spark.read.parquet(cls.table_root())
+    return df
+
   # @classmethod
-  # def to_tensorboard_
+  # def save_tf_embedding_projector(
+  #             cls,
+  #             n_vec=-1,
+  #             n_vec_seed=1337,
+  #             outdir=None,
+  #             spark=None):
+  #   if not outdir:
+  #     outdir = os.path.join(
+  #                 cls.MODEL_PARAMS.MODEL_BASEDIR,
+  #                 'tf_embedding_projector')
+    
+  #   from au.spark import Spark
+  #   with Spark.sess(spark) as spark:
+  #     activations_df = cls.as_df(spark)
+  #     if n_vec >= 0:
+  #       n = activations_df.count()
+  #       activations_df = activations_df.sample(
+  #             withReplacement=False,
+  #             fraction=float(n_vec) / n,
+  #             seed=n_vec_seed)
+      
+

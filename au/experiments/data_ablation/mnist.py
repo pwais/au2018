@@ -62,7 +62,7 @@ class ExperimentReport(object):
     
     from bokeh import plotting
 
-    plotting.output_file("report2.html", title="interactive_legend.py example", mode='inline')
+    plotting.output_file("report2.html", title="moof", mode='inline')
     plotting.save(tabs)
 
 
@@ -483,29 +483,29 @@ class Experiment(object):
         TRAIN_WORKER_CLS=util.WholeMachineWorker,
       ),
     
-    'trials_per_treatment': 10,#3,#10,
+    'trials_per_treatment': 3,#10,
 
-    'uniform_ablations': #tuple(),
-    (
-        0.9999,
-        0.9995,
-        0.999,
-        0.995,
-        0.99,
-        0.95,
-        0.9,
-        0.5,
-        0.0,
-      ),
-    
-    'single_class_ablations': tuple(),
+    'uniform_ablations': tuple(),
     # (
-    #   0.9999,
-    #   0.999,
-    #   0.99,
-    #   0.9,
-    #   0.5,
-    # ),
+    #     0.9999,
+    #     0.9995,
+    #     0.999,
+    #     0.995,
+    #     0.99,
+    #     0.95,
+    #     0.9,
+    #     0.5,
+    #     0.0,
+    #   ),
+    
+    'single_class_ablations': #tuple(),
+    (
+      0.9999,
+      0.999,
+      0.99,
+      0.9,
+      0.5,
+    ),
     'all_classes': range(10),
   }
 
@@ -541,7 +541,7 @@ class Experiment(object):
         NNMODEL_CLS = mnist.MNIST
         MODEL_PARAMS = params
         IMAGE_TABLE_CLS = mnist.MNIST.Params().TRAIN_TABLE
-      yield TreatmentTestActivations
+      yield TreatmentFullTrainActivations
 
   def _build_activations(self, spark=None):
     tables = list(self._iter_activation_tables())

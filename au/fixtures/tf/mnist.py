@@ -583,6 +583,7 @@ class MNIST(nnmodel.INNModel):
       super(MNIST.Params, self).__init__(model_name='MNIST')
       self.BATCH_SIZE = 100
       self.EVAL_BATCH_SIZE = 100
+      self.INFERENCE_BATCH_SIZE = 1000
       
       # self.LEARNING_RATE = 0.01
       # self.MOMENTUM = 0.5
