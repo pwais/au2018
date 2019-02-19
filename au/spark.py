@@ -156,7 +156,9 @@ class Spark(object):
     if cls.CONF_KV is not None:
       for k, v in cls.CONF_KV.iteritems():
         builder = builder.config(k, v)
-    # builder = builder.config('spark.executor.memory', '2g')
+    # builder = builder.config('spark.storage.memoryFraction', '0.1')
+    # builder = builder.config('spark.driver.memory', '4g')
+    # builder = builder.config('spark.driver.memory', '4g')
     if cls.HIVE:
       # TODO fixme see mebbe https://creativedata.atlassian.net/wiki/spaces/SAP/pages/82255289/Pyspark+-+Read+Write+files+from+Hive
       # builder = builder.config("hive.metastore.warehouse.dir", '/tmp') 

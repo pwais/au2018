@@ -485,17 +485,17 @@ class ImageTable(object):
     # row_rdd = df.rdd.map(lambda row: ImageRow(**row.asDict()))
     # return row_rdd
 
-  @classmethod
-  def as_imagerow_rdd_stream(cls, spark):
-    from au.spark import Spark
-    ssc, dstream = Spark.df_to_dstream(spark, cls.as_imagerow_df(spark), 'uri')
-    dstream = dstream.map(lambda row: ImageRow(**row.asDict()))
-    return ssc, dstream
-    # return 
-    # df_stream = spark.readStream.format('parquet').schema(spark.read.parquet(cls.table_root()).schema).load(cls.table_root())
-    # import pdb; pdb.set_trace()#, schema=)
-    # row_rdd_stream = df_stream.rdd.map(lambda row: ImageRow(**row.asDict()))
-    # return row_rdd_stream
+  # @classmethod
+  # def as_imagerow_rdd_stream(cls, spark):
+  #   from au.spark import Spark
+  #   ssc, dstream = Spark.df_to_dstream(spark, cls.as_imagerow_df(spark), 'uri')
+  #   dstream = dstream.map(lambda row: ImageRow(**row.asDict()))
+  #   return ssc, dstream
+  #   # return 
+  #   # df_stream = spark.readStream.format('parquet').schema(spark.read.parquet(cls.table_root()).schema).load(cls.table_root())
+  #   # import pdb; pdb.set_trace()#, schema=)
+  #   # row_rdd_stream = df_stream.rdd.map(lambda row: ImageRow(**row.asDict()))
+  #   # return row_rdd_stream
   
   @classmethod
   def as_imagerow_rdd(cls, spark):
