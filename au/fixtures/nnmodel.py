@@ -276,7 +276,7 @@ class FillActivationsTFDataset(FillActivationsBase):
                                               uris,
                                               input_image,
                                               graph)
-    
+
     # with final_graph.as_default() as g:
     #   uris = tf.identity(uris, name='au_uris')
     #   assert uris.graph is g
@@ -354,8 +354,10 @@ class ActivationsTable(object):
   
   @classmethod
   def setup(cls, spark=None):
-    log = util.create_log()
-    log.info("Building table %s ..." % cls.TABLE_NAME)
+    if os.path.exists(cls.table_root()):
+      return
+
+    util.log.info("Building table %s ..." % cls.TABLE_NAME)
 
     from au.spark import Spark
     with Spark.sess(spark) as spark:
@@ -410,7 +412,7 @@ class ActivationsTable(object):
         # writer.start()
         # writer.processAllAvailable()
         # writer.stop()
-      log.info("... wrote to %s ." % cls.table_root())
+      util.log.info("... wrote to %s ." % cls.table_root())
       # dstream.foreachRDD(save_activated)
       # ssc.start()
       # ssc.stop(stopSparkContext=False, stopGraceFully=True)
@@ -424,13 +426,12 @@ class ActivationsTable(object):
   @classmethod
   def save_tf_embedding_projector(
               cls,
-              n_vec=100, # default: ALL
-              n_vec_seed=1337,
+              n_examples=1000, # -1 for ALL
               outdir=None,
               spark=None,
               include_metadata=True,
               include_sprite=True,
-              sprite_hw=(25, 25)):
+              sprite_hw=(40, 40)):
     """Write Tensorboard Projector summary files to `outdir` (or the default
     model dir).  Based upon:
     https://github.com/oduerr/dl_tutorial/blob/master/tensorflow/debugging/embedding.ipynb
@@ -453,18 +454,26 @@ class ActivationsTable(object):
     from au.spark import Spark
     with Spark.sess(spark) as spark:
       activations_df = cls.as_df(spark)
-      if n_vec >= 0:
-        n = activations_df.count()
-        activations_df = activations_df.sample(
+      if n_examples >= 0:
+        uris = activations_df.select('uri').distinct()
+        n = uris.count()
+        N_EXAMPLES_SEED = 1337
+        sampled_uris = uris.sample(
               withReplacement=False,
-              fraction=float(n_vec) / n,
-              seed=n_vec_seed)
+              fraction=float(n_examples) / n,
+              seed=N_EXAMPLES_SEED).sort('uri').limit(n_examples)
+        util.log.info(
+          "... restricted to %s examples ..." % sampled_uris.count())
+        sampled_uris = sampled_uris.withColumnRenamed('uri', 'sampled_uri')
+        activations_df = activations_df.join(
+          sampled_uris,
+          activations_df.uri == sampled_uris.sampled_uri)
       rows_df = activations_df.select('uri', 'tensor_name', 'tensor_value')
       rows_df = rows_df.repartition(100 * rows_df.rdd.getNumPartitions())
       # rows_df = rows_df.sort('uri')
       uris = sorted(r.uri for r in rows_df.select('uri').distinct().collect())
 
-      if False: #include_metadata:
+      if include_metadata:
         metadata_path = os.path.join(outdir, 'metadata.tsv')
         util.log.info("... writing metadata to %s ..." % metadata_path)
         
@@ -479,7 +488,7 @@ class ActivationsTable(object):
             f.write('%s\t%s\n' % (row.uri, row.label))
         util.log.info("... wrote metadata to %s ..." % metadata_path)
 
-      if False:#include_sprite:
+      if include_sprite:
         sprite_path = os.path.join(outdir, 'sprite.png')
         util.log.info("... writing sprite to %s ..." % sprite_path)
 
@@ -529,64 +538,74 @@ class ActivationsTable(object):
 
       # Save Projector Summaries
       import tensorflow as tf
-      writer = tf.summary.FileWriter(outdir)
-      with util.tf_cpu_session() as sess:
-        from tensorflow.contrib.tensorboard.plugins import projector
-        config = projector.ProjectorConfig()
-        tensor_names = sorted(
-          r.tensor_name
-          for r in rows_df.select('tensor_name').distinct().collect())
-        # from pyspark import StorageLevel
-        # rows_df = rows_df.persist(StorageLevel.DISK_ONLY)
-        for tensor_name in tensor_names:
-          tensor_df = rows_df.filter(rows_df.tensor_name == tensor_name)
-          tensor_df = tensor_df.select('uri', 'tensor_value')
-          util.log.info(
-            "... fetching %s tensors for %s ..." % (
-              tensor_df.count(), tensor_name))
-          # tensor_df = tensor_df.repartition(10 * tensor_df.rdd.getNumPartitions())
+      g = tf.Graph()
+      embedding_vars = []
+      with g.as_default():
+        with util.tf_cpu_session() as sess:
+          sess.run(tf.global_variables_initializer())
+
+          from tensorflow.contrib.tensorboard.plugins import projector
+          config = projector.ProjectorConfig()
+          tensor_names = sorted(
+            r.tensor_name
+            for r in rows_df.select('tensor_name').distinct().collect())
           # from pyspark import StorageLevel
-          # tensor_df = tensor_df.persist(StorageLevel.DISK_ONLY)
-          # tensor_df = tensor_df.sort(tensor_df.uri).select('tensor_value')
-          # vs = [r.tensor_value for r in tensor_df.toLocalIterator()]
-          
-          # vs = []
-          # for uris in util.ichunked(uris, 1000):
-          #   vs.extend(
-          #     r.tensor_value
-          #     for r in tensor_df.filter(tensor_df.uri.isin(*uris)).sort('uri').collect())
-          #   print 'vs', len(vs)
+          # rows_df = rows_df.persist(StorageLevel.DISK_ONLY)
+          for tensor_name in tensor_names:
+            tensor_df = rows_df.filter(rows_df.tensor_name == tensor_name)
+            tensor_df = tensor_df.select('uri', 'tensor_value')
+            util.log.info(
+              "... fetching %s tensors for %s ..." % (
+                tensor_df.count(), tensor_name))
+            # tensor_df = tensor_df.repartition(10 * tensor_df.rdd.getNumPartitions())
+            # from pyspark import StorageLevel
+            # tensor_df = tensor_df.persist(StorageLevel.DISK_ONLY)
+            # tensor_df = tensor_df.sort(tensor_df.uri).select('tensor_value')
+            # vs = [r.tensor_value for r in tensor_df.toLocalIterator()]
+            
+            # vs = []
+            # for uris in util.ichunked(uris, 1000):
+            #   vs.extend(
+            #     r.tensor_value
+            #     for r in tensor_df.filter(tensor_df.uri.isin(*uris)).sort('uri').collect())
+            #   print 'vs', len(vs)
 
-          vs = sorted(
-                  tensor_df.toLocalIterator(),
-                  key=lambda r: r.uri)
-          vs = [r.tensor_value.arr for r in vs]
+            vs = sorted(
+                    tensor_df.toLocalIterator(),
+                    key=lambda r: r.uri)
+            vs = [r.tensor_value.arr.flatten() for r in vs]
 
-          util.log.info(
-            "... got %s tensors for %s ..." % (len(vs), tensor_name))
-          import numpy as np
-          vs = np.array(vs)
+            util.log.info(
+              "... got %s tensors for %s ..." % (len(vs), tensor_name))
+            import numpy as np
+            vs = np.array(vs)
+            
+            # import pdb; pdb.set_trace()
+            name = tensor_name.replace('/', '_').replace(':', '_') + '_values'
+            embedding_var = tf.Variable(vs, name=name)
+            with open(os.path.join('/tmp', name + '.npy'), 'wc') as f:
+              np.save(f, vs)
+            
+            sess.run(embedding_var.initializer)
+            util.log.info("... ran session ...")
+            embedding_vars.append(embedding_var)
 
-          embedding_var = tf.Variable(
-                              vs,
-                              name=tensor_name.replace('/', '_').replace(':', '_') + '_values')
-          sess.run(embedding_var.initializer)
-          util.log.info("... ran session ...")
+            embedding = config.embeddings.add()
+            embedding.tensor_name = embedding_var.name
 
-          embedding = config.embeddings.add()
-          embedding.tensor_name = embedding_var.name
+            if metadata_path:
+              embedding.metadata_path = metadata_path
 
-          if metadata_path:
-            embedding.metadata_path = metadata_path
+            if sprite_path:
+              embedding.sprite.image_path = sprite_path
+              embedding.sprite.single_image_dim.extend(
+                # (width, height)
+                # https://github.com/tensorflow/tensorflow/blob/9590c4c32dd4346ea5c35673336f5912c6072bf2/tensorflow/contrib/tensorboard/plugins/projector/projector_config.proto#L22
+                [sprite_hw[1], sprite_hw[0]])
 
-          if sprite_path:
-            embedding.sprite.image_path = sprite_path
-            embedding.sprite.single_image_dim.extend(
-              # (width, height)
-              # https://github.com/tensorflow/tensorflow/blob/9590c4c32dd4346ea5c35673336f5912c6072bf2/tensorflow/contrib/tensorboard/plugins/projector/projector_config.proto#L22
-              [sprite_hw[1], sprite_hw[0]])
-
-        projector.visualize_embeddings(writer, config)
-        saver = tf.train.Saver([embedding_var])
-        saver.save(sess, os.path.join(outdir, 'model2.ckpt'), 1)
+          writer = tf.summary.FileWriter(outdir)
+          saver = tf.train.Saver(embedding_vars)
+          projector.visualize_embeddings(writer, config)
+          saver.save(sess, os.path.join(outdir, 'embedding.ckpt'), global_step=0)
+    assert False
       

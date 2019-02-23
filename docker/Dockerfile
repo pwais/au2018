@@ -137,6 +137,8 @@ RUN \
 ## TF CNN Vis
 RUN pip install scipy h5py wget Pillow six scikit-image
 
+## tsnet
+RUN apt-get install -y libblas-dev libatlas-base-dev && pip install tsne
 
 ## Kubespray
 # See docker/kubespray_requirements.txt for notes

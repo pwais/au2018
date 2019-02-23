@@ -503,6 +503,7 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
         name=self.params.INPUT_URIS_NAME)
       
       input_image_f = tf.cast(input_image, tf.float32)
+      input_image_f = input_image_f / 255. # FIXME
       pred = tf_model(input_image_f, training=False)
       checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
       saver = tf.train.import_meta_graph(
@@ -563,16 +564,25 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
   @property
   def output_names(self):
     return (
-      'sequential/conv2d/Relu:0',
-      'sequential/conv2d_1/Relu:0',
-      'sequential/dense/Relu:0',
+      'IteratorGetNext:1',
+      'sequential/reshape/Reshape:0',
+      'sequential/conv2d/BiasAdd:0',
+      'sequential/conv2d_1/Conv2D:0',
+      'sequential/max_pooling2d_1/MaxPool:0',
+      'sequential/flatten/Reshape:0',
       'sequential/dense_1/MatMul:0',
+      'sequential/dropout/Identity:0',
+
+      # 'sequential/conv2d/Relu:0',
+      # 'sequential/conv2d_1/Relu:0',
+      # 'sequential/dense/Relu:0',
+      # 'sequential/dense_1/MatMul:0',
     )
 
 # Based upon official/mnist/dataset.py
 def normalize_image(image):
   # # Normalize from [0, 255] to [0.0, 1.0]
-  image = image.astype(np.float32) / 255.0
+  # image = image.astype(np.float32) / 255.0  RESTORE
   # FIXME activation table and ... training flow? disagree
   return image #np.reshape(image, (784,))
 

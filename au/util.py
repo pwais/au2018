@@ -266,7 +266,7 @@ def get_non_loopback_iface():
   # Get an iface that can connect to Google DNS ...
   s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
   s.connect(("8.8.8.8", 80))
-  ifrace = s.getsockname()[0]
+  iface = s.getsockname()[0]
   s.close()
   return iface
 

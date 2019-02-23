@@ -487,14 +487,14 @@ class Experiment(object):
 
     'uniform_ablations': #tuple(),
     (
-        0.9999,
-        0.9995,
-        0.999,
-        0.995,
-        0.99,
-        0.95,
-        0.9,
-        0.5,
+        # 0.9999,
+        # 0.9995,
+        # 0.999,
+        # 0.995,
+        # 0.99,
+        # 0.95,
+        # 0.9,
+        # 0.5,
         0.0,
       ),
     
@@ -548,7 +548,7 @@ class Experiment(object):
     util.log.info("Building activation tables ...")
     with Spark.sess(spark) as spark:
       for i, t in enumerate(tables):
-        # t.setup(spark=spark)
+        t.setup(spark=spark)
         t.save_tf_embedding_projector(spark=spark)
         util.log.info(
           "... completed %s / %s (%s) ..." % (
