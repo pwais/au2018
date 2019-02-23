@@ -428,7 +428,7 @@ class ActivationsTable(object):
   @classmethod
   def save_tf_embedding_projector(
               cls,
-              n_examples=-1,#1000, # -1 for ALL
+              n_examples=1000,
               outdir=None,
               spark=None,
               include_metadata=True,
@@ -550,65 +550,64 @@ class ActivationsTable(object):
             r.tensor_name
             for r in rows_df.select('tensor_name').distinct().collect())
 
-      for i, tensor_name in enumerate(tensor_names):
+      import tensorflow as tf
+      from tensorflow.contrib.tensorboard.plugins import projector
+      config = projector.ProjectorConfig()
+      # g = tf.Graph()
+      # with g.as_default():
+      with util.tf_cpu_session() as sess:
+        sess.run(tf.global_variables_initializer())
+
+        embedding_vars = []
+        for tensor_name in tensor_names:
+          name = tensor_name.replace('/', '_').replace(':', '_') + '_values'
         
-        name = tensor_name.replace('/', '_').replace(':', '_') + '_values'
-        t_outdir = os.path.join(outdir, name)
-        util.mkdir(t_outdir)
-        import tensorflow as tf
-        from tensorflow.contrib.tensorboard.plugins import projector
-        config = projector.ProjectorConfig()
-        writer = tf.summary.FileWriter(t_outdir)
-        g = tf.Graph()
-        with g.as_default():
-          with util.tf_cpu_session() as sess:
-            sess.run(tf.global_variables_initializer())
+          tensor_df = rows_df.filter(rows_df.tensor_name == tensor_name)
+          tensor_df = tensor_df.select('uri', 'tensor_value')
+          # import pdb; pdb.set_trace()
+          util.log.info(
+            "... fetching %s tensors (in %s partitions) for %s ..." % (
+              tensor_df.count(), tensor_df.rdd.getNumPartitions(), tensor_name))
+
+          vs = sorted(
+                  tensor_df.toLocalIterator(),
+                  key=lambda r: r.uri)
+          vs = [r.tensor_value.arr.flatten() for r in vs]
+
+          util.log.info(
+            "... got %s tensors for %s ..." % (len(vs), tensor_name))
+          import numpy as np
+          vs = np.array(vs)
+
           
-            tensor_df = rows_df.filter(rows_df.tensor_name == tensor_name)
-            tensor_df = tensor_df.select('uri', 'tensor_value')
-            # import pdb; pdb.set_trace()
-            util.log.info(
-              "... fetching %s tensors (in %s partitions) for %s ..." % (
-                tensor_df.count(), tensor_df.rdd.getNumPartitions(), tensor_name))
+          embedding_var = tf.Variable(vs, name=name)
+          # with open(os.path.join('/tmp', name + '.npy'), 'wc') as f:
+          #   np.save(f, vs)
+          
+          sess.run(embedding_var.initializer)
+          # embedding_vars.append(embedding_var)
 
-            vs = sorted(
-                    tensor_df.toLocalIterator(),
-                    key=lambda r: r.uri)
-            vs = [r.tensor_value.arr.flatten() for r in vs]
+          embedding = config.embeddings.add()
+          embedding.tensor_name = embedding_var.name
 
-            util.log.info(
-              "... got %s tensors for %s ..." % (len(vs), tensor_name))
-            import numpy as np
-            vs = np.array(vs)
+          if metadata_path:
+            embedding.metadata_path = metadata_path
 
-            
-            embedding_var = tf.Variable(vs, name=name)
-            # with open(os.path.join('/tmp', name + '.npy'), 'wc') as f:
-            #   np.save(f, vs)
-            
-            sess.run(embedding_var.initializer)
-            util.log.info("... ran session ...")
-            # embedding_vars.append(embedding_var)
+          if sprite_path:
+            embedding.sprite.image_path = sprite_path
+            embedding.sprite.single_image_dim.extend(
+              # (width, height)
+              # https://github.com/tensorflow/tensorflow/blob/9590c4c32dd4346ea5c35673336f5912c6072bf2/tensorflow/contrib/tensorboard/plugins/projector/projector_config.proto#L22
+              [sprite_hw[1], sprite_hw[0]])
 
-            embedding = config.embeddings.add()
-            embedding.tensor_name = embedding_var.name
+          embedding_vars.append(embedding_var)
 
-            if metadata_path:
-              embedding.metadata_path = metadata_path
-
-            if sprite_path:
-              embedding.sprite.image_path = sprite_path
-              embedding.sprite.single_image_dim.extend(
-                # (width, height)
-                # https://github.com/tensorflow/tensorflow/blob/9590c4c32dd4346ea5c35673336f5912c6072bf2/tensorflow/contrib/tensorboard/plugins/projector/projector_config.proto#L22
-                [sprite_hw[1], sprite_hw[0]])
-
-            util.log.info(".. saving checkpoint ...")
-            saver = tf.train.Saver(
-              [embedding_var], save_relative_paths=True)
-            saver.save(sess, os.path.join(t_outdir, 'embedding.ckpt'), global_step=0)
-            
-          projector.visualize_embeddings(writer, config)
+        util.log.info("... saving checkpoint ...")
+        saver = tf.train.Saver(
+          embedding_vars, save_relative_paths=True)
+        saver.save(sess, os.path.join(outdir, 'embedding.ckpt'), global_step=0)
+        writer = tf.summary.FileWriter(outdir)
+        projector.visualize_embeddings(writer, config)
           
     assert False
       
