@@ -577,6 +577,8 @@ class GPUInfo(object):
   def num_total_gpus():
     return len(GPUInfo.get_infos())
 
+
+
 import fasteners
 import pickle
 class GPUPool(object):
@@ -604,6 +606,8 @@ class GPUPool(object):
     __slots__ = ('instance', '_parent')
     def _on_delete(self):
       self._parent._release(self.instance)
+    def __str__(self):
+      return 'Proxy:' + str(self.instance)
 
   ALL_GPUS = -1
   def get_free_gpus(self, n=1):
@@ -631,12 +635,11 @@ class GPUPool(object):
 
   def __init__(self, path=''):
     import tempfile
+    import uuid
     if not path:
-      path = os.path.join(tempfile.gettempdir(), 'au.GPUPool.' + str(id(self)))
+      path = os.path.join(
+        tempfile.gettempdir(), 'au.GPUPool.%s' % uuid.uuid4())
     self.lock = fasteners.InterProcessLock(path)
-    with self.lock:
-      gpus = GPUInfo.get_infos()
-      self._set_gpus(gpus)
 
   def _set_gpus(self, lst):
     with open(self.lock.path, 'w') as f:
@@ -644,7 +647,11 @@ class GPUPool(object):
 
   def _get_gpus(self):
     with open(self.lock.path, 'r') as f:
-      return pickle.load(f)
+      try:
+        return pickle.load(f)
+      except EOFError:
+        # No process has yet initialized state in self.lock.path
+        return GPUInfo.get_infos()
 
   def _release(self, gpu):
     with self.lock:
@@ -678,12 +685,13 @@ class Worker(object):
   # Default worker requires no GPUs and runs in parent thread
   N_GPUS = 0
   CPU_ONLY_OK = False # Only if N_GPUS > 0, can we degrade to CPU-only mode?
+  GPU_POOL = None # E.g. use a pool associated with a specific job
+
   SYSTEM_EXCLUSIVE = False
+  
   PROCESS_ISOLATED = False
-
   PROCESS_TIMEOUT_SEC = 1e9 # NB: Pi Billion is approx 1 century
-
-  _GPU_POOL = None
+  
   _SYSTEM_LOCK_PATH = os.path.join(tempfile.gettempdir(), 'au.Worker')
   _SYSTEM_LOCK = fasteners.InterProcessLock(_SYSTEM_LOCK_PATH)
 
@@ -703,10 +711,10 @@ class Worker(object):
 
   @classmethod
   def __gpu_pool(cls):
-    if cls._GPU_POOL is None:
+    if cls.GPU_POOL is None:
       flockpath = os.path.join(tempfile.gettempdir(), 'au.Worker.GPUPool')
-      cls._GPU_POOL = GPUPool(path=flockpath)
-    return cls._GPU_POOL
+      cls.GPU_POOL = GPUPool(path=flockpath)
+    return cls.GPU_POOL
 
   def __call__(self, *args, **kwargs):
     ctx = Worker._NullContextManager()
@@ -755,7 +763,7 @@ class Worker(object):
         self._gpu_handles.extend(
           self.__gpu_pool().get_free_gpus(n=self.N_GPUS))
         if len(self._gpu_handles) == self.N_GPUS or self.CPU_ONLY_OK:
-          log.info("Got %s GPUs" % self.N_GPUS)
+          log.info("Got GPUs %s" % ([str(h) for h in self._gpu_handles],))
           break
         else:
           log.info("Waiting for %s GPUs ..." % self.N_GPUS)
@@ -771,16 +779,19 @@ class Worker(object):
 
 class WholeMachineWorker(Worker):
   N_GPUS = GPUPool.ALL_GPUS
+  GPU_POOL = GPUPool() # Use a distinct pool for this program run
   SYSTEM_EXCLUSIVE = True
   PROCESS_ISOLATED = True
 
 class SingleGPUWorker(Worker):
   N_GPUS = 1
+  GPU_POOL = GPUPool() # Use a distinct pool for this program run
   SYSTEM_EXCLUSIVE = False
   PROCESS_ISOLATED = True
 
 class AtMostOneGPUWorker(SingleGPUWorker):
   CPU_ONLY_OK = True
+
 
 ### Tensorflow
 

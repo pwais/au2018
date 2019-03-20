@@ -568,7 +568,7 @@ class Experiment(object):
         def __call__(self):
           model = mnist.MNIST.load_or_train(params=self.params)
 
-          # TODO document this stuff
+          # For now, dump treatment metadata to disk
           meta_path = os.path.join(self.params.MODEL_BASEDIR, 'au_meta.json')
           if not os.path.exists(meta_path):
             with open(meta_path, 'wc') as f:

@@ -36,12 +36,14 @@ class TestMNISTDataset(unittest.TestCase):
     cls.params.LIMIT = 100
     
     mnist.MNISTDataset.setup(params=cls.params)
-
-    cls.TEST_PATH = os.path.join(
+    assert os.path.exists(
+                os.path.join(
                   TEST_TEMPDIR,
-                  'data/MNIST/test/MNIST-test-label_7-mnist_test_0.png') 
-    assert os.path.exists(cls.TEST_PATH)
-
+                  'data/MNIST/train-images-idx3-ubyte'))
+    
+    cls.actual_test_0_path = os.path.join(
+                  TEST_TEMPDIR,
+                  'data/MNIST/test/MNIST-test-label_7-mnist_test_0.png')
     cls.expected_test_0_bytes = open(testconf.MNIST_TEST_IMG_PATH, 'r').read()
     cls.expected_test_0 = imageio.imread(testconf.MNIST_TEST_IMG_PATH)
 
@@ -56,7 +58,12 @@ class TestMNISTDataset(unittest.TestCase):
     for t in tuples or []:
       arr, label, uri = t
       if 'mnist_test_0' in uri:
-        expected = mnist.normalize_image(self.expected_test_0)
+        def normalize(im):
+          from au.fixtures.dataset import ImageRow
+          norm = mnist.MNIST.Params().make_normalize_ftor()
+          row = norm(ImageRow.from_np_img_labels(self.expected_test_0))
+          return row.attrs['normalized']
+        expected = normalize(self.expected_test_0)
         assert arr.shape == expected.shape
         np.testing.assert_array_equal(arr, expected)
         tested = True
@@ -83,8 +90,9 @@ class TestMNISTDataset(unittest.TestCase):
   @pytest.mark.slow
   def test_image_contents(self):
     mnist.MNISTDataset.save_datasets_as_png(params=self.params)
-    image = imageio.imread(self.TEST_PATH)
-    np.testing.assert_array_equal(image, self.expected_test_0)
+    assert os.path.exists(self.actual_test_0_path)
+    im = imageio.imread(self.actual_test_0_path)
+    np.testing.assert_array_equal(im, self.expected_test_0)
 
   @pytest.mark.slow
   def test_spark_df(self):
@@ -120,18 +128,16 @@ class TestMNISTDataset(unittest.TestCase):
 
 
 
-
-
 @pytest.mark.slow
 def test_mnist_igraph(monkeypatch):
   from au.fixtures import nnmodel
 
   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
   
-  # TODO: model fixture
   params = mnist.MNIST.Params()
   params.TRAIN_EPOCHS = 1
   params.LIMIT = 10
+  mnist.MNISTDataset.setup(params=params)
   model = mnist.MNIST.load_or_train(params)
   igraph = model.get_inference_graph()
   assert igraph != nnmodel.TFInferenceGraphFactory()

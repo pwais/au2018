@@ -20,7 +20,8 @@ from au import util
 from au.fixtures import dataset
 from au.fixtures import nnmodel
 
-MNIST_INPUT_SIZE = (28, 28)
+MNIST_INPUT_SIZE = (28, 28) # height, width
+MNIST_INPUT_SIZE_HWC = (MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1)
 
 
 ###
@@ -48,7 +49,7 @@ class MNISTDataset(dataset.ImageTable):
       log_interval = 10
       with util.tf_data_session(ds) as (sess, iter_dataset):
         for image, label in iter_dataset():
-          image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
+          image = np.reshape(image * 255., MNIST_INPUT_SIZE_HWC).astype(np.uint8)
           label = int(label)
           row = dataset.ImageRow.from_np_img_labels(
                                       image,
@@ -167,7 +168,6 @@ class MNISTDataset(dataset.ImageTable):
         #   # label = tf.decode_raw(label, tf.uint8)  # tf.string -> [tf.uint8]
         #   label = tf.reshape(label, [])  # label is a scalar
         #   return tf.to_int32(label)
-
         yield arr, int(row.label), row.uri
 
         t.update_tallies(n=1, num_bytes=arr.nbytes)
@@ -176,7 +176,7 @@ class MNISTDataset(dataset.ImageTable):
     d = tf.data.Dataset.from_generator(
               generator=iter_mnist_tuples,
               output_types=(tf.float32, tf.int32, tf.string),
-              output_shapes=([784], [], []))
+              output_shapes=(list(MNIST_INPUT_SIZE_HWC), [], []))
     return d
 
 class MNISTTrainDataset(MNISTDataset):
@@ -580,11 +580,11 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
     )
 
 # Based upon official/mnist/dataset.py
-def normalize_image(image):
-  # # Normalize from [0, 255] to [0.0, 1.0]
-  # image = image.astype(np.float32) / 255.0  RESTORE
-  # FIXME activation table and ... training flow? disagree
-  return image #np.reshape(image, (784,))
+# def normalize_image(image):
+#   # # Normalize from [0, 255] to [0.0, 1.0]
+#   # image = image.astype(np.float32) / 255.0  RESTORE
+#   # FIXME activation table and ... training flow? disagree
+#   return image #np.reshape(image, (784,))
 
 class MNIST(nnmodel.INNModel):
 
@@ -601,7 +601,7 @@ class MNIST(nnmodel.INNModel):
       self.LIMIT = -1
       self.INPUT_TENSOR_SHAPE = [
                   None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1]
-      self.NORM_FUNC = normalize_image
+      # self.NORM_FUNC = normalize_image
 
       self.TRAIN_TABLE = MNISTTrainDataset
       self.TEST_TABLE = MNISTTestDataset
