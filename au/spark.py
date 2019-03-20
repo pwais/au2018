@@ -72,7 +72,7 @@ class Spark(object):
       import tempfile
       tempdir = tempfile.gettempdir()
 
-      SUBDIR_NAME = 'au_eggs'
+      SUBDIR_NAME = 'au_eggs_%s' % os.getpid()
       tmp_path = os.path.join(tempdir, SUBDIR_NAME)
       util.cleandir(tmp_path)
 
@@ -82,13 +82,16 @@ class Spark(object):
         import inspect
         path = inspect.getfile(inspect.currentframe())
         src_root = os.path.dirname(os.path.abspath(path))
+        i_am_in_a_module = os.path.exists(
+          os.path.join(os.path.dirname(src_root), '__init__.py'))
+        if i_am_in_a_module:
+          src_root = os.path.abspath(os.path.join(src_root, os.pardir))
       except Exception as e:
         log.info(
           "Failed to auto-resolve src root, "
           "falling back to %s" % cls.SRC_ROOT)
         src_root = cls.SRC_ROOT
     
-    src_root = '/opt/au'
     log.info("Using source root %s " % src_root)
 
     # Below is a programmatic way to run something like:
@@ -158,7 +161,7 @@ class Spark(object):
         builder = builder.config(k, v)
     # builder = builder.config('spark.storage.memoryFraction', '0.1')
     # builder = builder.config('spark.driver.memory', '4g')
-    builder = builder.config('spark.sql.files.maxPartitionBytes', int(20 * 1e6))
+    # builder = builder.config('spark.sql.files.maxPartitionBytes', int(64 * 1e6))
     if cls.HIVE:
       # TODO fixme see mebbe https://creativedata.atlassian.net/wiki/spaces/SAP/pages/82255289/Pyspark+-+Read+Write+files+from+Hive
       # builder = builder.config("hive.metastore.warehouse.dir", '/tmp') 

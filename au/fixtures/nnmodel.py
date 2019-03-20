@@ -428,7 +428,7 @@ class ActivationsTable(object):
   @classmethod
   def save_tf_embedding_projector(
               cls,
-              n_examples=1000,
+              n_examples=1000, # -1 for all
               outdir=None,
               spark=None,
               include_metadata=True,
@@ -438,6 +438,10 @@ class ActivationsTable(object):
     model dir).  Based upon:
     https://github.com/oduerr/dl_tutorial/blob/master/tensorflow/debugging/embedding.ipynb
     https://github.com/tensorflow/tensorflow/issues/6322
+
+    NB: for large samples, you might need to cap the amount of Parquet that
+    Spark can buffer, e.g.
+      builder.config('spark.sql.files.maxPartitionBytes', int(64 * 1e6))
     """
 
     if not outdir:

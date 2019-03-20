@@ -480,21 +480,21 @@ class Experiment(object):
     'params_base':
       mnist.MNIST.Params(
         TRAIN_EPOCHS=100,
-        TRAIN_WORKER_CLS=util.WholeMachineWorker,
+        TRAIN_WORKER_CLS=util.AtMostOneGPUWorker,
       ),
     
     'trials_per_treatment': 10,#3,#10,
 
     'uniform_ablations': #tuple(),
     (
-        # 0.9999,
-        # 0.9995,
-        # 0.999,
-        # 0.995,
-        # 0.99,
-        # 0.95,
-        # 0.9,
-        # 0.5,
+        0.9999,
+        0.9995,
+        0.999,
+        0.995,
+        0.99,
+        0.95,
+        0.9,
+        0.5,
         0.0,
       ),
     
@@ -660,8 +660,6 @@ class Experiment(object):
     ## Per-class Ablations
     for dist in gen_ablated_dists(self.all_classes, self.single_class_ablations):
       params = copy.deepcopy(self.params_base)
-
-      params.TRAIN_WORKER_CLS = util.SingleGPUWorker #WholeMachineWorker
 
       ablated_frac, ablated_class = min((frac, c) for c, frac in dist.iteritems())
 

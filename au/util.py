@@ -677,6 +677,7 @@ def _Worker_run(inst_datum_bytes):
 class Worker(object):
   # Default worker requires no GPUs and runs in parent thread
   N_GPUS = 0
+  CPU_ONLY_OK = False # Only if N_GPUS > 0, can we degrade to CPU-only mode?
   SYSTEM_EXCLUSIVE = False
   PROCESS_ISOLATED = False
 
@@ -749,15 +750,17 @@ class Worker(object):
     if self.N_GPUS == GPUPool.ALL_GPUS:
       self.N_GPUS = GPUInfo.num_total_gpus()
     
-    while self.N_GPUS != 0:
-      self._gpu_handles.extend(self.__gpu_pool().get_free_gpus(n=self.N_GPUS))
-      if len(self._gpu_handles) == self.N_GPUS:
-        log.info("Got %s GPUs" % self.N_GPUS)
-        break
-      else:
-        log.info("Waiting for %s GPUs ..." % self.N_GPUS)
-        import time
-        time.sleep(5)
+    if self.N_GPUS != 0:
+      while True:
+        self._gpu_handles.extend(
+          self.__gpu_pool().get_free_gpus(n=self.N_GPUS))
+        if len(self._gpu_handles) == self.N_GPUS or self.CPU_ONLY_OK:
+          log.info("Got %s GPUs" % self.N_GPUS)
+          break
+        else:
+          log.info("Waiting for %s GPUs ..." % self.N_GPUS)
+          import time
+          time.sleep(5)
     
     restrict_gpus = [h.index for h in self._gpu_handles]
     return tf_create_session_config(restrict_gpus=restrict_gpus)
@@ -775,6 +778,9 @@ class SingleGPUWorker(Worker):
   N_GPUS = 1
   SYSTEM_EXCLUSIVE = False
   PROCESS_ISOLATED = True
+
+class AtMostOneGPUWorker(SingleGPUWorker):
+  CPU_ONLY_OK = True
 
 ### Tensorflow
 
