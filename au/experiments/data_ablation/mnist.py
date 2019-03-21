@@ -480,7 +480,6 @@ class Experiment(object):
     'params_base':
       mnist.MNIST.Params(
         TRAIN_EPOCHS=100,
-        TRAIN_WORKER_CLS=util.AtMostOneGPUWorker,
       ),
     
     'trials_per_treatment': 10,#3,#10,
