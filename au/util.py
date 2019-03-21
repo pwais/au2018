@@ -658,7 +658,8 @@ class GPUPool(object):
     with self.lock:
       gpus = self._get_gpus()
       gpus.append(gpu)
-      log.info("Released GPU %s" % gpu)
+      log.info("Re-claimed GPU %s, free GPUs: %s" % (
+        gpu, [str(g) for g in gpus]))
       self._set_gpus(gpus)
 
 
