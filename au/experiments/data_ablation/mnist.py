@@ -634,12 +634,16 @@ class Experiment(object):
   def _iter_model_params(self):
     import copy
 
+    class Worker(util.SingleGPUWorker):
+      GPU_POOL = util.GPUPool()
+
     ## Uniform Ablations
     for ablate_frac in self.uniform_ablations:
       keep_frac = 1.0 - ablate_frac
       params = copy.deepcopy(self.params_base)
 
-      params.TRAIN_WORKER_CLS = util.SingleGPUWorker
+      
+      params.TRAIN_WORKER_CLS = Worker
 
       for i in range(self.trials_per_treatment):
         params = copy.deepcopy(params)

@@ -633,12 +633,13 @@ class GPUPool(object):
   def __setstate__(self, d):
     self.lock = fasteners.InterProcessLock(d['path'])
 
-  def __init__(self, path=''):
+  def __init__(self, path='', name=''):
     import tempfile
     import uuid
+    if not name:
+      name = str(uuid.uuid4())
     if not path:
-      path = os.path.join(
-        tempfile.gettempdir(), 'au.GPUPool.%s' % uuid.uuid4())
+      path = os.path.join(tempfile.gettempdir(), 'au.GPUPool.%s' % name)
     self.lock = fasteners.InterProcessLock(path)
 
   def _set_gpus(self, lst):
@@ -758,11 +759,11 @@ class Worker(object):
     if self.N_GPUS == GPUPool.ALL_GPUS:
       self.N_GPUS = GPUInfo.num_total_gpus()
     
-    if self.N_GPUS != 0:
+    if self.N_GPUS > 0:
       while True:
         self._gpu_handles.extend(
           self.__gpu_pool().get_free_gpus(n=self.N_GPUS))
-        if len(self._gpu_handles) == self.N_GPUS or self.CPU_ONLY_OK:
+        if (len(self._gpu_handles) == self.N_GPUS) or self.CPU_ONLY_OK:
           log.info("Got GPUs %s" % ([str(h) for h in self._gpu_handles],))
           break
         else:
