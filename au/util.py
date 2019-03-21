@@ -708,7 +708,11 @@ class Worker(object):
         pass
 
   def __release_gpus(self):
+    print 'len _gpu_handles', len(_gpu_handles)
     if hasattr(self, '_gpu_handles'):
+      for h in self._gpu_handles:
+        h._on_delete()
+        print '_on_delete'
       del self._gpu_handles
 
   @classmethod
