@@ -176,6 +176,19 @@ NVIDIA_SMI_MOCK_OUTPUT = (
 0, GeForce GTX 1060 with Max-Q Design, 2, GeForce GTX 1060 with Max-Q Design, 6072, 5796, 276
 """)
 
+NVIDIA_SMI_MOCK_OUTPUT_8_K80s = (
+"""index, name, utilization.memory [%], name, memory.total [MiB], memory.free [MiB], memory.used [MiB]
+0, Tesla K80, 0, Tesla K80, 11441, 11441, 0
+1, Tesla K80, 0, Tesla K80, 11441, 11441, 0
+2, Tesla K80, 0, Tesla K80, 11441, 11441, 0
+3, Tesla K80, 0, Tesla K80, 11441, 11441, 0
+4, Tesla K80, 0, Tesla K80, 11441, 11441, 0
+5, Tesla K80, 0, Tesla K80, 11441, 11441, 0
+6, Tesla K80, 0, Tesla K80, 11441, 11441, 0
+7, Tesla K80, 5, Tesla K80, 11441, 11441, 0
+"""
+)
+
 def test_gpu_get_infos(monkeypatch):
   # Test Smoke
   rows = util.GPUInfo.get_infos()
@@ -233,3 +246,28 @@ def test_gpu_pool_one_gpu(monkeypatch):
   assert len(hs3) == 1
   assert hs3[0].index == 0
 
+def test_gpu_pool_eight_k80s(monkeypatch):
+  # Pretend we have one GPU
+  def mock_run_cmd(*args, **kwargs):
+    return NVIDIA_SMI_MOCK_OUTPUT_8_K80s
+  monkeypatch.setattr(util, 'run_cmd', mock_run_cmd)
+
+  pool = util.GPUPool()
+  
+  # We can get one GPU
+  hs = pool.get_free_gpus()
+  assert len(hs) == 1
+  assert hs[0].index == 0
+
+  # Subsequent fetches will fail
+  # for _ in range(10):
+  #   h2 = pool.get_free_gpus()
+  #   assert len(h2) == 0
+  
+  # Free the GPU
+  del hs
+
+  # Now we can get it again
+  hs3 = pool.get_free_gpus()
+  assert len(hs3) == 1
+  assert hs3[0].index == 1

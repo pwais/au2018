@@ -708,7 +708,7 @@ class Worker(object):
 
   def __release_gpus(self):
     if hasattr(self, '_gpu_handles'):
-      self._gpu_handles = []
+      del self._gpu_handles
 
   @classmethod
   def __gpu_pool(cls):
