@@ -747,7 +747,7 @@ class Worker(object):
       else:
         result = self.run(*args, **kwargs)
       log.info("... done with worker %s" % self._name)
-      self._release_gpus()
+      # self._release_gpus()
       return result
 
 
