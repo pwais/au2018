@@ -623,9 +623,7 @@ class MNIST(nnmodel.INNModel):
     if os.path.exists(checkpoint_path):
       util.log.info("Using checkpoint at %s" % checkpoint_path)
     else:
-      util.log.info("Training!")
       model.train()
-      util.log.info("Done training!")
     return model
   
   def train(self):
@@ -636,9 +634,10 @@ class MNIST(nnmodel.INNModel):
       #   # def __init__(self, params):
       #   #   self.params=params
       def run(self):
-        tf_config = self._create_tf_session_config()
+        tf_config = util.tf_create_session_config(restrict_gpus=self._gpu_ids)
+        util.log.info("Training ...")
         mnist_train(params, tf_config=tf_config)
-        self._release_gpus()
+        util.log.info("... done training.")
     w = MNISTWorker()
     w()
     

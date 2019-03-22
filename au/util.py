@@ -1,5 +1,6 @@
 import itertools
 import os
+import pickle
 import shutil
 import subprocess
 import sys
@@ -580,7 +581,44 @@ class GPUInfo(object):
 
 
 import fasteners
-import pickle
+class SystemLock(object):
+  """Uses fasteners / flock to provide a inter-process *and*
+  inter-thread lock using a file.  Yes, we do need our own
+  thread lock :(
+    https://github.com/harlowja/fasteners/blob/master/fasteners/process_lock.py#L62
+  """
+
+  def __init__(self, name_prefix='au.SystemLock', name='', abspath=''):
+    if not name:
+      import uuid
+      name = name_prefix + '.' + str(uuid.uuid4())
+    if not abspath:
+      abspath = os.path.join(tempfile.gettempdir(), name)
+    self._flock = fasteners.InterProcessLock(abspath)
+    self._tlock = threading.Lock()
+
+  # Make pickle-able for interop with Spark
+  def __getstate__(self):
+    return {'_flock_path': self._flock.path}
+  
+  def __setstate__(self, d):
+    self._flock = fasteners.InterProcessLock(d['_flock_path'])
+    self._tlock = threading.Lock()
+  
+  @property
+  def path(self):
+    return self._flock.path
+  
+  def __enter__(self):
+    self._tlock.acquire()
+    self._flock.acquire()
+    return self
+  
+  def __exit__(self, *args):
+    self._flock.release()
+    self._tlock.release()
+
+
 class GPUPool(object):
   """
   An arbiter providing system-wide mutually exclusive handles to GPUs.  Mutual
@@ -613,7 +651,7 @@ class GPUPool(object):
   def get_free_gpus(self, n=1):
     """Return up to `n` handles to free GPU(s) or [] if none available.
     Use `n` = -1 to retain *all* GPUs."""
-    with self.lock:
+    with self._slock:
       if n == self.ALL_GPUS:
         n = GPUInfo.num_total_gpus()
       handles = []
@@ -627,35 +665,26 @@ class GPUPool(object):
       self._set_gpus(gpus)
       return handles
 
-  # Make pickle-able for interop with Spark
-  def __getstate__(self):
-    return {'path': self.lock.path}
-  def __setstate__(self, d):
-    self.lock = fasteners.InterProcessLock(d['path'])
+  def __str__(self):
+    return "GPUPool(path='%s')" % self._slock.path
 
   def __init__(self, path='', name=''):
-    import tempfile
-    import uuid
-    if not name:
-      name = str(uuid.uuid4())
-    if not path:
-      path = os.path.join(tempfile.gettempdir(), 'au.GPUPool.%s' % name)
-    self.lock = fasteners.InterProcessLock(path)
+    self._slock = SystemLock(name_prefix='au.GPUPool', name=name, abspath=path)
 
   def _set_gpus(self, lst):
-    with open(self.lock.path, 'w') as f:
+    with open(self._slock.path, 'w') as f:
       pickle.dump(lst, f, protocol=pickle.HIGHEST_PROTOCOL)
 
   def _get_gpus(self):
-    with open(self.lock.path, 'r') as f:
+    with open(self._slock.path, 'r') as f:
       try:
         return pickle.load(f)
       except EOFError:
-        # No process has yet initialized state in self.lock.path
+        # No process has yet initialized state in self._slock.path
         return GPUInfo.get_infos()
 
   def _release(self, gpu):
-    with self.lock:
+    with self._slock:
       gpus = self._get_gpus()
       gpus.append(gpu)
       log.info("Re-claimed GPU %s, free GPUs: %s" % (
@@ -695,7 +724,7 @@ class Worker(object):
   PROCESS_TIMEOUT_SEC = 1e9 # NB: Pi Billion is approx 1 century
   
   _SYSTEM_LOCK_PATH = os.path.join(tempfile.gettempdir(), 'au.Worker')
-  _SYSTEM_LOCK = fasteners.InterProcessLock(_SYSTEM_LOCK_PATH)
+  _SYSTEM_LOCK = SystemLock(abspath=_SYSTEM_LOCK_PATH)
 
   # For non-exclusive workers
   # https://stackoverflow.com/a/45187287
@@ -707,26 +736,50 @@ class Worker(object):
     def __exit__(self, *args):
         pass
 
-  def _release_gpus(self):
-    print 'len _gpu_handles', len(self._gpu_handles)
-    if hasattr(self, '_gpu_handles'):
-      for h in self._gpu_handles:
-        h._on_delete()
-        print '_on_delete'
-      del self._gpu_handles
+  @contextmanager
+  def __maybe_lock_gpus(self):
+    self.__gpu_ids = []
 
-  @classmethod
-  def __gpu_pool(cls):
-    if cls.GPU_POOL is None:
-      flockpath = os.path.join(tempfile.gettempdir(), 'au.Worker.GPUPool')
-      cls.GPU_POOL = GPUPool(path=flockpath)
-    return cls.GPU_POOL
+    if self.N_GPUS == 0:
+    
+      yield  # Don't need to block
+    
+    else:
+      gpu_pool = self.GPU_POOL or GPUPool(name='au.Worker.GPUPool')
+
+      if self.N_GPUS == GPUPool.ALL_GPUS:
+        self.N_GPUS = GPUInfo.num_total_gpus()
+      
+      handles = []
+      start = time.time()
+      while True:
+        handles.extend(gpu_pool.get_free_gpus(n=self.N_GPUS))
+        if (len(handles) == self.N_GPUS) or self.CPU_ONLY_OK:
+          log.info("Got GPUs %s from %s, waited %s sec" % (
+                      [str(h) for h in handles],
+                      gpu_pool,
+                      time.time() - start))
+          break
+        else:
+          log.info("Waiting for %s GPUs in pool %s, waited for %s sec ..." % (
+            (self.N_GPUS, gpu_pool, time.time() - start)))
+          import random
+          time.sleep(5 + random.random())
+        
+      # Expose to subclass if subclass needs them
+      self.__gpu_ids = [h.index for h in handles]
+      yield
+
+      # `handles` will expire and release GPUs
 
   def __call__(self, *args, **kwargs):
     ctx = Worker._NullContextManager()
     if self.SYSTEM_EXCLUSIVE:
       ctx = self._SYSTEM_LOCK
     
+    from contextlib import nested
+    ctx = nested(ctx, self.__maybe_lock_gpus())
+
     with ctx:
       log.info("Starting worker %s ..." % self._name)
       if self.PROCESS_ISOLATED:
@@ -751,7 +804,6 @@ class Worker(object):
       else:
         result = self.run(*args, **kwargs)
       log.info("... done with worker %s" % self._name)
-      # self._release_gpus()
       return result
 
 
@@ -760,29 +812,12 @@ class Worker(object):
   @property
   def _name(self):
     return self.__class__.__name__
-
-  def _create_tf_session_config(self):
-    # if not hasattr(self, '_gpu_handles'):
-    self._gpu_handles = []
-
-    if self.N_GPUS == GPUPool.ALL_GPUS:
-      self.N_GPUS = GPUInfo.num_total_gpus()
-    
-    if self.N_GPUS > 0:
-      while True:
-        self._gpu_handles.extend(
-          self.__gpu_pool().get_free_gpus(n=self.N_GPUS))
-        if (len(self._gpu_handles) == self.N_GPUS) or self.CPU_ONLY_OK:
-          log.info("Got GPUs %s" % ([str(h) for h in self._gpu_handles],))
-          break
-        else:
-          log.info("Waiting for %s GPUs ..." % self.N_GPUS)
-          import time
-          time.sleep(5)
-    
-    print 'self._gpu_handles', self._gpu_handles
-    restrict_gpus = [h.index for h in self._gpu_handles]
-    return tf_create_session_config(restrict_gpus=restrict_gpus)
+  
+  @property
+  def _gpu_ids(self):
+    if not hasattr(self, '__gpu_ids'):
+      self.__gpu_ids = GPUS_UNRESTRICTED
+    return self.__gpu_ids
 
   def run(self, *args, **kwargs):
     # Base class worker does nothing
@@ -806,7 +841,8 @@ class AtMostOneGPUWorker(SingleGPUWorker):
 
 ### Tensorflow
 
-def tf_create_session_config(restrict_gpus=None, extra_opts=None):
+GPUS_UNRESTRICTED = None
+def tf_create_session_config(restrict_gpus=GPUS_UNRESTRICTED, extra_opts=None):
   extra_opts = extra_opts or {}
   
   import tensorflow as tf
@@ -823,13 +859,14 @@ def tf_create_session_config(restrict_gpus=None, extra_opts=None):
     setattr(config, k, v)
   return config
 
-def tf_session_config_restrict_gpus(config, restrict_gpus=None):
-  if restrict_gpus is None:
-    config.gpu_options.allow_growth = True
+def tf_session_config_restrict_gpus(config, restrict_gpus=GPUS_UNRESTRICTED):
+  if restrict_gpus is GPUS_UNRESTRICTED:
     config.allow_soft_placement = True
   else:
     config.device_count['GPU'] = len(restrict_gpus)
-    config.gpu_options.visible_device_list = ','.join(str(g) for g in restrict_gpus)
+    config.gpu_options.visible_device_list = (
+      ','.join(str(g) for g in restrict_gpus))
+  config.gpu_options.allow_growth = True
 
 def tf_create_session(config=None):
   config = config or tf_create_session_config()
