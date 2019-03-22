@@ -479,7 +479,7 @@ class Experiment(object):
 
     'params_base':
       mnist.MNIST.Params(
-        TRAIN_EPOCHS=100,
+        TRAIN_EPOCHS=2,
       ),
     
     'trials_per_treatment': 10,#3,#10,
@@ -521,7 +521,7 @@ class Experiment(object):
   def run(self, spark=None):
     self._train_models(spark=spark)
     # TODO run reports
-    self._build_activations(spark=spark)
+    # self._build_activations(spark=spark)
 
   def _iter_activation_tables(self):
     from au.fixtures import nnmodel

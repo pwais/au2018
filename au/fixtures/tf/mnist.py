@@ -638,6 +638,7 @@ class MNIST(nnmodel.INNModel):
       def run(self):
         tf_config = self._create_tf_session_config()
         mnist_train(params, tf_config=tf_config)
+        self._release_gpus()
     w = MNISTWorker()
     w()
     
