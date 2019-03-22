@@ -506,6 +506,8 @@ def download(uri, dest, try_expand=True):
 
 ### GPU Utils
 
+GPUS_UNRESTRICTED = None
+
 class GPUInfo(object):
   __slots__ = (
     'index',
@@ -700,7 +702,7 @@ def _Worker_run(inst_datum_bytes):
   # Multiprocesing workers ignore System exceptions :(
   # https://stackoverflow.com/a/23682499
   try:
-    log.info("Running in subprocess ...")
+    log.info("Running in subprocess %s ..." % os.getpid())
     import cloudpickle
     inst_datum = cloudpickle.loads(inst_datum_bytes)
     inst, datum = inst_datum
@@ -738,14 +740,14 @@ class Worker(object):
 
   @contextmanager
   def __maybe_lock_gpus(self):
-    self.__gpu_ids = []
+    self._gpu_ids = []
 
     if self.N_GPUS == 0:
     
       yield  # Don't need to block
     
     else:
-      gpu_pool = self.GPU_POOL or GPUPool(name='au.Worker.GPUPool')
+      gpu_pool = self.GPU_POOL or GPUPool(name_prefix='au.Worker.GPUPool')
 
       if self.N_GPUS == GPUPool.ALL_GPUS:
         self.N_GPUS = GPUInfo.num_total_gpus()
@@ -767,7 +769,8 @@ class Worker(object):
           time.sleep(5 + random.random())
         
       # Expose to subclass if subclass needs them
-      self.__gpu_ids = [h.index for h in handles]
+      self._gpu_ids = [h.index for h in handles]
+      print 'self.__gpu_ids', self._gpu_ids, os.getpid()
       yield
 
       # `handles` will expire and release GPUs
@@ -813,11 +816,13 @@ class Worker(object):
   def _name(self):
     return self.__class__.__name__
   
-  @property
-  def _gpu_ids(self):
-    if not hasattr(self, '__gpu_ids'):
-      self.__gpu_ids = GPUS_UNRESTRICTED
-    return self.__gpu_ids
+  _gpu_ids = GPUS_UNRESTRICTED
+
+  # @property
+  # def _gpu_ids(self):
+  #   if not hasattr(self, '__gpu_ids'):
+  #     self.__gpu_ids = GPUS_UNRESTRICTED
+  #   return self.__gpu_ids
 
   def run(self, *args, **kwargs):
     # Base class worker does nothing
@@ -841,7 +846,6 @@ class AtMostOneGPUWorker(SingleGPUWorker):
 
 ### Tensorflow
 
-GPUS_UNRESTRICTED = None
 def tf_create_session_config(restrict_gpus=GPUS_UNRESTRICTED, extra_opts=None):
   extra_opts = extra_opts or {}
   
