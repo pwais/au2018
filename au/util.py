@@ -707,8 +707,8 @@ class Worker(object):
     def __exit__(self, *args):
         pass
 
-  def __release_gpus(self):
-    print 'len _gpu_handles', len(_gpu_handles)
+  def _release_gpus(self):
+    print 'len _gpu_handles', len(self._gpu_handles)
     if hasattr(self, '_gpu_handles'):
       for h in self._gpu_handles:
         h._on_delete()
@@ -747,7 +747,7 @@ class Worker(object):
       else:
         result = self.run(*args, **kwargs)
       log.info("... done with worker %s" % self._name)
-      self.__release_gpus()
+      self._release_gpus()
       return result
 
 
@@ -758,8 +758,8 @@ class Worker(object):
     return self.__class__.__name__
 
   def _create_tf_session_config(self):
-    if not hasattr(self, '_gpu_handles'):
-      self._gpu_handles = []
+    # if not hasattr(self, '_gpu_handles'):
+    self._gpu_handles = []
 
     if self.N_GPUS == GPUPool.ALL_GPUS:
       self.N_GPUS = GPUInfo.num_total_gpus()
@@ -776,6 +776,7 @@ class Worker(object):
           import time
           time.sleep(5)
     
+    print 'self._gpu_handles', self._gpu_handles
     restrict_gpus = [h.index for h in self._gpu_handles]
     return tf_create_session_config(restrict_gpus=restrict_gpus)
 
