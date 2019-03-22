@@ -9,10 +9,13 @@ set -eux
 apt-get update
 service docker stop || true
 apt-get install -y \
+  apt-transport-https \
+  ca-certificates \
   curl \
   git \
   openssh-server \
   screen \
+  software-properties-common \
   ssh \
   vim \
   wget
