@@ -744,6 +744,10 @@ class Worker(object):
         proxy = pool.map_async(_Worker_run, [inst_datum_bytes])
         results = proxy.get(timeout=self.PROCESS_TIMEOUT_SEC)
         result = results[0]
+
+        # Force process to release resources
+        pool.close()
+        pool.terminate()
       else:
         result = self.run(*args, **kwargs)
       log.info("... done with worker %s" % self._name)
