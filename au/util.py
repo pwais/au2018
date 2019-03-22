@@ -519,9 +519,7 @@ class GPUInfo(object):
   )
 
   def __str__(self):
-    data = ', '.join(
-      (k + '=' + str(getattr(self, k)))
-      for k in self.__slots__)
+    data = ', '.join((k + '=' + str(getattr(self, k))) for k in self.__slots__)
     return 'GPUInfo(' + data + ')'
 
   def __eq__(self, other):
