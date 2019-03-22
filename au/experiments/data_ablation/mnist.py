@@ -479,7 +479,7 @@ class Experiment(object):
 
     'params_base':
       mnist.MNIST.Params(
-        TRAIN_EPOCHS=2,
+        TRAIN_EPOCHS=30,
       ),
     
     'trials_per_treatment': 10,#3,#10,
