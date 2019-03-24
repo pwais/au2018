@@ -13,7 +13,13 @@ def use_tempdir(monkeypatch, test_tempdir):
   monkeypatch.setattr(conf, 'AU_TABLE_CACHE', os.path.join(test_tempdir, 'tables'))
   monkeypatch.setattr(conf, 'AU_MODEL_CACHE', os.path.join(test_tempdir, 'models'))
   monkeypatch.setattr(conf, 'AU_TENSORBOARD_DIR', os.path.join(test_tempdir, 'tensorboard'))
-  
+  monkeypatch.setattr(conf, 'AU_EXPERIMENTS_DIR', os.path.join(test_tempdir, 'experiments'))
+
+  for k in dir(conf):
+    if k.startswith('AU'):
+      monkeypatch.setenv(k, getattr(conf, k))
+
+
   util.mkdir(test_tempdir)
   if not os.environ.get('AU_NO_DEL_TEST_TEMPDIR'):
     util.rm_rf(test_tempdir)

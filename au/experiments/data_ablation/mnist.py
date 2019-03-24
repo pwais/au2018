@@ -13,7 +13,8 @@ def gen_ablated_dists(classes, ablations):
       dist[c] *= (1. - frac)
       yield dist
 
-
+class ExperimentWorker(util.SingleGPUWorker):
+  GPU_POOL = util.GPUPool() # Use a pool for the current experiment run
 
 class AblatedDataset(mnist.MNISTDataset):
   
@@ -53,22 +54,33 @@ class ExperimentReport(object):
     self.experiment_df = self.experiment.as_df(self.spark)
   
   def save(self, outdir=None):
-    if not outdir:
-      row = self.experiment_df.first()
-      outdir = row.EXPERIMENT['exp_basedir']
+    run_name = self.experiment.run_name
+    outdir = self.experiment.run_dir
   
-    # tabs = self._get_uniform_ablations_figs()
-    tabs = self._get_single_class_ablations_plots()
+    def save_plot(tabs, fname, title):
+      from bokeh import plotting
+      if tabs is None:
+        return
+      
+      dest = os.path.join(outdir, fname)
+      plotting.output_file(dest, title=title + ' - ' + run_name, mode='inline')
+      plotting.save(tabs)
+      util.log.info("Wrote to %s" % dest)
+
+    tabs = self._get_uniform_ablations_figs()
+    save_plot(tabs, 'report_uniform.html', 'Uniform Ablations')
     
-    from bokeh import plotting
+    tabs = self._get_single_class_ablations_plots()
+    save_plot(tabs, 'report_single_class.html', 'Single-Class Ablations')
 
-    plotting.output_file("report2.html", title="moof", mode='inline')
-    plotting.save(tabs)
-
-
-  
+    util.log.info("Saved reports to %s" % outdir)
   
   def _get_uniform_ablations_figs(self, debug=True):
+    # Skip entirely if no data or experiments
+    if set(['tag', 'TRAIN_TABLE_KEEP_FRAC']) - set(self.experiment_df.columns):
+      util.log.info("Skipping uniform ablations")
+      return None
+
     util.log.info("Plotting uniform ablation figs ...")
     METRICS = [
       'accuracy',
@@ -180,7 +192,9 @@ class ExperimentReport(object):
     xs = np.linspace(0, 1, N)
     ys = [f(x, c) for x in xs]
     ys = [(y if y >= 0 else 0) for y in ys]
-    fig.line(x=xs, y=ys, line_width=3, alpha=0.5, legend='Acc(m) = 1 - sqrt(c / m), c = %s' % c)
+    fig.line(
+      x=xs, y=ys, line_width=3, alpha=0.5,
+      legend='Acc(m) = 1 - sqrt(c / m), c = %s' % c)
     
     fig.legend.location = 'bottom_right'
     fig.legend.click_policy = 'hide'
@@ -241,6 +255,12 @@ class ExperimentReport(object):
 
   
   def _get_single_class_ablations_plots(self, debug=True):
+    # Skip entirely if no data or experiments
+    if set(['tag', 'TRAIN_TABLE_TARGET_DISTRIBUTION']) - \
+            set(self.experiment_df.columns):
+      util.log.info("Skipping single-class ablations")
+      return None
+
     util.log.info("Plotting single-class ablation figs ...")
     METRICS = [
       'accuracy',
@@ -475,36 +495,35 @@ class Experiment(object):
   DEFAULTS = {
     'exp_basedir': exp_util.experiment_basedir('mnist'),
     'run_name': 'default.' + util.fname_timestamp(),
-    #'default.2019-02-03-07_25_48.GIBOB', #
 
     'params_base':
       mnist.MNIST.Params(
-        TRAIN_EPOCHS=30,
+        TRAIN_EPOCHS=2,
+        TRAIN_WORKER_CLS=ExperimentWorker,
       ),
     
-    'trials_per_treatment': 10,#3,#10,
+    'trials_per_treatment': 10,
 
-    'uniform_ablations': #tuple(),
-    (
-        0.9999,
-        0.9995,
-        0.999,
-        0.995,
-        0.99,
-        0.95,
-        0.9,
-        0.5,
-        0.0,
-      ),
+    'uniform_ablations': (
+      0.9999,
+      0.9995,
+      0.999,
+      0.995,
+      0.99,
+      0.95,
+      0.9,
+      0.5,
+      0.0,
+    ),
     
-    'single_class_ablations': tuple(),
-    # (
-    #   0.9999,
-    #   0.999,
-    #   0.99,
-    #   0.9,
-    #   0.5,
-    # ),
+    'single_class_ablations': (
+      0.9999,
+      0.999,
+      0.99,
+      0.9,
+      0.5,
+    ),
+
     'all_classes': range(10),
   }
 
@@ -514,14 +533,15 @@ class Experiment(object):
 
   def __init__(self, **conf):
     for k, v in self.DEFAULTS.iteritems():
-      setattr(self, k, v)
-    for k, v in conf.iteritems():
-      setattr(self, k, v)
+      setattr(self, k, conf.get(k) or v)
 
   def run(self, spark=None):
     self._train_models(spark=spark)
+
     # TODO run reports
     # self._build_activations(spark=spark)
+
+    self._save_reports(spark=spark)
 
   def _iter_activation_tables(self):
     from au.fixtures import nnmodel
@@ -555,6 +575,10 @@ class Experiment(object):
 
 
   def _train_models(self, spark=None):
+    util.log.info("Training models ...")
+    import time
+    start = time.time()
+
     ps = list(self._iter_model_params())
 
     with Spark.sess(spark) as spark:
@@ -582,7 +606,15 @@ class Experiment(object):
         for p in ps)
       res = Spark.run_callables(spark, callables)
     
+    util.log.info(
+      "Model training complete in %s mins. Saved to %s" % (
+      (time.time() - start) / 60., self.run_dir))
 
+  def _save_reports(self, spark=None):
+    util.log.info("Generating reports ...")
+    with Spark.sess(spark) as spark:
+      report = ExperimentReport(spark=spark, experiment=self)
+      report.save()
 
   def as_df(self, spark, include_tf_summaries=True):
     paths = util.all_files_recursive(self.run_dir, pattern='**/au_meta.json')
@@ -603,13 +635,16 @@ class Experiment(object):
         if os.path.exists(model_dir):
           for r in util.TFSummaryReader(glob_events_from_dir=model_dir):
             yield r.as_row(extra={'params_hash': meta_row.params_hash})
-      tf_summary_df = spark.createDataFrame(meta_df.rdd.flatMap(meta_to_rows))
-
-      df = meta_df.join(tf_summary_df, on='params_hash', how='inner')
-        # This join is super fast because `meta_df` is quite small.  Moreover,
-        # Spark is smart enough not to compute / use extra memory for duplicate
-        # values that would result from instantiating copies of `meta_df`
-        # rows in the join.
+      tf_summary_rdd = meta_df.rdd.flatMap(meta_to_rows)
+      if tf_summary_rdd.isEmpty():
+        df = meta_df
+      else:
+        tf_summary_df = spark.createDataFrame(tf_summary_rdd)
+        df = meta_df.join(tf_summary_df, on='params_hash', how='inner')
+          # This join is super fast because `meta_df` is quite small. 
+          # Moreover, Spark is smart enough not to compute / use extra memory
+          # for duplicate values that would result from instantiating copies
+          # of `meta_df` rows in the join.
     return df
 
   
@@ -633,16 +668,10 @@ class Experiment(object):
   def _iter_model_params(self):
     import copy
 
-    class Worker(util.SingleGPUWorker):
-      GPU_POOL = util.GPUPool()
-
     ## Uniform Ablations
     for ablate_frac in self.uniform_ablations:
       keep_frac = 1.0 - ablate_frac
       params = copy.deepcopy(self.params_base)
-
-      
-      params.TRAIN_WORKER_CLS = Worker
 
       for i in range(self.trials_per_treatment):
         params = copy.deepcopy(params)
@@ -705,6 +734,12 @@ build the above with mscoco / segmentation in mind, as well as bdd100k segmentat
 """
 
 if __name__ == '__main__':
+  import sys
   mnist.MNISTDataset.setup()
-  Experiment().run()
+  
+  print "Example usage: python mnist.py run_name=my_run"
+
+  kv_args = dict(a.split('=') for a in sys.argv if '=' in a)
+  e = Experiment(**kv_args)
+  e.run()
 
