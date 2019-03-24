@@ -13,7 +13,8 @@ def gen_ablated_dists(classes, ablations):
       dist[c] *= (1. - frac)
       yield dist
 
-
+class ExperimentWorker(util.SingleGPUWorker):
+  GPU_POOL = util.GPUPool() # Use a pool for the current experiment run
 
 class AblatedDataset(mnist.MNISTDataset):
   
@@ -494,36 +495,35 @@ class Experiment(object):
   DEFAULTS = {
     'exp_basedir': exp_util.experiment_basedir('mnist'),
     'run_name': 'default.' + util.fname_timestamp(),
-    #'default.2019-02-03-07_25_48.GIBOB', #
 
     'params_base':
       mnist.MNIST.Params(
         TRAIN_EPOCHS=2,
+        TRAIN_WORKER_CLS=ExperimentWorker,
       ),
     
-    'trials_per_treatment': 2,#10,#3,#10,
+    'trials_per_treatment': 10,
 
-    'uniform_ablations': #tuple(),
-    (
-        0.9999,
-        # 0.9995,
-        # 0.999,
-        # 0.995,
-        # 0.99,
-        # 0.95,
-        # 0.9,
-        # 0.5,
-        # 0.0,
-      ),
-    
-    'single_class_ablations': #tuple(),
-    (
+    'uniform_ablations': (
       0.9999,
-      # 0.999,
-      # 0.99,
-      # 0.9,
-      # 0.5,
+      0.9995,
+      0.999,
+      0.995,
+      0.99,
+      0.95,
+      0.9,
+      0.5,
+      0.0,
     ),
+    
+    'single_class_ablations': (
+      0.9999,
+      0.999,
+      0.99,
+      0.9,
+      0.5,
+    ),
+
     'all_classes': range(10),
   }
 
@@ -668,16 +668,10 @@ class Experiment(object):
   def _iter_model_params(self):
     import copy
 
-    class Worker(util.SingleGPUWorker):
-      GPU_POOL = util.GPUPool()
-
     ## Uniform Ablations
     for ablate_frac in self.uniform_ablations:
       keep_frac = 1.0 - ablate_frac
       params = copy.deepcopy(self.params_base)
-
-      
-      params.TRAIN_WORKER_CLS = Worker
 
       for i in range(self.trials_per_treatment):
         params = copy.deepcopy(params)
@@ -743,6 +737,8 @@ if __name__ == '__main__':
   import sys
   mnist.MNISTDataset.setup()
   
+  print "Example usage: python mnist.py run_name=my_run"
+
   kv_args = dict(a.split('=') for a in sys.argv if '=' in a)
   e = Experiment(**kv_args)
   e.run()

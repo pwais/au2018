@@ -141,8 +141,8 @@ class MNISTDataset(dataset.ImageTable):
   def to_mnist_tf_dataset(cls, spark=None):
     iter_image_rows = cls.create_iter_all_rows(spark=spark)
     def iter_mnist_tuples():
-      t = util.ThruputObserver(name='iter_mnist_tuples', log_freq=20000)
-      t.start_block()
+      # t = util.ThruputObserver(name='iter_mnist_tuples', log_freq=20000)
+      # t.start_block()
       norm = MNIST.Params().make_normalize_ftor()
       for row in iter_image_rows():
         # TODO: a faster filter.  For mnist this is plenty fast.
@@ -170,8 +170,8 @@ class MNISTDataset(dataset.ImageTable):
         #   return tf.to_int32(label)
         yield arr, int(row.label), row.uri
 
-        t.update_tallies(n=1, num_bytes=arr.nbytes)
-        t.maybe_log_progress(n=1000)
+        # t.update_tallies(n=1, num_bytes=arr.nbytes)
+        # t.maybe_log_progress(n=1000)
 
     d = tf.data.Dataset.from_generator(
               generator=iter_mnist_tuples,

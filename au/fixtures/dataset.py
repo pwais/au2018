@@ -450,8 +450,7 @@ class ImageTable(object):
   
   @classmethod
   def save_to_image_table(cls, rows):
-    dest = os.path.join(conf.AU_TABLE_CACHE, cls.TABLE_NAME)
-    if not os.path.exists(dest):
+    if not os.path.exists(cls.table_root()):
       return ImageRow.write_to_parquet(
                         rows,
                         cls.table_root(),
@@ -472,7 +471,6 @@ class ImageTable(object):
     """Convenience method (mainly for testing) using Pandas"""
     import pandas as pd
     import pyarrow.parquet as pq
-    
     pa_table = pq.read_table(cls.table_root())
     df = pa_table.to_pandas()
     for row in ImageRow.from_pandas(df):

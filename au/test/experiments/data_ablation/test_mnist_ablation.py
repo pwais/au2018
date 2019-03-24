@@ -113,7 +113,43 @@ class TestMNISTAblatedDataset(unittest.TestCase):
               # The sample approaches the target of 50%
               # as the table size grows
             for v in (test_counts / std_counts))
+  
+  def test_single_class_ablate(self):
+    print "TODO"
 
+def test_micro_experiment(monkeypatch):
+  testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+  from au.experiments.data_ablation import util as exp_util
+
+  CONF = {
+    'run_name': 'test_micro_experiment',
+    'exp_basedir': exp_util.experiment_basedir('mnist'),
+
+    'params_base':
+      mnist.MNIST.Params(
+        TRAIN_EPOCHS=2,
+        LIMIT=100,
+        TRAIN_WORKER_CLS=util.Worker,
+      ),
     
+    'trials_per_treatment': 2,
 
+    'uniform_ablations': (
+        0.999,
+        0.99,
+      ),
+    
+    'single_class_ablations': (
+      0.999,
+      0.99,
+    ),
+
+    'all_classes': range(3), # Generate fewer and smaller Treatments
+  }
+
+  mnist.MNISTDataset.setup(params=CONF['params_base'])
+
+  with testutils.LocalSpark.sess() as spark:
+    e = mnist_ablated.Experiment(**CONF)
+    e.run(spark=spark)
 
