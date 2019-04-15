@@ -40,27 +40,6 @@ class Sobel(nnmodel.INNModel):
         sobel = tf.image.sobel_edges(input_image_f)
         out = tf.identity(sobel, name='sobel')
       return g.as_graph_def()
-
-
-    #       pred = tf_model(input_image_f, training=False)
-    #       checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
-    #       saver = tf.train.import_meta_graph(
-    #                             checkpoint + '.meta',
-    #                             clear_devices=True)
-    #       return util.give_me_frozen_graph(
-    #                           checkpoint,
-    #                           nodes=list(self.output_names) + [input_image, uris],
-    #                           saver=saver,
-    #                           base_graph=g,
-    #                           sess=sess)
-
-
-    # def create_inference_graph(self, input_image, base_graph):
-    #   with base_graph.as_default():
-        
-    #     sobel = tf.image.sobel_edges(tf.cast(input_image, tf.float32))
-    #     self.out = tf.identity(sobel, name='sobel')
-    #   return base_graph
     
     @property
     def output_names(self):
@@ -180,7 +159,13 @@ def test_fill_activations_table(monkeypatch):
   with testutils.LocalSpark.sess() as spark:
     TestActivationsTable.setup(spark=spark)
 
-    df = spark.read.parquet(TestActivationsTable.table_root())
-    df.createOrReplaceTempView("sobel_activations")
-    spark.sql("SELECT * FROM sobel_activations").show()
+    df = TestActivationsTable.as_df(spark)
+    expected_num_rows = dataset.ImageTable.as_imagerow_df(spark).count()
+    assert df.count() == expected_num_rows
+    df.show()
 
+    imagerow_rdd = TestActivationsTable.to_imagerow_rdd(spark=spark)
+    for row in imagerow_rdd.collect():
+      assert 'activations' in row.attrs
+      t = row.attrs['activations'].get_tensor('Sobel', 'sobel:0')
+      assert t is not None
