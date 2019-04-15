@@ -438,22 +438,23 @@ class ActivationsTable(object):
   def to_imagerow_rdd(cls, spark=None):
     from au.spark import Spark
     with Spark.sess(spark) as spark:
-      imagerow_df = cls.IMAGE_TABLE_CLS.as_imagerow_df(spark)
-      activations_df = cls.as_df(spark)
       
-      joined_df = activations_df.join(imagerow_df, ['uri', 'dataset', 'split'])
+      activations_df = cls.as_df(spark)
 
       # Combine activations model and tensor -> value into a single column ...
       from pyspark.sql.functions import struct
-      combined = joined_df.withColumn(
+      combined = activations_df.withColumn(
         'm_t2v', struct('model', 'tensor_to_value'))
       
       # ... group by URI (and others) to induce ImageRows ...
       grouped = combined.groupBy('uri', 'dataset', 'split')
-      imagerow_df = grouped.agg({'m_t2v': 'collect_list'})
-      imagerow_df = imagerow_df.withColumnRenamed(
+      image_act_df = grouped.agg({'m_t2v': 'collect_list'})
+      image_act_df = image_act_df.withColumnRenamed(
                                   'collect_list(m_t2v)', 'm_t2vs')
-      
+
+      imagerow_df = cls.IMAGE_TABLE_CLS.as_imagerow_df(spark)
+      joined = image_act_df.join(imagerow_df, ['uri', 'dataset', 'split'])
+
       # ... map row things to ImageRows
       def to_imagerow(row):
         irow = dataset.ImageRow(**row.asDict())
@@ -462,7 +463,7 @@ class ActivationsTable(object):
         irow.attrs['activations'] = acts
         return irow
       
-      imagerow_rdd = imagerow_df.rdd.map(to_imagerow)
+      imagerow_rdd = joined.rdd.map(to_imagerow)
       return imagerow_rdd
 
                 

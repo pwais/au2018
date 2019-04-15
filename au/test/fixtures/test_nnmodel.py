@@ -87,8 +87,6 @@ def _check_rows(fixture, filled_rows):
 
     acts = row.attrs['activations']
     assert acts
-    act = acts[0]
-    assert act.model_name == igraph.model_name
     
     import imageio
     import numpy as np
@@ -96,7 +94,7 @@ def _check_rows(fixture, filled_rows):
     if '202228408_eccfe4790e' in row.uri:
     
       tensor_name = igraph.output_names[0]
-      sobel_tensor = act.tensor_to_value[tensor_name]
+      sobel_tensor = acts.get_tensor(igraph.model_name, tensor_name)
       
       sobel_y = sobel_tensor[...,0]
       sobel_x = sobel_tensor[...,1]
@@ -122,7 +120,7 @@ def _check_rows(fixture, filled_rows):
       
       assert sobel_y_bytes == open(SOBEL_Y_TEST_IMG_PATH).read()
       assert sobel_x_bytes == open(SOBEL_X_TEST_IMG_PATH).read()
-    
+
       # For debugging
       visible_path = row.to_debug()
       imageio.imwrite(visible_path + '.sobel_x.png', sobel_x)
@@ -165,7 +163,5 @@ def test_fill_activations_table(monkeypatch):
     df.show()
 
     imagerow_rdd = TestActivationsTable.to_imagerow_rdd(spark=spark)
-    for row in imagerow_rdd.collect():
-      assert 'activations' in row.attrs
-      t = row.attrs['activations'].get_tensor('Sobel', 'sobel:0')
-      assert t is not None
+    rows = imagerow_rdd.collect()
+    _check_rows(fixture, rows)
