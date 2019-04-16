@@ -159,13 +159,13 @@ class Activations(object):
   def __init__(self, **datum):
     self._model_to_tensor_to_value = dict(datum)
 
-    # Unpack numpy arrays
-    for m in self._model_to_tensor_to_value:
-      for tn in self._model_to_tensor_to_value[m]:
-        from au.spark import NumpyArray
-        tv = self._model_to_tensor_to_value[m][tn]
-        if isinstance(tv, (NumpyArray,)):
-          self._model_to_tensor_to_value[m][tn] = tv.arr
+    # # Unpack numpy arrays
+    # for m in self._model_to_tensor_to_value:
+    #   for tn in self._model_to_tensor_to_value[m]:
+    #     from au.spark import NumpyArray
+    #     tv = self._model_to_tensor_to_value[m][tn]
+    #     if isinstance(tv, (NumpyArray,)):
+    #       self._model_to_tensor_to_value[m][tn] = tv.arr
 
   
   def set_tensor(self, model_name, tensor_name, tensor_value):
@@ -178,6 +178,15 @@ class Activations(object):
 
   def get_tensor(self, model_name, tensor_name):
     return self._model_to_tensor_to_value.get(model_name, {}).get(tensor_name)
+
+  def get_models(self):
+    return self._model_to_tensor_to_value.keys()
+  
+  def get_default_model(self):
+    return sorted(self._model_to_tensor_to_value.iterkeys())[0]
+  
+  def get_tensor_names(self, model_name):
+    return self._model_to_tensor_to_value.get(model_name, {}).keys()
 
   def to_rows(self):
     # pyspark sees Row as a struct / map type
@@ -389,7 +398,6 @@ class ActivationsTable(object):
 
     from au.spark import Spark
     with Spark.sess(spark) as spark:
-      # ssc, dstream = cls.IMAGE_TABLE_CLS.as_imagerow_rdd_stream(spark)
       imagerow_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
       
       # Since each output row (activations) might be bigger than the input
@@ -465,36 +473,6 @@ class ActivationsTable(object):
       
       imagerow_rdd = joined.rdd.map(to_imagerow)
       return imagerow_rdd
-
-                
-      #               ]
-      #               (activations_df.uri == imagerow_df.uri) &
-      #               (activations_df.dataset == imagerow_df.dataset) &
-      #               (activations_df.split == imagerow_df.split))
-      # import pdb; pdb.set_trace()
-      
-      # # TODO Pandas UDAF support not mature enough, can't handle types yet 
-      # # grouped_df = joined_df.groupBy('uri', 'dataset', 'split')
-      # # import pandas as pd
-      # # from pyspark.sql.functions import pandas_udf, PandasUDFType
-      # # @pandas_udf(joined_df.schema, PandasUDFType.GROUPED_MAP)
-      # # def to_imagerow(rows_df):
-      # #   acts = Activations.from_df(rows_df)
-      # #   row = dataset.Image.from_pandas(rows_df).next()
-      # #   row.attrs['activations'] = list(acts)
-      # #   return pd.DataFrame([row])
-      # # imagerow_rdd = grouped_df.apply(to_imagerow).rdd
-
-      # def to_kv(row):
-      #   return ((row.uri, row.split, row.dataset), row)
-      
-      # imagerow_kv = imagerow_df.rdd.map(to_kv)
-      # activations_kv = activations_df.rdd.map(to_kv)
-
-
-
-      # import pdf; pdf.set_trace()
-      # return imagerow_rdd
 
   @classmethod
   def save_tf_embedding_projector(
@@ -641,7 +619,6 @@ class ActivationsTable(object):
         
           tensor_df = rows_df.filter(rows_df.tensor_name == tensor_name)
           tensor_df = tensor_df.select('uri', 'tensor_value')
-          # import pdb; pdb.set_trace()
           util.log.info(
             "... fetching %s tensors (in %s partitions) for %s ..." % (
               tensor_df.count(), tensor_df.rdd.getNumPartitions(), tensor_name))
@@ -649,6 +626,7 @@ class ActivationsTable(object):
           vs = sorted(
                   tensor_df.toLocalIterator(),
                   key=lambda r: r.uri)
+          # TODO mebbe r.tensor_value de-pickle then flatten
           vs = [r.tensor_value.arr.flatten() for r in vs]
 
           util.log.info(

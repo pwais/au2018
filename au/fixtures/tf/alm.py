@@ -1,23 +1,77 @@
-# """ALM-- Activation Latent Model.  An auto-encoder, GAN, or other model
-# that attempts to model the latent space of the activations of a given
-# nnmodel"""
+"""ALM-- Activation Latent Model.  An auto-encoder, GAN, or other model
+that attempts to model the latent space of the activations of a given
+nnmodel"""
 
-# import numpy as np
+import numpy as np
 
-# import tensorflow as tf
+import tensorflow as tf
 
-# from au import util
-# from au.fixtures import nnmodel
-# from au.spark import Spark
+from au import util
+from au.fixtures import nnmodel
+from au.spark import Spark
 
-# class ActivationDataset(nnmodel.ActivationsTable):
+
+class ImageRowToExampleXForm(object):
+
+  ALL_TENSORS = tuple()
+  DEFAULT_MODEL = '<take first model>'
+  DEFAULTS = {
+    'activation_model': DEFAULT_MODEL,
+    'x_activation_tensors': ALL_TENSORS, # Or None to turn off
+    'y_is_visible': True,
+  }
+
+  def __init__(self, **kwargs):
+    for k, v in self.DEFAULTS.iteritems():
+      setattr(self, k, kwargs.get(k, v))
+
+  class Example(object):
+    __slots__ = ('uri', 'x', 'y')
+    def __init__(self, **kwargs):
+      for k in self.__slots__:
+        setattr(self, k, kwargs.get(k))
+
+  def __call__(self, row):
+    acts = row.attrs['activations']
+
+    model = self.activation_model
+    if model == self.DEFAULT_MODEL:
+      model = acts.get_default_model()
+    else:
+      assert model in acts.get_models()
+
+    x = None
+    if self.x_activation_tensors is not None:
+      
+      tensor_names = self.x_activation_tensors
+      if tensor_names == self.ALL_TENSORS:
+        tensor_names = sorted(acts.get_tensor_names(model))
+      
+      assert tensor_names
+
+      ts = np.array([
+        acts.get_tensor(model, tn).flatten() for tn in tensor_names])
+      x = ts.flatten()
+    
+    y = None
+    if self.y_is_visible:
+      y = row.as_numpy()
+    
+    return ImageRowToExampleXForm.Example(uri=row.uri, x=x, y=y)
+
+
+
+
+# class ActivationDataset(object):
+
 
 #   DATASET = ''
 #   SPLIT = ''
 
 #   LIMIT = -1 # Use all data, else ablate to this much data
   
-#   TENSOR_NAMES = tuple()
+#   X_TENSORS = tuple()
+#   Y_TENSORS = tuple()
 
 #   @classmethod
 #   def iter_image_rows(cls, spark):
