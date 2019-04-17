@@ -10,6 +10,11 @@ from au import util
 from au.fixtures import nnmodel
 from au.spark import Spark
 
+class Example(object):
+    __slots__ = ('uri', 'x', 'y')
+    def __init__(self, **kwargs):
+      for k in self.__slots__:
+        setattr(self, k, kwargs.get(k))
 
 class ImageRowToExampleXForm(object):
 
@@ -24,12 +29,6 @@ class ImageRowToExampleXForm(object):
   def __init__(self, **kwargs):
     for k, v in self.DEFAULTS.iteritems():
       setattr(self, k, kwargs.get(k, v))
-
-  class Example(object):
-    __slots__ = ('uri', 'x', 'y')
-    def __init__(self, **kwargs):
-      for k in self.__slots__:
-        setattr(self, k, kwargs.get(k))
 
   def __call__(self, row):
     acts = row.attrs['activations']
@@ -57,7 +56,35 @@ class ImageRowToExampleXForm(object):
     if self.y_is_visible:
       y = row.as_numpy()
     
-    return ImageRowToExampleXForm.Example(uri=row.uri, x=x, y=y)
+    # We'll let models assume float32
+    x = x.astype(np.float32)
+    y = y.astype(np.float32)
+
+    return Example(uri=row.uri, x=x, y=y)
+
+
+class ActivationsDataset(object):
+
+  ACTIVATIONS_TABLE = None
+  ROW_XFORM = ImageRowToExampleXForm()
+  
+  @classmethod
+  def as_tf_dataset(cls, spark=None):
+
+    def make_iter_ex_tuples(s):
+      def f():
+        from au.spark import Spark
+        with Spark.sess(s) as spark:
+          imagerow_rdd = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
+          ex_rdd = imagerow_rdd.map(cls.ROW_XFORM)
+          for ex in ex_rdd.toLocalIterator():
+            yield ex.x, ex.y, ex.uri
+      return f
+    
+    ds = tf.data.Dataset.from_generator(
+          generator=make_iter_ex_tuples(spark),
+          output_types=(tf.float32, tf.float32, tf.string))
+    return ds
 
 
 

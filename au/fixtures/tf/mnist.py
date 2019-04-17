@@ -170,9 +170,6 @@ class MNISTDataset(dataset.ImageTable):
         #   return tf.to_int32(label)
         yield arr, int(row.label), row.uri
 
-        # t.update_tallies(n=1, num_bytes=arr.nbytes)
-        # t.maybe_log_progress(n=1000)
-
     d = tf.data.Dataset.from_generator(
               generator=iter_mnist_tuples,
               output_types=(tf.float32, tf.int32, tf.string),
@@ -639,7 +636,7 @@ class MNIST(nnmodel.INNModel):
       #   # def __init__(self, params):
       #   #   self.params=params
       def run(self):
-        print 'self._gpu_ids', self._gpu_ids, os.getpid()
+        # print 'self._gpu_ids', self._gpu_ids, os.getpid()
         tf_config = util.tf_create_session_config(restrict_gpus=self._gpu_ids)
         util.log.info("Training ...")
         mnist_train(params, tf_config=tf_config)

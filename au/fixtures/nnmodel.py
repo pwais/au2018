@@ -4,6 +4,7 @@ import pickle
 from au import conf
 from au import util
 from au.fixtures import dataset
+from au.spark import Spark
 
 class INNModel(object):
   """A fascade for (neural network) models. Probably needs a new name."""
@@ -395,8 +396,6 @@ class ActivationsTable(object):
       return
 
     util.log.info("Building table %s ..." % cls.TABLE_NAME)
-
-    from au.spark import Spark
     with Spark.sess(spark) as spark:
       imagerow_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
       
