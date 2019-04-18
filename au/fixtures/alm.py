@@ -4,17 +4,15 @@ nnmodel"""
 
 import numpy as np
 
-import tensorflow as tf
-
 from au import util
 from au.fixtures import nnmodel
 from au.spark import Spark
 
 class Example(object):
-    __slots__ = ('uri', 'x', 'y')
-    def __init__(self, **kwargs):
-      for k in self.__slots__:
-        setattr(self, k, kwargs.get(k))
+  __slots__ = ('uri', 'x', 'y')
+  def __init__(self, **kwargs):
+    for k in self.__slots__:
+      setattr(self, k, kwargs.get(k))
 
 class ImageRowToExampleXForm(object):
 
@@ -24,6 +22,8 @@ class ImageRowToExampleXForm(object):
     'activation_model': DEFAULT_MODEL,
     'x_activation_tensors': ALL_TENSORS, # Or None to turn off
     'y_is_visible': True,
+    'x_dtype': np.float32,
+    'y_dtype': np.float32,
   }
 
   def __init__(self, **kwargs):
@@ -56,9 +56,9 @@ class ImageRowToExampleXForm(object):
     if self.y_is_visible:
       y = row.as_numpy()
     
-    # We'll let models assume float32
-    x = x.astype(np.float32)
-    y = y.astype(np.float32)
+    assert x is not None and y is not None
+    x = x.astype(self.x_dtype)
+    y = y.astype(self.y_dtype)
 
     return Example(uri=row.uri, x=x, y=y)
 
@@ -70,6 +70,7 @@ class ActivationsDataset(object):
   
   @classmethod
   def as_tf_dataset(cls, spark=None):
+    import tensorflow as tf
 
     def make_iter_ex_tuples(s):
       def f():

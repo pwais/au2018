@@ -7,7 +7,8 @@ from au.fixtures import dataset
 from au.spark import Spark
 
 class INNModel(object):
-  """A fascade for (neural network) models. Probably needs a new name."""
+  """A fascade for discriminative (neural network) models. Probably needs a
+  new name."""
   
   class ParamsBase(object):
     def __init__(self, model_name='INNModel', **overrides):
@@ -53,10 +54,7 @@ class INNModel(object):
       for attrname in sorted(dir(self)):
         if not attrname.startswith('_') and attrname.isupper():
           v = getattr(self, attrname)
-          
-
       return row
-
 
   def __init__(self, params=None):
     self.params = params or INNModel.ParamsBase()
@@ -75,7 +73,16 @@ class INNModel(object):
     """Create and return a factory for creating inference graph(s)
     based upon this model instance."""
     return TFInferenceGraphFactory()
+
+class INNGenerativeModel(INNModel):
+  """A fascade for generative / 'unsupervised' (neural network) models.
+  Probably needs a new name."""
+
+  def create_generator(self):
+    raise ValueError("TODO")
   
+  def create_transformer(self):
+    raise ValueError("TODO")
 
 
 class TFInferenceGraphFactory(object):
@@ -442,8 +449,7 @@ class ActivationsTable(object):
     return df
 
   @classmethod
-  def to_imagerow_rdd(cls, spark=None):
-    from au.spark import Spark
+  def as_imagerow_rdd(cls, spark=None):
     with Spark.sess(spark) as spark:
       
       activations_df = cls.as_df(spark)
