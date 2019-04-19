@@ -402,6 +402,8 @@ class ActivationsTable(object):
     if os.path.exists(cls.table_root()):
       return
 
+    cls.IMAGE_TABLE_CLS.setup(spark=spark)
+
     util.log.info("Building table %s ..." % cls.TABLE_NAME)
     with Spark.sess(spark) as spark:
       imagerow_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
