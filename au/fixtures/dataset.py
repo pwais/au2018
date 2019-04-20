@@ -456,12 +456,13 @@ class ImageTable(object):
     return os.path.join(conf.AU_TABLE_CACHE, cls.TABLE_NAME)
   
   @classmethod
-  def save_to_image_table(cls, rows):
+  def save_to_image_table(cls, rows, **kwargs):
     if not os.path.exists(cls.table_root()):
       return ImageRow.write_to_parquet(
                         rows,
                         cls.table_root(),
-                        rows_per_file=cls.ROWS_PER_FILE)
+                        rows_per_file=cls.ROWS_PER_FILE,
+                        spark=kwargs.get('spark'))
 
   @classmethod
   def get_rows_by_uris(cls, uris):

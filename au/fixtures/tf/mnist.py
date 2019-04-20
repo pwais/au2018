@@ -85,8 +85,13 @@ class MNISTDataset(dataset.ImageTable):
         cls._datasets_iter_image_rows(params=params))
   
   @classmethod
-  def setup(cls, params=None, **kwargs):
-    cls.save_to_image_table(cls._datasets_iter_image_rows(params=params))
+  def setup(cls, **kwargs):
+    if not os.path.exists(cls.table_root()):
+      rows = cls._datasets_iter_image_rows(params=kwargs.get('params'))
+      if kwargs.get('spark'):
+        spark = kwargs['spark']
+        rows = spark.sparkContext.parallelize(rows)
+      cls.save_to_image_table(rows, spark=kwargs.get('spark'))
   
   @classmethod
   def as_imagerow_df(cls, spark):

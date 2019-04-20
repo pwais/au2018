@@ -3,15 +3,16 @@ from au.fixtures import alm
 from au.fixtures import nnmodel
 from au.spark import Spark
 
+import os
+
 import tensorflow as tf
 
 # TODO: moveme
 
 from au.fixtures.tf import mnist
 mnist_params = mnist.MNIST.Params(
-                  BATCH_SIZE=100,
-                  TRAIN_EPOCHS=2,
-                  LIMIT=100,
+                  BATCH_SIZE=10000,
+                  TRAIN_EPOCHS=30,
                   TRAIN_WORKER_CLS=util.WholeMachineWorker)
 class MNISTTrainActivations(nnmodel.ActivationsTable):
   SPLIT = 'train'
@@ -200,6 +201,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       # This flow doesn't need uri
       train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
       train_ds = train_ds.batch(params.BATCH_SIZE)
+      train_ds = train_ds.cache(os.path.join(params.MODEL_BASEDIR, 'train_cache'))
       return train_ds
     
     def eval_input_fn():
@@ -210,6 +212,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       # This flow doesn't need uri
       test_ds = test_ds.map(lambda arr, label, uri: (arr, label))
       test_ds = test_ds.batch(params.EVAL_BATCH_SIZE)
+      test_ds = test_ds.cache(os.path.join(params.MODEL_BASEDIR, 'test_cache'))
       return test_ds
     
     # Set up hook that outputs training logs
