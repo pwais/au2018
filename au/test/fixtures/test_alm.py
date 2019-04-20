@@ -1,8 +1,8 @@
 from au import conf
 from au import util
+from au.fixtures import alm
 from au.fixtures import dataset
 from au.fixtures import nnmodel
-from au.fixtures.tf import alm
 from au.test import testconf
 from au.test import testutils
 
@@ -33,8 +33,11 @@ class TestBasicAutoencoder(unittest.TestCase):
     testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
     dataset.ImageTable.setup()
 
+    # Use a uniform image size
+    cls.IMAGE_H = 100
+    cls.IMAGE_W = 200
     cls.FILLED_ROWS = [
-      _filled_mock_activations(r)
+      _filled_mock_activations(r.resized(cls.IMAGE_H, cls.IMAGE_W))
       for r in dataset.ImageTable.iter_all_rows()
     ]
 
@@ -74,4 +77,8 @@ class TestBasicAutoencoder(unittest.TestCase):
                           test_img_fname)
         import imageio
         expected_visible = imageio.imread(test_img_path)
+        import cv2
+        expected_visible = cv2.resize(
+                                expected_visible,
+                                (self.IMAGE_W, self.IMAGE_H))
         np.testing.assert_array_equal(y, expected_visible)

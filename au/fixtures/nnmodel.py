@@ -402,17 +402,18 @@ class ActivationsTable(object):
     if os.path.exists(cls.table_root()):
       return
 
-    cls.IMAGE_TABLE_CLS.setup(spark=spark)
+    cls.IMAGE_TABLE_CLS.setup(spark=spark, params=cls.MODEL_PARAMS)
 
     util.log.info("Building table %s ..." % cls.TABLE_NAME)
     with Spark.sess(spark) as spark:
       imagerow_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
       
-      # Since each output row (activations) might be bigger than the input
-      # row (image), explode the number of partitions to avoid OOMs in
-      # the Spark Parquet-writing process at the end.
-      imagerow_rdd = imagerow_rdd.repartition(
-        imagerow_rdd.getNumPartitions() * 10)
+      # # Since each output row (activations) might be bigger than the input
+      # # row (image), and since Tensorflow will need some memory, we explode
+      # # the number of partitions to avoid OOMs e.g. in the Spark
+      # # Parquet-writing process at the end.
+      # imagerow_rdd = imagerow_rdd.repartition(
+      #   imagerow_rdd.getNumPartitions() * 10)
 
       model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
       filler = FillActivationsTFDataset(model=model)

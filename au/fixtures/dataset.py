@@ -2,6 +2,7 @@ import io
 import os
 from collections import OrderedDict
 
+import cv2
 import imageio
 import numpy as np
 
@@ -210,6 +211,14 @@ class ImageRow(object):
       f.write(self.image_bytes)
     return dest 
 
+  def resized(self, target_h, target_w):
+    """Convenience method; you probably want to use FillNormalized below
+    for performance."""
+    arr = self.as_numpy()
+    arr = cv2.resize(arr, (target_w, target_h)) # Sneaky, opencv!
+    return ImageRow.from_np_img_labels(arr, **self.to_dict())
+
+
   @staticmethod
   def rows_from_images_dir(img_dir, pattern='*', **kwargs):
     import pathlib2 as pathlib
@@ -341,8 +350,6 @@ class ImageRow(object):
 
 ## Ops & Utils
 
-import cv2
-
 def _make_have_target_chan(img, nchan):
   shape = img.shape
   if len(shape) == 2:
@@ -417,7 +424,7 @@ class ImageTable(object):
   ROWS_PER_FILE = 100
   
   @classmethod
-  def setup(cls, spark=None):
+  def setup(cls, **kwargs):
     """Subclasses should override to create a dataset from scratch
     (e.g. download images, create a table, etc).  The base class
     is just a bunch of images from ImageNet.

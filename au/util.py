@@ -1037,8 +1037,12 @@ def tf_variable_summaries(var, prefix=''):
 
   if prefix:
     prefix = prefix + '/'
-  
-  prefix = var.name + '/'
+  else:
+    prefix = str(var.name)
+    prefix = prefix[:prefix.find('/')] # Exclude slashes in var name
+    prefix = prefix[:prefix.find(':')] # Exclude : too
+    prefix = prefix + '/'
+    print prefix, var.name
   
   with tf.name_scope(prefix + 'summaries'):
     mean = tf.reduce_mean(var)

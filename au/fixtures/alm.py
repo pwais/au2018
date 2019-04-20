@@ -48,13 +48,15 @@ class ImageRowToExampleXForm(object):
       
       assert tensor_names
 
-      ts = np.array([
-        acts.get_tensor(model, tn).flatten() for tn in tensor_names])
+      ts = np.concatenate(tuple(
+        acts.get_tensor(model, tn).flatten()
+        for tn in tensor_names))
       x = ts.flatten()
     
     y = None
     if self.y_is_visible:
       y = row.as_numpy()
+    y = y.flatten()
     
     assert x is not None and y is not None
     x = x.astype(self.x_dtype)
@@ -82,9 +84,17 @@ class ActivationsDataset(object):
             yield ex.x, ex.y, ex.uri
       return f
     
+    # TODO: make sizes predictable
+    x_shape = None
+    y_shape = None
+    x, y, uri = make_iter_ex_tuples(spark)().next()
+    x_shape = x.shape
+    y_shape = y.shape
+
     ds = tf.data.Dataset.from_generator(
           generator=make_iter_ex_tuples(spark),
-          output_types=(tf.float32, tf.float32, tf.string))
+          output_types=(tf.float32, tf.float32, tf.string),
+          output_shapes=(x_shape, y_shape, []))
     return ds
 
 

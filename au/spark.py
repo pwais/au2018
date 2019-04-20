@@ -164,7 +164,12 @@ class Spark(object):
         builder = builder.config(k, v)
     builder = builder.config('spark.port.maxRetries', '96')
     builder = builder.config('spark.task.maxFailures', '10')
-    # builder = builder.config('spark.sql.files.maxPartitionBytes', int(64 * 1e6))
+
+    # # FIXME parquet sizes
+    # builder = builder.config('spark.sql.files.maxPartitionBytes', int(8 * 1e6))
+    # TODO want large memory thingy for local mode only
+    bulder = builder.config('spark.driver.memory', '16g')
+    bulder = builder.config('spark.executor.memory', '16g')
     if cls.HIVE:
       # TODO fixme see mebbe https://creativedata.atlassian.net/wiki/spaces/SAP/pages/82255289/Pyspark+-+Read+Write+files+from+Hive
       # builder = builder.config("hive.metastore.warehouse.dir", '/tmp') 

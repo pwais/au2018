@@ -9,12 +9,13 @@ import tensorflow as tf
 
 from au.fixtures.tf import mnist
 mnist_params = mnist.MNIST.Params(
-                  BATCH_SIZE=10000,
-                  TRAIN_EPOCHS=30,
+                  BATCH_SIZE=100,
+                  TRAIN_EPOCHS=2,
+                  LIMIT=100,
                   TRAIN_WORKER_CLS=util.WholeMachineWorker)
 class MNISTTrainActivations(nnmodel.ActivationsTable):
   SPLIT = 'train'
-  TABLE_NAME = 'mnnist_train_activations'
+  TABLE_NAME = 'mnist_train_activations'
   NNMODEL_CLS = mnist.MNIST
   MODEL_PARAMS = mnist_params
   IMAGE_TABLE_CLS = mnist_params.TRAIN_TABLE
@@ -50,7 +51,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
 
       self.LEARNING_RATE = 1e-4
       self.TRAIN_EPOCHS = 50
-      self.LIMIT = -1
+      self.LIMIT = 10
       self.MULTI_GPU = True
       # self.INPUT_TENSOR_SHAPE = [
       #             None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1]
@@ -73,7 +74,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
         l.Dense(n_hidden, activation=tf.nn.relu)
         for n_hidden in au_params.ENCODER_LAYERS
       ])
-      import pdb; pdb.set_trace()
+
       encoded = encode(features, training=training)
       z_mu = l.Dense(au_params.Z_D, activation=None, name='z_mu')(encoded)
       z_log_sigma_sq = l.Dense(
@@ -87,7 +88,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
                 stddev=1,
                 dtype=tf.float32)
       z = z_mu + tf.sqrt(tf.exp(z_log_sigma_sq)) * noise
-      util.tf_variable_summaries(z)
+      util.tf_variable_summaries(z, prefix='z')
 
       ## z -> y
       decode = tf.keras.Sequential([
@@ -95,7 +96,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
         for n_hidden in au_params.DECODER_LAYERS
       ])
       decoded = decode(z, training=training)
-      y_size = tf.shape(labels)[-1]
+      y_size = labels.shape[-1]
       logits = l.Dense(y_size, activation=None, name='logits')(decoded)
       y = tf.sigmoid(logits, name='y')
       util.tf_variable_summaries(logits)
@@ -139,8 +140,10 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
         global_step = tf.train.get_or_create_global_step()
         tf.summary.scalar('global_step', global_step)
 
-        optimizer = tf.train.AdamOptimizer(au_params.LEARNING_RATE)
-        train_op = optimizer.minimize()
+        LR = au_params.LEARNING_RATE
+        tf.identity(LR, 'learning_rate')
+        optimizer = tf.train.AdamOptimizer(learning_rate=LR)
+        train_op = optimizer.minimize(total_loss)
 
         return tf.estimator.EstimatorSpec(
                     mode=tf.estimator.ModeKeys.TRAIN,
@@ -149,7 +152,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       elif mode == tf.estimator.ModeKeys.EVAL:
         return tf.estimator.EstimatorSpec(
             mode=tf.estimator.ModeKeys.EVAL,
-            loss=loss,
+            loss=total_loss,
             eval_metric_ops={
               'MSE': mse,
             })
@@ -191,36 +194,34 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
 
     def train_input_fn():
       train_ds = params.TRAIN_DATASET.as_tf_dataset(spark=spark)
+      if params.LIMIT >= 0:
+        train_ds = train_ds.take(params.LIMIT)
 
       # This flow doesn't need uri
       train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
-
-      if params.LIMIT >= 0:
-        train_ds = train_ds.take(params.LIMIT)
       train_ds = train_ds.batch(params.BATCH_SIZE)
       return train_ds
     
     def eval_input_fn():
       test_ds = params.TEST_DATASET.as_tf_dataset(spark=spark)
-
-      # This flow doesn't need uri
-      train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
-
       if params.LIMIT >= 0:
         test_ds = test_ds.take(params.LIMIT)
+
+      # This flow doesn't need uri
+      test_ds = test_ds.map(lambda arr, label, uri: (arr, label))
       test_ds = test_ds.batch(params.EVAL_BATCH_SIZE)
       return test_ds
     
     # Set up hook that outputs training logs
-    from official.utils.logs import hooks_helper
-    train_hooks = hooks_helper.get_train_hooks(
-        ['ExamplesPerSecondHook', 'LoggingTensorHook'],
-        model_dir=model_dir,
-        batch_size=params.BATCH_SIZE)
+    # from official.utils.logs import hooks_helper
+    # train_hooks = hooks_helper.get_train_hooks(
+    #     ['ExamplesPerSecondHook', 'LoggingTensorHook'],
+    #     model_dir=model_dir,
+    #     batch_size=params.BATCH_SIZE)
     
     # Train and evaluate model.
     for t in range(params.TRAIN_EPOCHS):
-      estimator.train(input_fn=train_input_fn, hooks=train_hooks)
+      estimator.train(input_fn=train_input_fn)#, hooks=train_hooks)
       if t % 10 == 0 or t >= params.TRAIN_EPOCHS - 1:
         eval_results = estimator.evaluate(input_fn=eval_input_fn)
         util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)

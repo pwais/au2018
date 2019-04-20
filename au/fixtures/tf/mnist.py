@@ -60,7 +60,7 @@ class MNISTDataset(dataset.ImageTable):
           yield row
           
           n += 1
-          if params.LIMIT >= 0 and n == params.LIMIT:
+          if params.LIMIT >= 0 and n >= params.LIMIT:
             break
 
           if n % log_interval == 0:
