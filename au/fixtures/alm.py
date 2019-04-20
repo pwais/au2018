@@ -57,6 +57,9 @@ class ImageRowToExampleXForm(object):
     if self.y_is_visible:
       y = row.as_numpy()
     y = y.flatten()
+
+    # MNIST FIXME
+    y = y / 255.
     
     assert x is not None and y is not None
     x = x.astype(self.x_dtype)
@@ -74,27 +77,44 @@ class ActivationsDataset(object):
   def as_tf_dataset(cls, spark=None):
     import tensorflow as tf
 
+    import cloudpickle
+
+    # TODO fixme
+    if not hasattr(cls, '_cache'):
+      import os
+      cls._cache = os.path.join('/tmp', cls.__name__ + '_cache')
+      if not os.path.exists(cls._cache):
+        from au.spark import Spark
+        from pyspark.sql import Row
+        with Spark.sess(spark) as spark:
+          imagerow_rdd = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
+          ex_rdd = imagerow_rdd.map(cls.ROW_XFORM)
+          ex_rdd = ex_rdd.map(lambda ex: Row(data=bytearray(cloudpickle.dumps(ex))))
+          spark.createDataFrame(ex_rdd).write.parquet(
+            cls._cache,
+            mode='overwrite',
+            compression='lz4')
+
     def make_iter_ex_tuples(s):
       def f():
         from au.spark import Spark
         with Spark.sess(s) as spark:
-          imagerow_rdd = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
-          ex_rdd = imagerow_rdd.map(cls.ROW_XFORM)
-          for ex in ex_rdd.toLocalIterator():
-            yield ex.x, ex.y, ex.uri
+          df = spark.read.parquet(cls._cache)
+          df = df.cache()
+          for rr in df.rdd.toLocalIterator():
+            r = cloudpickle.loads(rr.data)
+            yield r.x, r.y, r.uri
       return f
     
     # TODO: make sizes predictable
-    x_shape = None
-    y_shape = None
     x, y, uri = make_iter_ex_tuples(spark)().next()
-    x_shape = x.shape
-    y_shape = y.shape
+    cls._x_shape = x.shape
+    cls._y_shape = y.shape
 
     ds = tf.data.Dataset.from_generator(
           generator=make_iter_ex_tuples(spark),
           output_types=(tf.float32, tf.float32, tf.string),
-          output_shapes=(x_shape, y_shape, []))
+          output_shapes=(cls._x_shape, cls._y_shape, []))
     return ds
 
 

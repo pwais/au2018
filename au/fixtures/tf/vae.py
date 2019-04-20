@@ -68,6 +68,8 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
     def model_fn(features, labels, mode, params):
       training = (mode == tf.estimator.ModeKeys.TRAIN)
 
+      x = features
+
       ### Set up the model
       ## x -> z = N(z_mu, z_sigma)
       l = tf.keras.layers
@@ -76,7 +78,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
         for n_hidden in au_params.ENCODER_LAYERS
       ])
 
-      encoded = encode(features, training=training)
+      encoded = encode(x, training=training)
       z_mu = l.Dense(au_params.Z_D, activation=None, name='z_mu')(encoded)
       z_log_sigma_sq = l.Dense(
         au_params.Z_D, activation=None, name='z_log_sigma_sq')(encoded)
@@ -105,8 +107,13 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
 
       ### Set up losses
       ## Reconstruction Loss: cross-entropy of x and y
-      recon_loss = tf.nn.softmax_cross_entropy_with_logits(
-        labels=labels, logits=logits, name='recon_loss')
+      # recon_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(
+      #   labels=labels, logits=logits, name='recon_loss'))
+      y_ = labels
+      eps = 1e-10
+      recon_loss = tf.reduce_mean(
+        -tf.reduce_sum(
+          y * tf.log(y_ + eps) + (1 - y) * tf.log(1 - y_ + eps), axis=1))
       
       # Latent Loss: KL divergence between Z and N(0, 1)
       latent_loss = tf.reduce_mean(
@@ -144,7 +151,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
         LR = au_params.LEARNING_RATE
         tf.identity(LR, 'learning_rate')
         optimizer = tf.train.AdamOptimizer(learning_rate=LR)
-        train_op = optimizer.minimize(total_loss)
+        train_op = optimizer.minimize(total_loss, global_step)
 
         return tf.estimator.EstimatorSpec(
                     mode=tf.estimator.ModeKeys.TRAIN,
@@ -188,8 +195,9 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       config = config.replace(
         session_config=util.tf_create_session_config(restrict_gpus=[]))
 
+    model_fn = cls.create_model_fn(params)
     estimator = tf.estimator.Estimator(
-      model_fn=cls.create_model_fn(params),
+      model_fn=model_fn,
       params=None,
       config=config)
 
@@ -201,7 +209,9 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       # This flow doesn't need uri
       train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
       train_ds = train_ds.batch(params.BATCH_SIZE)
-      train_ds = train_ds.cache(os.path.join(params.MODEL_BASEDIR, 'train_cache'))
+      train_ds = train_ds.cache()#os.path.join(params.MODEL_BASEDIR, 'train_cache'))
+      # train_ds = train_ds.prefetch(10)
+      train_ds = train_ds.repeat(10000)
       return train_ds
     
     def eval_input_fn():
@@ -212,7 +222,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       # This flow doesn't need uri
       test_ds = test_ds.map(lambda arr, label, uri: (arr, label))
       test_ds = test_ds.batch(params.EVAL_BATCH_SIZE)
-      test_ds = test_ds.cache(os.path.join(params.MODEL_BASEDIR, 'test_cache'))
+      # test_ds = test_ds.cache(os.path.join(params.MODEL_BASEDIR, 'test_cache'))
       return test_ds
     
     # Set up hook that outputs training logs
