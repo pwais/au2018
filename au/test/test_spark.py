@@ -86,4 +86,63 @@ def test_spark_archive_zip():
     name_data = rdd.map(lambda entry: (entry.name, entry.data)).collect()
     assert sorted(name_data) == sorted((s, s) for s in ss)
 
+@pytest.mark.slow
+def test_spark_tf_dataset():
+  with testutils.LocalSpark.sess() as spark:
+    rdd = spark.sparkContext.parallelize(range(int(1e5)), numSlices=10)
+    from pyspark.sql import Row
+    df = spark.createDataFrame(rdd.map(lambda x: Row(x=x)))
+
+    from pyspark.sql.functions import spark_partition_id
+    df = df.withColumn('_pid', spark_partition_id())
+    num_partitions = df.rdd.getNumPartitions()
+
+    import tensorflow as tf
+    import multiprocessing
+    import numpy as np
+
+    def gen_rows(pid):
+      # assert False, pid
+      pds = tf.data.Dataset.from_tensors(pid)
+
+      def _gen_ds(ppid):
+        # assert False, (ppid, ppid.decode())
+        part_df = df.filter('_pid == %s' % ppid)
+        part_df.show()
+        return np.array([[r.x] for r in part_df.collect()], dtype=np.int64)
+        # def iter_results():
+        #   for r in part_df.collect():
+        #     yield (r.x,)
+        # return tf.data.Dataset.from_generator(
+        #           generator=iter_results,
+        #           output_types=(tf.int64,),
+        #           output_shapes=(tf.TensorShape([]),))
+      
+      return pds.map(lambda p: tuple(tf.py_func(_gen_ds, [p], [tf.int64])))
+
+      
+    
+    ds = tf.data.Dataset.from_tensor_slices(range(num_partitions))
+    # import pdb; pdb.set_trace()
+    ds = ds.apply(
+            tf.data.experimental.parallel_interleave(
+              gen_rows,
+              cycle_length=multiprocessing.cpu_count(),
+              sloppy=True))
+    
+    # ds = gen_rows(0)
+    with util.tf_data_session(ds) as (sess, iter_dataset):
+      n = 0
+      for x in iter_dataset():
+        n += 1
+        print x
+      print n
+
+
+    
+
+    import pdb; pdb.set_trace()
+    print 'moof'
+
+
 # TODO test run_callables
