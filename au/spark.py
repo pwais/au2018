@@ -539,6 +539,7 @@ class NumpyArray(object):
   def __eq__(self, other):
     return isinstance(other, self.__class__) and other.arr == self.arr
 
+
 def spark_df_to_tf_dataset(
       spark_df,
       spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
@@ -550,7 +551,7 @@ def spark_df_to_tf_dataset(
     (native code) threadpool.  Each thread reads a single Spark partition
     at a time.
 
-    This utility is similar to Petastorm's `make_reader` but is far simpler
+    This utility is similar to Petastorm's `make_reader()` but is far simpler
     and leverages Tensorflow's build-in threadpool (so we let Tensorflow
     do the read scheduling).
 
