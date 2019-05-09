@@ -10,20 +10,24 @@ import time
 
 from contextlib import contextmanager
 
+
 ### Logging
+
 _LOGS = {}
 def create_log(name='au'):
   global _LOGS
   if name not in _LOGS:
     import logging
     LOG_FORMAT = "%(asctime)s\t%(name)-4s %(process)d : %(message)s"
-    log = logging.getLogger("au")
+    log = logging.getLogger(name)
     log.setLevel(logging.INFO)
     console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     log.addHandler(console_handler)
     _LOGS[name] = log
   return _LOGS[name]
+
+# Spark workers will lazy-construct and cache logger instances
 log = create_log()
 
 
@@ -81,7 +85,9 @@ def fname_timestamp(random_suffix=True):
   return timestr
 
 class Proxy(object):
-  __slots__ = ('instance')
+  """A thin wrapper around an `instance` that supports custom semantics."""
+  
+  __slots__ = ('instance',)
   
   def __init__(self, instance):
     self.instance = instance
