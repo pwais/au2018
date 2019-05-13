@@ -406,6 +406,7 @@ def mnist_train(params, tf_config=None):
   if tf_config is None:
     tf_config = util.tf_create_session_config()
 
+  import tensorflow as tf
   tf.logging.set_verbosity(tf.logging.DEBUG)
   
   ## Model
@@ -468,10 +469,14 @@ def mnist_train(params, tf_config=None):
 
   # Train and evaluate model.
   for t in range(params.TRAIN_EPOCHS):
-    mnist_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
-    if t % 10 == 0 or t >= params.TRAIN_EPOCHS - 1:
-      eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
-      util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+    try:
+      mnist_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
+      if t % 10 == 0 or t >= params.TRAIN_EPOCHS - 1:
+        eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
+        util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+    except RuntimeError as e:
+      util.log.info('\nError during training, exiting training: %s ...' % (e,))
+      break
 
   # Export the model
   # TODO do we need this placeholder junk?

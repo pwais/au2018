@@ -208,6 +208,9 @@ class Activations(object):
   
   tensor_to_value = property(get_tensor_to_value, set_tensor_to_value)
 
+
+
+
 class FillActivationsTFDataset(FillActivationsBase):
   """A `FillActivationsBase` impl that leverages Tensorflow
   tf.Dataset to feed data into a tf.Graph""" 
@@ -341,6 +344,9 @@ class FillActivationsTFDataset(FillActivationsBase):
     tf.reset_default_graph()
     self.overall_thruput.stop_block()
 
+
+
+
 class ActivationsTable(object):
 
   TABLE_NAME = 'default'
@@ -391,6 +397,8 @@ class ActivationsTable(object):
           
           for act in activations:
             for tensor_name, value in act._tensor_to_value.iteritems():
+              # TODO: formalize Row.  NB: Tensors can be large, so don't
+              # try to stuff all tensors into one row.
               yield Row(
                 model_name=model.params.MODEL_NAME,
                 tensor_name=tensor_name,
@@ -424,6 +432,32 @@ class ActivationsTable(object):
   def as_df(cls, spark):
     df = spark.read.parquet(cls.table_root())
     return df
+
+  @classmethod
+  def to_imagerow_rdd(cls, spark=None, only_tensors=None):
+    from au.spark import Spark
+    with Spark.sess(spark) as spark:
+      imagerow_df = cls.IMAGE_TABLE_CLS.as_imagerow_df(spark)
+      activations_df = cls.as_df(spark)
+      if only_tensors:
+        activations_df = activations_df.filter(
+                          activations_df.tensor_name in only_tensors)
+
+      joined_df = activations_df.join(
+                    imagerow_df,
+                    (activations_df.uri == imagerow_df.uri,
+                     activations_df.dataset == imagerow_df.datset,
+                     activations_df.split == imagerow_df.split))
+      grouped_df = joined_df.groupBy('uri', 'dataset', 'split')
+
+      def to_imagerow(act_row, img_row):
+        row = dataset.Image(**img_row.asDict())
+        activations = Activations(**act_row.asDict())
+        row.attrs['activations'] = activations
+        yield row
+
+      imagerow_rdd = grouped_df.rdd.map(to_imagerow)
+      return imagerow_rdd
 
   @classmethod
   def save_tf_embedding_projector(
@@ -615,3 +649,9 @@ class ActivationsTable(object):
           
     assert False
       
+
+
+# class ILatentSpaceModel(object):
+  
+
+

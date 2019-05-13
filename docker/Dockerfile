@@ -92,7 +92,7 @@ RUN \
 COPY docker/.vimrc /root/.vimrc
 COPY docker/.screenrc /root/.screenrc
 COPY cluster/devbox/start_ssh.sh /opt/au/cluster/devbox/start_ssh.sh
-COPY cluster/devbox/id_devbox_rsa.pub /opt/au/cluster/devbox/id_devbox_rsa.pub
+#COPY cluster/devbox/id_devbox_rsa.pub /opt/au/cluster/devbox/id_devbox_rsa.pub
 RUN \
   apt-get update && \
   apt-get install -y \
@@ -111,11 +111,11 @@ RUN \
   curl -LO https://github.com/BurntSushi/ripgrep/releases/download/0.10.0/ripgrep_0.10.0_amd64.deb && \
   dpkg -i ripgrep_0.10.0_amd64.deb
 
-ENV DOCKERVERSION 18.09.0-ce
-RUN curl -fsSLO https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKERVERSION}.tgz \
-  && tar xzvf docker-${DOCKERVERSION}.tgz --strip 1 \
-                 -C /usr/local/bin docker/docker \
-  && rm docker-${DOCKERVERSION}.tgz
+#ENV DOCKERVERSION 18.09.0-ce
+#RUN curl -fsSLO https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKERVERSION}.tgz \
+#  && tar xzvf docker-${DOCKERVERSION}.tgz --strip 1 \
+#                 -C /usr/local/bin docker/docker \
+#  && rm docker-${DOCKERVERSION}.tgz
 
 ## AU Python
 COPY requirements.txt /tmp/requirements.txt
