@@ -1,5 +1,6 @@
 from au import util
 from au.spark import NumpyArray
+from au.spark import spark_df_to_tf_dataset
 from au.test import testconf
 from au.test import testutils
 
@@ -86,63 +87,53 @@ def test_spark_archive_zip():
     name_data = rdd.map(lambda entry: (entry.name, entry.data)).collect()
     assert sorted(name_data) == sorted((s, s) for s in ss)
 
+
 @pytest.mark.slow
-def test_spark_tf_dataset():
+def test_spark_df_to_tf_dataset():
   with testutils.LocalSpark.sess() as spark:
-    rdd = spark.sparkContext.parallelize(range(int(1e5)), numSlices=10)
-    from pyspark.sql import Row
-    df = spark.createDataFrame(rdd.map(lambda x: Row(x=x)))
 
-    from pyspark.sql.functions import spark_partition_id
-    df = df.withColumn('_pid', spark_partition_id())
-    num_partitions = df.rdd.getNumPartitions()
-
-    import tensorflow as tf
-    import multiprocessing
     import numpy as np
+    import tensorflow as tf
+    from pyspark.sql import Row
 
-    def gen_rows(pid):
-      # assert False, pid
-      pds = tf.data.Dataset.from_tensors(pid)
+    def tf_dataset_to_list(ds):
+      with util.tf_data_session(ds) as (sess, iter_dataset):
+        return list(iter_dataset())
 
-      def _gen_ds(ppid):
-        # assert False, (ppid, ppid.decode())
-        part_df = df.filter('_pid == %s' % ppid)
-        part_df.show()
-        return np.array([[r.x] for r in part_df.collect()], dtype=np.int64)
-        # def iter_results():
-        #   for r in part_df.collect():
-        #     yield (r.x,)
-        # return tf.data.Dataset.from_generator(
-        #           generator=iter_results,
-        #           output_types=(tf.int64,),
-        #           output_shapes=(tf.TensorShape([]),))
-      
-      return pds.map(lambda p: tuple(tf.py_func(_gen_ds, [p], [tf.int64])))
+    df = spark.createDataFrame([
+      Row(id='r1', x=1, y=[3., 4., 5.]),
+      Row(id='r2', x=2, y=[6.]),
+      Row(id='r3', x=3, y=[7., 8., 9.]),
+    ])
 
-      
-    
-    ds = tf.data.Dataset.from_tensor_slices(range(num_partitions))
-    # import pdb; pdb.set_trace()
-    ds = ds.apply(
-            tf.data.experimental.parallel_interleave(
-              gen_rows,
-              cycle_length=multiprocessing.cpu_count(),
-              sloppy=True))
-    
-    # ds = gen_rows(0)
-    with util.tf_data_session(ds) as (sess, iter_dataset):
-      n = 0
-      for x in iter_dataset():
-        n += 1
-        print x
-      print n
+    # Test empty
+    ds = spark_df_to_tf_dataset(
+            df.filter('x == False'), # Empty!
+            spark_row_to_tf_element=lambda r: ('test',),
+            tf_element_types=(tf.string,))
+    assert tf_dataset_to_list(ds) == []
 
+    # Test simple
+    ds = spark_df_to_tf_dataset(
+            df,
+            spark_row_to_tf_element=lambda r: (r.x,),
+            tf_element_types=(tf.int64,))
+    assert sorted(tf_dataset_to_list(ds)) == [(1,), (2,), (3,)]
 
-    
-
-    import pdb; pdb.set_trace()
-    print 'moof'
-
+    # Test Complex
+    ds = spark_df_to_tf_dataset(
+            df,
+            spark_row_to_tf_element=lambda r: (r.x, r.id, r.y),
+            tf_element_types=(tf.int64, tf.string, tf.float64))
+    expected = [
+      (1, 'r1', np.array([3., 4., 5.])),
+      (2, 'r2', np.array([6.])),
+      (3, 'r3', np.array([7., 8., 9.])),
+    ]
+    items = zip(sorted(tf_dataset_to_list(ds)), sorted(expected))
+    for actual, exp in items:
+      assert len(actual) == len(exp)
+      for i in range(len(actual)):
+        np.testing.assert_array_equal(actual[i], exp[i])
 
 # TODO test run_callables

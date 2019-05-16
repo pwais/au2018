@@ -287,7 +287,8 @@ class Spark(object):
       left_types = {f.name: f.dataType for f in df.schema}
       right_types = {f.name: f.dataType for f in df_other.schema}
       left_fields = set((f.name, f.dataType, f.nullable) for f in df.schema)
-      right_fields = set((f.name, f.dataType, f.nullable) for f in df_other.schema)
+      right_fields = set(
+        (f.name, f.dataType, f.nullable) for f in df_other.schema)
 
       from pyspark.sql.functions import lit
 
@@ -538,3 +539,97 @@ class NumpyArray(object):
   def __eq__(self, other):
     return isinstance(other, self.__class__) and other.arr == self.arr
 
+
+def spark_df_to_tf_dataset(
+      spark_df,
+      spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
+      tf_element_types, # E.g. [tf.int64]
+      non_deterministic_element_order=True,
+      num_reader_threads=-1):
+    """Create a tf.data.Dataset that reads from the Spark Dataframe
+    `spark_df`.  Executes parallel reads using the Tensorflow's internal
+    (native code) threadpool.  Each thread reads a single Spark partition
+    at a time.
+
+    This utility is similar to Petastorm's `make_reader()` but is far simpler
+    and leverages Tensorflow's build-in threadpool (so we let Tensorflow
+    do the read scheduling).
+
+    Args:
+      spark_df (pyspark.sql.DataFrame): Read from this Dataframe
+      spark_row_to_tf_element (func): 
+        Use this function to map each pyspark.sql.Row in `spark_df`
+        to a tuple that represents a single element of the
+        induced TF Dataset.
+      tf_element_types (tuple):
+        The types of the elements that `spark_row_to_tf_element` returns;
+        e.g. (tf.float32, tf.string).
+      non_deterministic_element_order (bool):
+        Allow the resulting tf.data.Dataset to have elements in
+        non-deterministic order for speed gains.
+      num_reader_threads (int):
+        Tell Tensorflow to use this many reader threads, or use -1
+        to provision one reader thread per CPU core.
+    
+    Returns:
+      tf.data.Dataset: The induced TF Datset with one element per
+        row in `spark_df`.
+    """
+
+    if num_reader_threads < 1:
+      import multiprocessing
+      num_reader_threads = multiprocessing.cpu_count()
+
+    # Each Tensorflow reader thread will read a single Spark partition
+    from pyspark.sql.functions import spark_partition_id
+    df = spark_df.withColumn('_spark_part_id', spark_partition_id())
+    
+    import tensorflow as tf
+    def to_dataset(pid_tensor):
+      """Given a Tensor containing a single Spark partition ID,
+      return a TF Dataset that contains all elements from that partition."""
+      pds = tf.data.Dataset.from_tensors(pid_tensor)
+      
+      def pid_to_element_cols(pid):
+        part_df = df.filter('_spark_part_id == %s' % pid)
+        rows = part_df.collect()
+        if not rows:
+          # Tensorflow expects empty numpy columns of promised dtype
+          import numpy as np
+          return tuple(
+            np.empty(0, dtype=tf_dtype.as_numpy_dtype)
+            for tf_dtype in tf_element_types
+          )
+
+        xformed = [spark_row_to_tf_element(row) for row in rows]
+
+        # Sadly TF py_func can't easily return a list of objects, so we
+        # re-organize the rows into columns, each which has a known type.
+        import itertools
+        cwise = list(itertools.izip(*xformed))
+        return cwise
+      
+      return pds.map(
+        lambda p: tuple(tf.py_func(
+          pid_to_element_cols, [p], tf_element_types)))
+            # NB: why tuple()? https://github.com/tensorflow/tensorflow/issues/12396#issuecomment-323407387
+    
+    ds = tf.data.Dataset.range(df.rdd.getNumPartitions())
+    ds = ds.apply(
+            # Use `parallel_interleave` to have the Tensorflow reader
+            # threadpool read in parallel from Spark
+            tf.data.experimental.parallel_interleave(
+              to_dataset,
+              cycle_length=num_reader_threads,
+              sloppy=non_deterministic_element_order))
+    
+    # `ds` is now a dataset where elements are grouped by Spark partition, e.g.
+    # [x1_p1, x2_p1, ...], [x1_p2, x2_p2, ...], ...
+    # We want a dataset that's flat:
+    # [x1_p1, x2_p1, ..., x1_p2, x2_p2, ...], ...
+    # The user expects a tf.data.Dataset that fascades a flat sequence of
+    # elements.  (Because, among other things, the user wants to choose
+    # a batch size independent of Spark partition size).  Thus we
+    # use `unbatch` below.
+    ds = ds.apply(tf.contrib.data.unbatch())
+    return ds
