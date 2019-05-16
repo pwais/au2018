@@ -40,27 +40,6 @@ class Sobel(nnmodel.INNModel):
         sobel = tf.image.sobel_edges(input_image_f)
         out = tf.identity(sobel, name='sobel')
       return g.as_graph_def()
-
-
-    #       pred = tf_model(input_image_f, training=False)
-    #       checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
-    #       saver = tf.train.import_meta_graph(
-    #                             checkpoint + '.meta',
-    #                             clear_devices=True)
-    #       return util.give_me_frozen_graph(
-    #                           checkpoint,
-    #                           nodes=list(self.output_names) + [input_image, uris],
-    #                           saver=saver,
-    #                           base_graph=g,
-    #                           sess=sess)
-
-
-    # def create_inference_graph(self, input_image, base_graph):
-    #   with base_graph.as_default():
-        
-    #     sobel = tf.image.sobel_edges(tf.cast(input_image, tf.float32))
-    #     self.out = tf.identity(sobel, name='sobel')
-    #   return base_graph
     
     @property
     def output_names(self):
@@ -108,8 +87,6 @@ def _check_rows(fixture, filled_rows):
 
     acts = row.attrs['activations']
     assert acts
-    act = acts[0]
-    assert act.model_name == igraph.model_name
     
     import imageio
     import numpy as np
@@ -117,7 +94,7 @@ def _check_rows(fixture, filled_rows):
     if '202228408_eccfe4790e' in row.uri:
     
       tensor_name = igraph.output_names[0]
-      sobel_tensor = act.tensor_to_value[tensor_name]
+      sobel_tensor = acts.get_tensor(igraph.model_name, tensor_name)
       
       sobel_y = sobel_tensor[...,0]
       sobel_x = sobel_tensor[...,1]
@@ -143,7 +120,7 @@ def _check_rows(fixture, filled_rows):
       
       assert sobel_y_bytes == open(SOBEL_Y_TEST_IMG_PATH).read()
       assert sobel_x_bytes == open(SOBEL_X_TEST_IMG_PATH).read()
-    
+
       # For debugging
       visible_path = row.to_debug()
       imageio.imwrite(visible_path + '.sobel_x.png', sobel_x)
@@ -180,7 +157,11 @@ def test_fill_activations_table(monkeypatch):
   with testutils.LocalSpark.sess() as spark:
     TestActivationsTable.setup(spark=spark)
 
-    df = spark.read.parquet(TestActivationsTable.table_root())
-    df.createOrReplaceTempView("sobel_activations")
-    spark.sql("SELECT * FROM sobel_activations").show()
+    df = TestActivationsTable.as_df(spark)
+    expected_num_rows = dataset.ImageTable.as_imagerow_df(spark).count()
+    assert df.count() == expected_num_rows
+    df.show()
 
+    imagerow_rdd = TestActivationsTable.to_imagerow_rdd(spark=spark)
+    rows = imagerow_rdd.collect()
+    _check_rows(fixture, rows)

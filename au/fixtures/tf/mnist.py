@@ -60,7 +60,7 @@ class MNISTDataset(dataset.ImageTable):
           yield row
           
           n += 1
-          if params.LIMIT >= 0 and n == params.LIMIT:
+          if params.LIMIT >= 0 and n >= params.LIMIT:
             break
 
           if n % log_interval == 0:
@@ -85,8 +85,13 @@ class MNISTDataset(dataset.ImageTable):
         cls._datasets_iter_image_rows(params=params))
   
   @classmethod
-  def setup(cls, params=None):
-    cls.save_to_image_table(cls._datasets_iter_image_rows(params=params))
+  def setup(cls, **kwargs):
+    if not os.path.exists(cls.table_root()):
+      rows = cls._datasets_iter_image_rows(params=kwargs.get('params'))
+      if kwargs.get('spark'):
+        spark = kwargs['spark']
+        rows = spark.sparkContext.parallelize(rows)
+      cls.save_to_image_table(rows, spark=kwargs.get('spark'))
   
   @classmethod
   def as_imagerow_df(cls, spark):
@@ -169,9 +174,6 @@ class MNISTDataset(dataset.ImageTable):
         #   label = tf.reshape(label, [])  # label is a scalar
         #   return tf.to_int32(label)
         yield arr, int(row.label), row.uri
-
-        # t.update_tallies(n=1, num_bytes=arr.nbytes)
-        # t.maybe_log_progress(n=1000)
 
     d = tf.data.Dataset.from_generator(
               generator=iter_mnist_tuples,
@@ -337,71 +339,6 @@ class model_fn(object):
           eval_metric_ops=eval_metric_ops,
       )
 
-# def test_dataset(params):
-#   from official.mnist import dataset as mnist_dataset
-#   test_ds = mnist_dataset.test(params.DATA_BASEDIR)
-#   if params.LIMIT >= 0:
-#     test_ds = test_ds.take(params.LIMIT)
-#   test_ds = test_ds.batch(params.BATCH_SIZE)
-#   return test_ds
-
-# def mnist_train(params):
-#   log = util.create_log()
-#   tf.logging.set_verbosity(tf.logging.DEBUG)
-  
-#   ## Model
-#   model_dir = params.MODEL_BASEDIR
-#   tf.gfile.MakeDirs(params.MODEL_BASEDIR)
-  
-#   mnist_classifier = tf.estimator.Estimator(
-#     model_fn=model_fn,
-#     params=None,
-#     config=tf.estimator.RunConfig(
-#       model_dir=model_dir,
-#       save_summary_steps=10,
-#       save_checkpoints_secs=10,
-#       session_config=util.tf_create_session_config(),
-#       log_step_count_steps=10))
-    
-#   ## Data
-#   def train_input_fn():
-#     from official.mnist import dataset as mnist_dataset
-    
-#     # Load the datasets
-#     train_ds = mnist_dataset.train(params.DATA_BASEDIR)
-#     if params.LIMIT >= 0:
-#       train_ds = train_ds.take(params.LIMIT)
-#     train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
-#     return train_ds
-  
-#   def eval_input_fn():
-#     test_ds = test_dataset(params)
-#     # No idea why we return an interator thingy instead of a dataset ...
-#     return test_ds.make_one_shot_iterator().get_next()
-
-#   # Set up hook that outputs training logs every 100 steps.
-#   from official.utils.logs import hooks_helper
-#   train_hooks = hooks_helper.get_train_hooks(
-#       ['ExamplesPerSecondHook',
-#        'LoggingTensorHook'],
-#       model_dir=model_dir,
-#       batch_size=params.BATCH_SIZE)
-
-#   # Train and evaluate model.
-#   for _ in range(params.TRAIN_EPOCHS):
-#     mnist_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
-#     eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
-#     log.info('\nEvaluation results:\n\t%s\n' % eval_results)
-
-#   # Export the model
-#   # TODO do we need this placeholder junk?
-#   image = tf.placeholder(tf.float32, [None, 28, 28, 1], name='input_image')
-#   input_fn = tf.estimator.export.build_raw_serving_input_receiver_fn({
-#       'image': image,
-#   })
-#   mnist_classifier.export_savedmodel(params.MODEL_BASEDIR, input_fn)
-
-
 def mnist_train(params, tf_config=None):
   if tf_config is None:
     tf_config = util.tf_create_session_config()
@@ -434,7 +371,7 @@ def mnist_train(params, tf_config=None):
     # Load the dataset
     train_ds = params.TRAIN_TABLE.to_mnist_tf_dataset(spark=spark)
 
-    # Flow doesn't need uri
+    # This flow doesn't need uri
     train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
 
     if params.LIMIT >= 0:
@@ -448,7 +385,7 @@ def mnist_train(params, tf_config=None):
   def eval_input_fn():
     test_ds = params.TEST_TABLE.to_mnist_tf_dataset(spark=spark)
 
-    # Flow doesn't need uri
+    # This flow doesn't need uri
     test_ds = test_ds.map(lambda arr, label, uri: (arr, label))
 
     if params.LIMIT >= 0:
@@ -520,68 +457,22 @@ class MNISTGraph(nnmodel.TFInferenceGraphFactory):
                           saver=saver,
                           base_graph=g)
 
-
-  # def create_inference_graph(self, uris, input_image, base_graph):
-  #   log = util.create_log()
-
-  #   gdef_frozen = self.create_frozen_graph_def()
-
-  #   self.graph = base_graph
-  #   with self.graph.as_default():
-  #     tf.import_graph_def(
-  #       gdef_frozen,
-  #       name='',
-  #       input_map={
-  #         'au_inf_input': tf.cast(input_image, tf.float32),
-  #         'au_inf_uris': uris,
-  #             # https://stackoverflow.com/a/33770771
-  #       })
-
-  #   # with base_graph.as_default():
-  #   #   sess = util.tf_cpu_session()
-  #   #   with sess.as_default():
-  #   #     tf_model = create_model()
-
-  #   #     # Create ops and load weights
-        
-  #   #     # root = tf.train.Checkpoint(model=tf_model)
-  #   #     # root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
-  #   #     # log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
-          
-  #   #     pred = tf_model(tf.cast(input_image, tf.float32), training=False)
-  #   #     uris = tf.identity(uris, name='au_uris')
-  #   #     checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
-  #   #     saver = tf.train.import_meta_graph(
-  #   #                           checkpoint + '.meta',
-  #   #                           clear_devices=True)
-  #   #     self.graph = util.give_me_frozen_graph(
-  #   #                         checkpoint,
-  #   #                         nodes=list(self.output_names) + [input_image, uris],
-  #   #                         saver=saver,
-  #   #                         base_graph=base_graph,
-  #   #                         sess=sess)
-
-  #   import pprint
-  #   util.log.info("Loaded graph:")
-  #   util.log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(self.graph)))
-  #   return self.graph 
-
   @property
   def output_names(self):
     return (
-      'IteratorGetNext:1',
-      'sequential/reshape/Reshape:0',
-      'sequential/conv2d/BiasAdd:0',
-      'sequential/conv2d_1/Conv2D:0',
-      'sequential/max_pooling2d_1/MaxPool:0',
-      'sequential/flatten/Reshape:0',
-      'sequential/dense_1/MatMul:0',
-      'sequential/dropout/Identity:0',
-
-      # 'sequential/conv2d/Relu:0',
-      # 'sequential/conv2d_1/Relu:0',
-      # 'sequential/dense/Relu:0',
+      # 'IteratorGetNext:1',
+      # 'sequential/reshape/Reshape:0',
+      # 'sequential/conv2d/BiasAdd:0',
+      # 'sequential/conv2d_1/Conv2D:0',
+      # 'sequential/max_pooling2d_1/MaxPool:0',
+      # 'sequential/flatten/Reshape:0',
       # 'sequential/dense_1/MatMul:0',
+      # 'sequential/dropout/Identity:0',
+
+      'sequential/conv2d/Relu:0',
+      'sequential/conv2d_1/Relu:0',
+      'sequential/dense/Relu:0',
+      'sequential/dense_1/MatMul:0',
     )
 
 # Based upon official/mnist/dataset.py
@@ -639,7 +530,7 @@ class MNIST(nnmodel.INNModel):
       #   # def __init__(self, params):
       #   #   self.params=params
       def run(self):
-        print 'self._gpu_ids', self._gpu_ids, os.getpid()
+        # print 'self._gpu_ids', self._gpu_ids, os.getpid()
         tf_config = util.tf_create_session_config(restrict_gpus=self._gpu_ids)
         util.log.info("Training ...")
         mnist_train(params, tf_config=tf_config)

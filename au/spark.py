@@ -162,9 +162,14 @@ class Spark(object):
     if cls.CONF_KV is not None:
       for k, v in cls.CONF_KV.iteritems():
         builder = builder.config(k, v)
-    # builder = builder.config('spark.storage.memoryFraction', '0.1')
-    # builder = builder.config('spark.driver.memory', '4g')
-    # builder = builder.config('spark.sql.files.maxPartitionBytes', int(64 * 1e6))
+    builder = builder.config('spark.port.maxRetries', '96')
+    builder = builder.config('spark.task.maxFailures', '10')
+
+    # # FIXME parquet sizes
+    # builder = builder.config('spark.sql.files.maxPartitionBytes', int(8 * 1e6))
+    # TODO want large memory thingy for local mode only
+    bulder = builder.config('spark.driver.memory', '16g')
+    bulder = builder.config('spark.executor.memory', '16g')
     if cls.HIVE:
       # TODO fixme see mebbe https://creativedata.atlassian.net/wiki/spaces/SAP/pages/82255289/Pyspark+-+Read+Write+files+from+Hive
       # builder = builder.config("hive.metastore.warehouse.dir", '/tmp') 
@@ -481,6 +486,9 @@ class K8SSpark(Spark):
 # https://apache.googlesource.com/spark/+/refs/heads/master/python/pyspark/sql/tests.py#119
 # Sadly they don't have a UDT for tensors... not even in Tensorframes
 # https://github.com/databricks/tensorframes   o_O
+#
+# BREADCRUMBS: so these UDTs can't be used in nested structs :( pyspark
+# isn't smart enough.  
 
 class NumpyArrayUDT(types.UserDefinedType):
   """SQL User-Defined Type (UDT) for *opaque* numpy arrays.  Unlike Spark's
@@ -519,14 +527,9 @@ class NumpyArray(object):
 
   def get_bytes(self):
     return pickle.dumps(self.arr)
-    # buf = io.BytesIO()
-    # np.save(buf, self.arr)
-    #   # NB: do NOT use savez / gzip b/c we'll let Snappy compress things.
-    # return buf.getvalue()
 
   @staticmethod
   def from_bytes(b):
-    # arr = np.load(io.BytesIO(b), encoding='bytes')
     arr = pickle.loads(b)
     return NumpyArray(arr)
 

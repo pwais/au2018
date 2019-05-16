@@ -1,11 +1,14 @@
 import os
+import pickle
 
 from au import conf
 from au import util
 from au.fixtures import dataset
+from au.spark import Spark
 
 class INNModel(object):
-  """A fascade for (neural network) models. Probably needs a new name."""
+  """A fascade for discriminative (neural network) models. Probably needs a
+  new name."""
   
   class ParamsBase(object):
     def __init__(self, model_name='INNModel', **overrides):
@@ -51,10 +54,7 @@ class INNModel(object):
       for attrname in sorted(dir(self)):
         if not attrname.startswith('_') and attrname.isupper():
           v = getattr(self, attrname)
-          
-
       return row
-
 
   def __init__(self, params=None):
     self.params = params or INNModel.ParamsBase()
@@ -73,7 +73,16 @@ class INNModel(object):
     """Create and return a factory for creating inference graph(s)
     based upon this model instance."""
     return TFInferenceGraphFactory()
+
+class INNGenerativeModel(INNModel):
+  """A fascade for generative / 'unsupervised' (neural network) models.
+  Probably needs a new name."""
+
+  def create_generator(self):
+    raise ValueError("TODO")
   
+  def create_transformer(self):
+    raise ValueError("TODO")
 
 
 class TFInferenceGraphFactory(object):
@@ -125,18 +134,7 @@ class TFInferenceGraphFactory(object):
       '\n' +
       pprint.pformat(
         tf.contrib.graph_editor.get_tensors(self.graph)))
-    return self.graph 
-  
-#
-#
-#
-  # def make_normalize_ftor(self):
-  #   input_dims = self.input_tensor_shape
-  #   target_hw = (input_dims[1], input_dims[2])
-  #   target_nchan = input_dims[3]
-  #   return dataset.FillNormalized(
-  #                       target_hw=target_hw,
-  #                       target_nchan=target_nchan)
+    return self.graph
   
   @property
   def input_tensor_shape(self):
@@ -161,6 +159,74 @@ class TFInferenceGraphFactory(object):
 
 ## Utils
 
+class Activations(object):
+  """A pyspark-SQL-friendly wrapper for a set of activations"""
+
+  __slots__ = ('_model_to_tensor_to_value',)
+
+  def __init__(self, **datum):
+    self._model_to_tensor_to_value = dict(datum)
+
+    # # Unpack numpy arrays
+    # for m in self._model_to_tensor_to_value:
+    #   for tn in self._model_to_tensor_to_value[m]:
+    #     from au.spark import NumpyArray
+    #     tv = self._model_to_tensor_to_value[m][tn]
+    #     if isinstance(tv, (NumpyArray,)):
+    #       self._model_to_tensor_to_value[m][tn] = tv.arr
+
+  
+  def set_tensor(self, model_name, tensor_name, tensor_value):
+    self._model_to_tensor_to_value.setdefault(model_name, {})
+    self._model_to_tensor_to_value[model_name][tensor_name] = tensor_value
+  
+  def set_tensors(self, model_name, tensor_name_to_value):
+    for tn, tv in tensor_name_to_value.iteritems():
+      self.set_tensor(model_name, tn, tv)
+
+  def get_tensor(self, model_name, tensor_name):
+    return self._model_to_tensor_to_value.get(model_name, {}).get(tensor_name)
+
+  def get_models(self):
+    return self._model_to_tensor_to_value.keys()
+  
+  def get_default_model(self):
+    return sorted(self._model_to_tensor_to_value.iterkeys())[0]
+  
+  def get_tensor_names(self, model_name):
+    return self._model_to_tensor_to_value.get(model_name, {}).keys()
+
+  def to_rows(self):
+    # pyspark sees Row as a struct / map type
+    from pyspark.sql import Row
+    
+    # TODO refine into rowable adapter thing ...
+    for model, t_to_v in self._model_to_tensor_to_value.iteritems():
+      yield Row(
+        model=model,
+        tensor_to_value=dict(
+          (tn, pickle.dumps(tv)) for tn, tv in t_to_v.iteritems()),
+      )
+
+  @staticmethod
+  def from_rows(rows):
+    acts = Activations()
+    for row in rows:
+      for tn, tvb in row.tensor_to_value.iteritems():
+        acts.set_tensor(row.model, tn, pickle.loads(tvb))
+    return acts
+    
+    # pd_df):
+    # for model_name in pd_df.model_name.unique():
+    #   act_df = pd_df[pdf_df.model_name == model_name]
+    #   tensor_to_value = dict(
+    #     (r.tensor_name, r.tensor_value)
+    #     for r in act_df.iterrows())
+    #   yield Activations(
+    #     model_name=model_name,
+    #     tensor_to_value=tensor_to_value,
+    #   )
+
 class FillActivationsBase(object):
   
   def __init__(self, tigraph_factory=None, model=None):
@@ -180,35 +246,8 @@ class FillActivationsBase(object):
   def __call__(self, iter_imagerows):
     # Identity op; fills nothing!
     for row in iter_imagerows:
-      row['activations'] = row.get('activations', [])
+      row['activations'] = row.get('activations', Activations())
       yield row
-
-class Activations(object):
-  """A pyspark-SQL-friendly wrapper for a set of activations"""
-
-  __slots__ = ('model_name', '_tensor_to_value')
-
-  def __init__(self, **kwargs):
-    self.model_name = kwargs.get('model_name', '')
-    self._tensor_to_value = {}
-    if 'tensor_to_value' in kwargs:
-      self.tensor_to_value = kwargs['tensor_to_value']
-  
-  def get_tensor_to_value(self):
-    # Unpack numpy arrays
-    if self._tensor_to_value is None:
-      return {}
-    return dict((k, v.arr) for k, v in self._tensor_to_value.iteritems())
-  
-  def set_tensor_to_value(self, tensor_to_value):
-    # Pack numpy arrays for Spark
-    from au.spark import NumpyArray
-    for k, v in tensor_to_value.iteritems():
-      self._tensor_to_value[k] = NumpyArray(v)
-  
-  tensor_to_value = property(get_tensor_to_value, set_tensor_to_value)
-
-
 
 
 class FillActivationsTFDataset(FillActivationsBase):
@@ -328,19 +367,19 @@ class FillActivationsTFDataset(FillActivationsBase):
             row = uri_to_row_cache.pop(row_uri) # Don't let cache grow
 
             # Fill the row with the activation data
-            if 'activations' not in row.attrs:
-              row.attrs['activations'] = []  
-            
-            act = Activations(
-                      model_name=self.tigraph_factory.model_name,
-                      tensor_to_value=tensor_to_value)
-            row.attrs['activations'].append(act)
+            if not row.attrs:
+              row.attrs = {}
+
+            act = row.attrs.get('activations') or Activations()
+            act.set_tensors(self.tigraph_factory.model_name, tensor_to_value)
+            row.attrs['activations'] = act
             yield row
     
             self.tf_thruput.update_tallies(n=1)
             self.tf_thruput.maybe_log_progress(n=1000)
             self.overall_thruput.update_tallies(n=1)
             self.overall_thruput.maybe_log_progress(n=1000)
+    
     tf.reset_default_graph()
     self.overall_thruput.stop_block()
 
@@ -363,70 +402,49 @@ class ActivationsTable(object):
     if os.path.exists(cls.table_root()):
       return
 
-    util.log.info("Building table %s ..." % cls.TABLE_NAME)
+    cls.IMAGE_TABLE_CLS.setup(spark=spark, params=cls.MODEL_PARAMS)
 
-    from au.spark import Spark
+    util.log.info("Building table %s ..." % cls.TABLE_NAME)
     with Spark.sess(spark) as spark:
-      # ssc, dstream = cls.IMAGE_TABLE_CLS.as_imagerow_rdd_stream(spark)
       imagerow_rdd = cls.IMAGE_TABLE_CLS.as_imagerow_rdd(spark)
       
-      # Since each output row (activations) might be bigger than the input
-      # row (image), explode the number of partitions to avoid OOMs in
-      # the Spark Parquet-writing process at the end.
-      imagerow_rdd = imagerow_rdd.repartition(
-        imagerow_rdd.getNumPartitions() * 10)
+      # # Since each output row (activations) might be bigger than the input
+      # # row (image), and since Tensorflow will need some memory, we explode
+      # # the number of partitions to avoid OOMs e.g. in the Spark
+      # # Parquet-writing process at the end.
+      # imagerow_rdd = imagerow_rdd.repartition(
+      #   imagerow_rdd.getNumPartitions() * 10)
 
       model = cls.NNMODEL_CLS.load_or_train(cls.MODEL_PARAMS)
       filler = FillActivationsTFDataset(model=model)
-
-      # def save_activated(t, rdd):
-        # if rdd.isEmpty():
-        #   return
-        # util.log.info("wat %s %s" % (t, rdd.getNumPartitions()))
       activated = imagerow_rdd.mapPartitions(filler)
 
       def to_activation_rows(imagerows):
         from pyspark.sql import Row
         for row in imagerows:
-          if row.attrs is '':
-            continue
-
-          activations = row.attrs.get('activations')
-          if not activations:
-            continue
-          
-          for act in activations:
-            for tensor_name, value in act._tensor_to_value.iteritems():
-              # TODO: formalize Row.  NB: Tensors can be large, so don't
-              # try to stuff all tensors into one row.
-              yield Row(
-                model_name=model.params.MODEL_NAME,
-                tensor_name=tensor_name,
-                tensor_value=value,
-                
-                dataset=row.dataset,
-                split=row.split,
-                uri=row.uri,
-              )
+          if row.attrs:
+            act = row.attrs.get('activations')
+            if act:
+              for arow in act.to_rows():
+                yield Row(
+                  # Partition / indentifying keys
+                  dataset=row.dataset,
+                  split=row.split,
+                  uri=row.uri,
+                  **arow.asDict(recursive=True)
+                )
       
       activation_row_rdd = activated.mapPartitions(to_activation_rows)
       df = spark.createDataFrame(activation_row_rdd)
       df.show()
       partition_cols = list(dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
-      partition_cols.append('tensor_name')
+      partition_cols.append('model')
       df.write.parquet(
                   path=cls.table_root(),
                   mode='overwrite',
                   compression='lz4',
                   partitionBy=partition_cols)
-        # writer.start()
-        # writer.processAllAvailable()
-        # writer.stop()
       util.log.info("... wrote to %s ." % cls.table_root())
-      # dstream.foreachRDD(save_activated)
-      # ssc.start()
-      # ssc.stop(stopSparkContext=False, stopGraceFully=True)
-      # ssc.stop()
 
   @classmethod
   def as_df(cls, spark):
@@ -434,30 +452,35 @@ class ActivationsTable(object):
     return df
 
   @classmethod
-  def to_imagerow_rdd(cls, spark=None, only_tensors=None):
-    from au.spark import Spark
+  def as_imagerow_rdd(cls, spark=None):
     with Spark.sess(spark) as spark:
-      imagerow_df = cls.IMAGE_TABLE_CLS.as_imagerow_df(spark)
+      
       activations_df = cls.as_df(spark)
-      if only_tensors:
-        activations_df = activations_df.filter(
-                          activations_df.tensor_name in only_tensors)
 
-      joined_df = activations_df.join(
-                    imagerow_df,
-                    (activations_df.uri == imagerow_df.uri,
-                     activations_df.dataset == imagerow_df.datset,
-                     activations_df.split == imagerow_df.split))
-      grouped_df = joined_df.groupBy('uri', 'dataset', 'split')
+      # Combine activations model and tensor -> value into a single column ...
+      from pyspark.sql.functions import struct
+      combined = activations_df.withColumn(
+        'm_t2v', struct('model', 'tensor_to_value'))
+      
+      # ... group by URI (and others) to induce ImageRows ...
+      grouped = combined.groupBy('uri', 'dataset', 'split')
+      image_act_df = grouped.agg({'m_t2v': 'collect_list'})
+      image_act_df = image_act_df.withColumnRenamed(
+                                  'collect_list(m_t2v)', 'm_t2vs')
 
-      def to_imagerow(act_row, img_row):
-        row = dataset.Image(**img_row.asDict())
-        activations = Activations(**act_row.asDict())
-        row.attrs['activations'] = activations
-        yield row
+      imagerow_df = cls.IMAGE_TABLE_CLS.as_imagerow_df(spark)
+      joined = image_act_df.join(imagerow_df, ['uri', 'dataset', 'split'])
 
-      imagerow_rdd = grouped_df.rdd.map(to_imagerow)
-      return imagerow_rdd
+      # ... map row things to ImageRows
+      def to_imagerow(row):
+        irow = dataset.ImageRow(**row.asDict())
+        acts = Activations.from_rows(row.m_t2vs)
+        irow.attrs = irow.attrs or {}
+        irow.attrs['activations'] = acts
+        return irow
+      
+      imagerow_rdd = joined.rdd.map(to_imagerow)
+      return imagerow_rdd, joined
 
   @classmethod
   def save_tf_embedding_projector(
@@ -476,6 +499,8 @@ class ActivationsTable(object):
     NB: for large samples, you might need to cap the amount of Parquet that
     Spark can buffer, e.g.
       builder.config('spark.sql.files.maxPartitionBytes', int(64 * 1e6))
+    
+    TODO: filter on split, dataset, and model_name
     """
 
     if not outdir:
@@ -602,7 +627,6 @@ class ActivationsTable(object):
         
           tensor_df = rows_df.filter(rows_df.tensor_name == tensor_name)
           tensor_df = tensor_df.select('uri', 'tensor_value')
-          # import pdb; pdb.set_trace()
           util.log.info(
             "... fetching %s tensors (in %s partitions) for %s ..." % (
               tensor_df.count(), tensor_df.rdd.getNumPartitions(), tensor_name))
@@ -610,6 +634,7 @@ class ActivationsTable(object):
           vs = sorted(
                   tensor_df.toLocalIterator(),
                   key=lambda r: r.uri)
+          # TODO mebbe r.tensor_value de-pickle then flatten
           vs = [r.tensor_value.arr.flatten() for r in vs]
 
           util.log.info(
@@ -647,7 +672,7 @@ class ActivationsTable(object):
         writer = tf.summary.FileWriter(outdir)
         projector.visualize_embeddings(writer, config)
           
-    assert False
+    assert False, 'TODO testme shipme'
       
 
 

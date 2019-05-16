@@ -1036,11 +1036,29 @@ def give_me_frozen_graph(
         # variable_names_blacklist=blacklist)
   return gdef_frozen
   
-  # g = tf.Graph()
-  # with g.as_default():
-  #   tf.import_graph_def(gdef_frozen, name='')
-  # return g
+def tf_variable_summaries(var, prefix=''):
+  """Create Tensorboard summaries showing basic stats of the
+  variable `var`."""
+  import tensorflow as tf
 
+  if prefix:
+    prefix = prefix + '/'
+  else:
+    prefix = str(var.name)
+    prefix = prefix[:prefix.find('/')] # Exclude slashes in var name
+    prefix = prefix[:prefix.find(':')] # Exclude : too
+    prefix = prefix + '/'
+    print prefix, var.name
+  
+  with tf.name_scope(prefix + 'summaries'):
+    mean = tf.reduce_mean(var)
+    tf.summary.scalar('mean', mean)
+    with tf.name_scope('stddev'):
+      stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+    tf.summary.scalar('stddev', stddev)
+    tf.summary.scalar('max', tf.reduce_max(var))
+    tf.summary.scalar('min', tf.reduce_min(var))
+    tf.summary.histogram('histogram', var)
 
 
 class TFSummaryRow(object):
