@@ -58,7 +58,7 @@ class ImageRowToExampleXForm(object):
       y = row.as_numpy()
     y = y.flatten()
 
-    # MNIST FIXME
+    # MNIST FIXME FIXMEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
     y = y / 255.
     
     assert x is not None and y is not None
@@ -75,132 +75,36 @@ class ActivationsDataset(object):
   
   @classmethod
   def as_tf_dataset(cls, spark=None):
-    import tensorflow as tf
+    with Spark.sess(spark) as spark:
+      imagerowable_df, to_imagerow = (
+        cls.ACTIVATIONS_TABLE.as_imagerowable_df(spark=spark))
 
-    import cloudpickle
+      def df_row_to_tf_element(row):
+        image_row = to_imagerow(row)
+        ex = cls.ROW_XFORM(image_row)
+        return ex.x, ex.y, ex.uri
+      
+      import tensorflow as tf
+      from au.spark import spark_df_to_tf_dataset
+      ds = spark_df_to_tf_dataset(
+              imagerowable_df,
+              df_row_to_tf_element,
+              [cls.ROW_XFORM.x_dtype, cls.ROW_XFORM.y_dtype, tf.string])
+      
+      # Tensorflow is dumb and can't deduce the tensor shapes at the graph
+      # building stage.  So we have to provide a hint this way ...
+      maybe_row = imagerowable_df.take(1)
+      if maybe_row:
+        dataset_element = df_row_to_tf_element(maybe_row[0])
+        x, y, uri = dataset_element
+        shapes = [
+          tf.TensorShape(x.shape),
+          tf.TensorShape(y.shape),
+          tf.TensorShape([None]), # Ignore uri for now
+        ]
+        ds = ds.apply(tf.contrib.data.assert_element_shape(shapes))
 
-    # TODO fixme
-    if not hasattr(cls, '_cache'):
-      import os
-      cls._cache = os.path.join('/tmp', cls.__name__ + '_cache')
-      if not os.path.exists(cls._cache):
-        from au.spark import Spark
-        from pyspark.sql import Row
-        with Spark.sess(spark) as spark:
-          imagerow_rdd = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
-          ex_rdd = imagerow_rdd.map(cls.ROW_XFORM)
-          ex_rdd = ex_rdd.map(lambda ex: Row(data=bytearray(cloudpickle.dumps(ex))))
-          ex_rdd = ex_rdd.cache()
-          for _ in range(10):
-            spark.createDataFrame(ex_rdd).write.parquet(
-              cls._cache,
-              mode='append',
-              compression='snappy')
-            print 'append'
-
-    def make_iter_ex_tuples(s):
-      def f():
-        import time
-
-        from au.spark import Spark
-        from au.fixtures import dataset
-        print 'spark tf session'
-        start = time.time()
-        with Spark.sess(s) as spark:
-          imagerow_rdd, joined = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
-          from pyspark import StorageLevel
-          joined = joined.persist(StorageLevel.DISK_ONLY)
-          ex_rdd = imagerow_rdd.map(cls.ROW_XFORM)
-          uris = joined.select('uri').collect()
-          print 'num uris', len(uris)
-          def to_imagerow(row):
-            irow = dataset.ImageRow(**row.asDict())
-            acts = nnmodel.Activations.from_rows(row.m_t2vs)
-            irow.attrs = irow.attrs or {}
-            irow.attrs['activations'] = acts
-            return irow
-          def data_gen():
-            for uri_chunk in util.ichunked(uris, 1000):
-              rows = joined.filter(joined.uri.isin([u.uri for u in uri_chunk])).rdd.map(to_imagerow).map(cls.ROW_XFORM).collect()
-              for r in rows:
-                yield r.x, r.y, r.uri
-          
-          ds = tf.data.Dataset.from_generator(
-            generator=data_gen,
-            output_types=(tf.float32, tf.float32, tf.string))
-          ds = ds.prefetch(20 * 1000)
-          ds = ds.map(lambda x, y, z: (x, y, z), num_parallel_calls=8)
-          n = 0
-          with util.tf_data_session(ds) as (sess, ddd):
-            for k in ddd():
-              n += 1
-              if n % 1000 == 0:
-                print n, time.time() - start
-          print n
-          print time.time() - start
-          import pdb; pdb.set_trace()
-
-
-        # import pyarrow as pa
-        # import pyarrow.parquet as pq
-        # start = time.time()
-        # print 'pyarrow'
-        # n = 0
-        # for path in util.all_files_recursive(cls._cache, '*.parquet'):
-        #   pa_table = pq.read_table(path)
-        #   for i, row in enumerate(pa_table.to_pandas().to_dict(orient='records')):
-        #     n += 1
-        #     if n % 10000 == 0:
-        #       print i, n, time.time() - start
-        # end = time.time()
-        # print end - start
-        # # 190 sec
-
-        # print 'petastorm'
-        # from petastorm import make_batch_reader
-        # start = time.time()
-        # n = 0
-        # with make_batch_reader('file://' + cls._cache) as reader:
-        #   for i, row in enumerate(reader):
-        #     n += len(row.data)
-        #     if i % 100 == 0:
-        #       print n, time.time() - start
-        # end = time.time()
-        # print end - start
-        # # 46 sec
-
-        start = time.time()
-        df = s.read.parquet(cls._cache)
-        import pdb; pdb.set_trace()
-        # df = df.cache()
-        # print df.count()
-        for i, rr in enumerate(df.rdd.toLocalIterator()):
-          if i % 10000 == 0:
-            print i, time.time() - start
-        end = time.time()
-        print end - start
-          
-        import pdb; pdb.set_trace()
-
-        from au.spark import Spark
-        with Spark.sess(s) as spark:
-          df = spark.read.parquet(cls._cache)
-          df = df.cache()
-          for rr in df.rdd.toLocalIterator():
-            r = cloudpickle.loads(rr.data)
-            yield r.x, r.y, r.uri
-      return f
-    
-    # TODO: make sizes predictable
-    x, y, uri = make_iter_ex_tuples(spark)().next()
-    cls._x_shape = x.shape
-    cls._y_shape = y.shape
-
-    ds = tf.data.Dataset.from_generator(
-          generator=make_iter_ex_tuples(spark),
-          output_types=(tf.float32, tf.float32, tf.string),
-          output_shapes=(cls._x_shape, cls._y_shape, []))
-    return ds
+      return ds
 
 
 

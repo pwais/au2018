@@ -165,11 +165,11 @@ class Spark(object):
     builder = builder.config('spark.port.maxRetries', '96')
     builder = builder.config('spark.task.maxFailures', '10')
 
-    # # FIXME parquet sizes
-    # builder = builder.config('spark.sql.files.maxPartitionBytes', int(8 * 1e6))
+    # # FIXME parquet sizes need this for laptop activation tables to work
+    builder = builder.config('spark.sql.files.maxPartitionBytes', int(8 * 1e6))
     # TODO want large memory thingy for local mode only
-    bulder = builder.config('spark.driver.memory', '16g')
-    bulder = builder.config('spark.executor.memory', '16g')
+    bulder = builder.config('spark.driver.memory', '8g')
+    bulder = builder.config('spark.executor.memory', '8g')
     if cls.HIVE:
       # TODO fixme see mebbe https://creativedata.atlassian.net/wiki/spaces/SAP/pages/82255289/Pyspark+-+Read+Write+files+from+Hive
       # builder = builder.config("hive.metastore.warehouse.dir", '/tmp') 
@@ -606,8 +606,9 @@ def spark_df_to_tf_dataset(
 
         xformed = [spark_row_to_tf_element(row) for row in rows]
 
-        # Sadly TF py_func can't easily return a list of objects, so we
-        # re-organize the rows into columns, each which has a known type.
+        # Sadly TF py_func can't easily return a list of objects, just a
+        # tuple of arrays.  So we re-organize the rows into columns, each
+        # which has a known type.
         import itertools
         cwise = list(itertools.izip(*xformed))
         return cwise

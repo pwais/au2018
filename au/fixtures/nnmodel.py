@@ -129,8 +129,8 @@ class TFInferenceGraphFactory(object):
         })
 
     import pprint
-    util.log.info("Loaded graph:")
-    util.log.info(
+    util.log.debug("Loaded graph:")
+    util.log.debug(
       '\n' +
       pprint.pformat(
         tf.contrib.graph_editor.get_tensors(self.graph)))
@@ -215,17 +215,7 @@ class Activations(object):
       for tn, tvb in row.tensor_to_value.iteritems():
         acts.set_tensor(row.model, tn, pickle.loads(tvb))
     return acts
-    
-    # pd_df):
-    # for model_name in pd_df.model_name.unique():
-    #   act_df = pd_df[pdf_df.model_name == model_name]
-    #   tensor_to_value = dict(
-    #     (r.tensor_name, r.tensor_value)
-    #     for r in act_df.iterrows())
-    #   yield Activations(
-    #     model_name=model_name,
-    #     tensor_to_value=tensor_to_value,
-    #   )
+
 
 class FillActivationsBase(object):
   
@@ -322,6 +312,7 @@ class FillActivationsTFDataset(FillActivationsBase):
     # with final_graph.as_default() as g:
     #   uris = tf.identity(uris, name='au_uris')
     #   assert uris.graph is g
+    # ^^ this would be nice but is broken idk :(
     util.log.info("... done creating inference graph.")
 
     with final_graph.as_default():
@@ -353,7 +344,8 @@ class FillActivationsTFDataset(FillActivationsBase):
             row_uri = str(tensor_to_value.pop(uris_tensor_name))
 
             # Find the row corresponding to this output
-            for _ in range(100 * batch_size):
+            MAX_TRIES = 100
+            for _ in range(MAX_TRIES * batch_size):
               if row_uri in uri_to_row_cache:
                 break
               else:
@@ -452,7 +444,7 @@ class ActivationsTable(object):
     return df
 
   @classmethod
-  def as_imagerow_rdd(cls, spark=None):
+  def as_imagerowable_df(cls, spark=None):
     with Spark.sess(spark) as spark:
       
       activations_df = cls.as_df(spark)
@@ -469,18 +461,17 @@ class ActivationsTable(object):
                                   'collect_list(m_t2v)', 'm_t2vs')
 
       imagerow_df = cls.IMAGE_TABLE_CLS.as_imagerow_df(spark)
-      joined = image_act_df.join(imagerow_df, ['uri', 'dataset', 'split'])
+      imagerowable_df = image_act_df.join(imagerow_df, ['uri', 'dataset', 'split'])
 
-      # ... map row things to ImageRows
+      # ... provide a func to map row things to ImageRows
       def to_imagerow(row):
         irow = dataset.ImageRow(**row.asDict())
         acts = Activations.from_rows(row.m_t2vs)
         irow.attrs = irow.attrs or {}
         irow.attrs['activations'] = acts
         return irow
-      
-      imagerow_rdd = joined.rdd.map(to_imagerow)
-      return imagerow_rdd, joined
+
+      return imagerowable_df, to_imagerow
 
   @classmethod
   def save_tf_embedding_projector(

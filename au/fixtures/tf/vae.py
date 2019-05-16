@@ -12,6 +12,7 @@ import tensorflow as tf
 from au.fixtures.tf import mnist
 mnist_params = mnist.MNIST.Params(
                   BATCH_SIZE=10000,
+                  INFERENCE_BATCH_SIZE=1000,
                   TRAIN_EPOCHS=30,
                   TRAIN_WORKER_CLS=util.WholeMachineWorker)
 class MNISTTrainActivations(nnmodel.ActivationsTable):
@@ -213,7 +214,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       # This flow doesn't need uri
       train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
       train_ds = train_ds.batch(params.BATCH_SIZE)
-      train_ds = train_ds.cache()#os.path.join(params.MODEL_BASEDIR, 'train_cache'))
+      # train_ds = train_ds.cache()#os.path.join(params.MODEL_BASEDIR, 'train_cache'))
       # train_ds = train_ds.prefetch(10)
       train_ds = train_ds.repeat(10)
       return train_ds

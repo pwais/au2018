@@ -105,6 +105,7 @@ RUN \
     screen \
     ssh \
     sudo \
+    tree \
     vim \
     wget && \
   pip install ipdb && \
