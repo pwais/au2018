@@ -90,13 +90,98 @@ class ActivationsDataset(object):
           imagerow_rdd = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
           ex_rdd = imagerow_rdd.map(cls.ROW_XFORM)
           ex_rdd = ex_rdd.map(lambda ex: Row(data=bytearray(cloudpickle.dumps(ex))))
-          spark.createDataFrame(ex_rdd).write.parquet(
-            cls._cache,
-            mode='overwrite',
-            compression='lz4')
+          ex_rdd = ex_rdd.cache()
+          for _ in range(10):
+            spark.createDataFrame(ex_rdd).write.parquet(
+              cls._cache,
+              mode='append',
+              compression='snappy')
+            print 'append'
 
     def make_iter_ex_tuples(s):
       def f():
+        import time
+
+        from au.spark import Spark
+        from au.fixtures import dataset
+        print 'spark tf session'
+        start = time.time()
+        with Spark.sess(s) as spark:
+          imagerow_rdd, joined = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
+          from pyspark import StorageLevel
+          joined = joined.persist(StorageLevel.DISK_ONLY)
+          ex_rdd = imagerow_rdd.map(cls.ROW_XFORM)
+          uris = joined.select('uri').collect()
+          print 'num uris', len(uris)
+          def to_imagerow(row):
+            irow = dataset.ImageRow(**row.asDict())
+            acts = nnmodel.Activations.from_rows(row.m_t2vs)
+            irow.attrs = irow.attrs or {}
+            irow.attrs['activations'] = acts
+            return irow
+          def data_gen():
+            for uri_chunk in util.ichunked(uris, 1000):
+              rows = joined.filter(joined.uri.isin([u.uri for u in uri_chunk])).rdd.map(to_imagerow).map(cls.ROW_XFORM).collect()
+              for r in rows:
+                yield r.x, r.y, r.uri
+          
+          ds = tf.data.Dataset.from_generator(
+            generator=data_gen,
+            output_types=(tf.float32, tf.float32, tf.string))
+          ds = ds.prefetch(20 * 1000)
+          ds = ds.map(lambda x, y, z: (x, y, z), num_parallel_calls=8)
+          n = 0
+          with util.tf_data_session(ds) as (sess, ddd):
+            for k in ddd():
+              n += 1
+              if n % 1000 == 0:
+                print n, time.time() - start
+          print n
+          print time.time() - start
+          import pdb; pdb.set_trace()
+
+
+        # import pyarrow as pa
+        # import pyarrow.parquet as pq
+        # start = time.time()
+        # print 'pyarrow'
+        # n = 0
+        # for path in util.all_files_recursive(cls._cache, '*.parquet'):
+        #   pa_table = pq.read_table(path)
+        #   for i, row in enumerate(pa_table.to_pandas().to_dict(orient='records')):
+        #     n += 1
+        #     if n % 10000 == 0:
+        #       print i, n, time.time() - start
+        # end = time.time()
+        # print end - start
+        # # 190 sec
+
+        # print 'petastorm'
+        # from petastorm import make_batch_reader
+        # start = time.time()
+        # n = 0
+        # with make_batch_reader('file://' + cls._cache) as reader:
+        #   for i, row in enumerate(reader):
+        #     n += len(row.data)
+        #     if i % 100 == 0:
+        #       print n, time.time() - start
+        # end = time.time()
+        # print end - start
+        # # 46 sec
+
+        start = time.time()
+        df = s.read.parquet(cls._cache)
+        import pdb; pdb.set_trace()
+        # df = df.cache()
+        # print df.count()
+        for i, rr in enumerate(df.rdd.toLocalIterator()):
+          if i % 10000 == 0:
+            print i, time.time() - start
+        end = time.time()
+        print end - start
+          
+        import pdb; pdb.set_trace()
+
         from au.spark import Spark
         with Spark.sess(s) as spark:
           df = spark.read.parquet(cls._cache)

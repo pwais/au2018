@@ -158,11 +158,15 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
                     loss=total_loss,
                     train_op=train_op)
       elif mode == tf.estimator.ModeKeys.EVAL:
+        mean_recon_loss = tf.metrics.mean(recon_loss)
+        mean_latent_loss = tf.metrics.mean(latent_loss)
         return tf.estimator.EstimatorSpec(
             mode=tf.estimator.ModeKeys.EVAL,
             loss=total_loss,
             eval_metric_ops={
               'MSE': mse,
+              'recon_loss': mean_recon_loss,
+              'latent_loss': mean_latent_loss,
             })
     return model_fn
 
@@ -185,15 +189,15 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
                   save_summary_steps=10,
                   save_checkpoints_secs=10,
                   log_step_count_steps=10)
-    if params.MULTI_GPU:
-      dist = tf.contrib.distribute.MirroredStrategy()
-      config = config.replace(
-        train_distribute=dist,
-        eval_distribute=dist,
-        session_config=util.tf_create_session_config())
-    else:
-      config = config.replace(
-        session_config=util.tf_create_session_config(restrict_gpus=[]))
+    # if params.MULTI_GPU:
+    #   dist = tf.contrib.distribute.MirroredStrategy()
+    #   config = config.replace(
+    #     train_distribute=dist,
+    #     eval_distribute=dist,
+    #     session_config=util.tf_create_session_config())
+    # else:
+    #   config = config.replace(
+    #     session_config=util.tf_create_session_config(restrict_gpus=[]))
 
     model_fn = cls.create_model_fn(params)
     estimator = tf.estimator.Estimator(
@@ -211,7 +215,7 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       train_ds = train_ds.batch(params.BATCH_SIZE)
       train_ds = train_ds.cache()#os.path.join(params.MODEL_BASEDIR, 'train_cache'))
       # train_ds = train_ds.prefetch(10)
-      train_ds = train_ds.repeat(10000)
+      train_ds = train_ds.repeat(10)
       return train_ds
     
     def eval_input_fn():
@@ -235,9 +239,9 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
     # Train and evaluate model.
     for t in range(params.TRAIN_EPOCHS):
       estimator.train(input_fn=train_input_fn)#, hooks=train_hooks)
-      if t % 10 == 0 or t >= params.TRAIN_EPOCHS - 1:
-        eval_results = estimator.evaluate(input_fn=eval_input_fn)
-        util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+      # if t % 10 == 0 or t >= params.TRAIN_EPOCHS - 1:
+      eval_results = estimator.evaluate(input_fn=eval_input_fn)
+      util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
 
 if __name__ == '__main__':
   SimpleFCVAE.load_or_train()

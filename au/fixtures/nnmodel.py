@@ -480,7 +480,7 @@ class ActivationsTable(object):
         return irow
       
       imagerow_rdd = joined.rdd.map(to_imagerow)
-      return imagerow_rdd
+      return imagerow_rdd, joined
 
   @classmethod
   def save_tf_embedding_projector(
