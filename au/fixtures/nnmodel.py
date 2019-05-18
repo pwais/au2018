@@ -391,6 +391,8 @@ class ActivationsTable(object):
   
   @classmethod
   def setup(cls, spark=None):
+    cls.IMAGE_TABLE_CLS.setup(spark=spark)
+
     if os.path.exists(cls.table_root()):
       return
 
@@ -444,10 +446,11 @@ class ActivationsTable(object):
     return df
 
   @classmethod
-  def as_imagerowable_df(cls, spark=None):
+  def as_imagerow_rdd(cls, spark=None):
     with Spark.sess(spark) as spark:
       
       activations_df = cls.as_df(spark)
+      activations_df = spark.createDataFrame(activations_df.take(1000))
 
       # Combine activations model and tensor -> value into a single column ...
       from pyspark.sql.functions import struct
@@ -461,7 +464,7 @@ class ActivationsTable(object):
                                   'collect_list(m_t2v)', 'm_t2vs')
 
       imagerow_df = cls.IMAGE_TABLE_CLS.as_imagerow_df(spark)
-      imagerowable_df = image_act_df.join(imagerow_df, ['uri', 'dataset', 'split'])
+      joined = image_act_df.join(imagerow_df, ['uri', 'dataset', 'split'])
 
       # ... provide a func to map row things to ImageRows
       def to_imagerow(row):
@@ -471,7 +474,7 @@ class ActivationsTable(object):
         irow.attrs['activations'] = acts
         return irow
 
-      return imagerowable_df, to_imagerow
+      return joined.rdd.map(to_imagerow)
 
   @classmethod
   def save_tf_embedding_projector(

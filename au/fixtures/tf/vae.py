@@ -206,18 +206,25 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
       params=None,
       config=config)
 
+    # train_ds = params.TRAIN_DATASET.as_tf_dataset(spark=spark)
+    # class train_input_fn_cls(object):
+    #   def __init__(self):
+    #     self.train_ds = params.TRAIN_DATASET.as_tf_dataset(spark=spark)
+    #   def __call__(self):
+    #     train_ds = self.train_ds
     def train_input_fn():
-      train_ds = params.TRAIN_DATASET.as_tf_dataset(spark=spark)
-      if params.LIMIT >= 0:
-        train_ds = train_ds.take(params.LIMIT)
+        train_ds = params.TRAIN_DATASET.as_tf_dataset(spark=spark)
+        if params.LIMIT >= 0:
+          train_ds = train_ds.take(params.LIMIT)
 
-      # This flow doesn't need uri
-      train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
-      train_ds = train_ds.batch(params.BATCH_SIZE)
-      # train_ds = train_ds.cache()#os.path.join(params.MODEL_BASEDIR, 'train_cache'))
-      # train_ds = train_ds.prefetch(10)
-      train_ds = train_ds.repeat(10)
-      return train_ds
+        # This flow doesn't need uri
+        train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
+        train_ds = train_ds.batch(params.BATCH_SIZE)
+        # train_ds = train_ds.cache('/tmp/cache_yay_model')#os.path.join(params.MODEL_BASEDIR, 'train_cache'))
+        # train_ds = train_ds.prefetch(10)
+        train_ds = train_ds.repeat(100000)
+        return train_ds
+    # train_input_fn = train_input_fn_cls()
     
     def eval_input_fn():
       test_ds = params.TEST_DATASET.as_tf_dataset(spark=spark)

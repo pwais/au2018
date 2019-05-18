@@ -31,6 +31,8 @@ MNIST_INPUT_SIZE_HWC = (MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1)
 class MNISTDataset(dataset.ImageTable):
   TABLE_NAME = 'MNIST'
   
+  ROWS_PER_FILE = 10000
+
   SPLIT = '' # Or 'train' or 'test'
 
   N_CLASSES = 10 # Classes are digits 0 through 9

@@ -13,6 +13,9 @@ class Example(object):
   def __init__(self, **kwargs):
     for k in self.__slots__:
       setattr(self, k, kwargs.get(k))
+  
+  def astuple(self):
+    return self.x, self.y, self.uri
 
 class ImageRowToExampleXForm(object):
 
@@ -76,34 +79,105 @@ class ActivationsDataset(object):
   @classmethod
   def as_tf_dataset(cls, spark=None):
     with Spark.sess(spark) as spark:
-      imagerowable_df, to_imagerow = (
-        cls.ACTIVATIONS_TABLE.as_imagerowable_df(spark=spark))
+      imagerow_rdd = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
+
+      from pyspark.sql import Row
+      import cloudpickle
+      def encoded(row):
+        ex = cls.ROW_XFORM(row)
+        return Row(data=bytearray(cloudpickle.dumps(ex)))
+
+      # elem_df = spark.createDataFrame(imagerow_rdd.map(encoded))
+
+      # path_prefix = '/tmp/cache_yay_'
+      # def save_ds_cache(pid, iter_rows):
+      #   import tensorflow as tf
+
+      #   ex_tuples = [cls.ROW_XFORM(row).astuple() for row in iter_rows]
+      #   if not ex_tuples:
+      #     util.log.warn("Empty partition %s !  Skipping." % pid)
+      #     return ''
+
+        # def get_dtype(v):
+        #   if hasattr(v, 'dtype'):
+        #     return tf.dtypes.as_dtype(v.dtype)
+        #   elif isinstance(v, (basestring, unicode)):
+        #     return tf.string
+        #   else:
+        #     return tf.dtypes.as_dtype(v)
+        # ex = ex_tuples[0]
+        # output_shapes = tuple(
+        #   v.shape[0] if hasattr(v, 'shape') else None
+        #   for v in ex
+        # )
+        # output_types = tuple(get_dtype(v) for v in ex)
+
+      #   def gen_examples():
+      #     for ex in ex_tuples:
+      #       yield ex
+      #   # assert False, (output_shapes, output_types)
+      #   ds = tf.data.Dataset.from_generator(
+      #           gen_examples,
+      #           output_types=output_types,
+      #           output_shapes=output_shapes)
+      #   path = path_prefix + str(pid)
+      #   ds = ds.cache(path)
+
+      #   with util.tf_data_session(ds) as (sess, iter_dataset):
+      #     n = 0
+      #     for _ in iter_dataset():
+      #       n += 1
+      #     util.log.info("Cached %s examples to %s" % (n, path))
+
+      #   return [path]
+
+      # paths = imagerow_rdd.repartition(50).mapPartitionsWithIndex(save_ds_cache).collect()
+      # import pdb; pdb.set_trace()
+
+      # from pyspark import StorageLevel
+      # # elem_df = elem_df.coalesce(20)
+      # if not hasattr(cls, '_elem_df_cache'):
+      path = '/tmp/cache_%s' % cls.__name__
+      import os
+      if not os.path.exists(path):
+        elem_df = elem_df.coalesce(50)
+        elem_df.write.parquet(
+          path,
+          mode='overwrite',
+          compression='none')
+      elem_df = spark.read.parquet(path)
+      # import pdb; pdb.set_trace()
+      #   elem_df = cls._elem_df_cache
+      #   print 'cached elem df to ', path
+      # # elem_df = elem_df.persist(StorageLevel.DISK_ONLY)
 
       def df_row_to_tf_element(row):
-        image_row = to_imagerow(row)
-        ex = cls.ROW_XFORM(image_row)
+        ex = cloudpickle.loads(row.data)
         return ex.x, ex.y, ex.uri
       
       import tensorflow as tf
       from au.spark import spark_df_to_tf_dataset
       ds = spark_df_to_tf_dataset(
-              imagerowable_df,
+              elem_df,
               df_row_to_tf_element,
-              [cls.ROW_XFORM.x_dtype, cls.ROW_XFORM.y_dtype, tf.string])
+              [
+                tf.dtypes.as_dtype(cls.ROW_XFORM.x_dtype),
+                tf.dtypes.as_dtype(cls.ROW_XFORM.y_dtype),
+                tf.string,
+              ])
       
       # Tensorflow is dumb and can't deduce the tensor shapes at the graph
       # building stage.  So we have to provide a hint this way ...
-      maybe_row = imagerowable_df.take(1)
+      maybe_row = elem_df.take(1)
       if maybe_row:
         dataset_element = df_row_to_tf_element(maybe_row[0])
         x, y, uri = dataset_element
-        shapes = [
+        shapes = ( # NB: must be a tuple or TF does stupid stuff
           tf.TensorShape(x.shape),
           tf.TensorShape(y.shape),
-          tf.TensorShape([None]), # Ignore uri for now
-        ]
+          None, # You might think tf.TensorShape([None]) but nope nope nope!
+        )
         ds = ds.apply(tf.contrib.data.assert_element_shape(shapes))
-
       return ds
 
 
