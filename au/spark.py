@@ -594,8 +594,10 @@ def spark_df_to_tf_dataset(
       pds = tf.data.Dataset.from_tensors(pid_tensor)
       
       def pid_to_element_cols(pid):
+        pid = pid[0]
         util.log.info("Fetching partition %s" % pid)
-        part_df = df.filter('_spark_part_id == %s' % pid).cache()
+        part_df = df.filter('_spark_part_id == %s' % pid)
+          # TODO: this is a linear scan :(  find a more efficient way
         rows = part_df.collect()
         if not rows:
           # Tensorflow expects empty numpy columns of promised dtype
@@ -607,7 +609,6 @@ def spark_df_to_tf_dataset(
           )
         util.log.info("FetchED partition %s" % pid)
         xformed = [spark_row_to_tf_element(row) for row in rows]
-        print 'xformed', len(xformed), pid
 
         # Sadly TF py_func can't easily return a list of objects, just a
         # tuple of arrays.  So we re-organize the rows into columns, each
@@ -689,7 +690,11 @@ def spark_df_to_tf_dataset(
     # dss = [tf.data.Dataset.from_tensors([pid]) for pid in range(df.rdd.getNumPartitions())]
 
 
-    ds = tf.data.Dataset.range(df.rdd.getNumPartitions())
+    ds = tf.data.Dataset.from_tensor_slices(
+      [n for n in df.select('_spark_part_id').distinct().collect()]
+    )
+    
+    # range(df.rdd.getNumPartitions())
     # ds = ds.interleave(to_dataset,
     #           cycle_length=10 * num_reader_threads)
     ds = ds.apply(

@@ -450,7 +450,7 @@ class ActivationsTable(object):
     with Spark.sess(spark) as spark:
       
       activations_df = cls.as_df(spark)
-      activations_df = spark.createDataFrame(activations_df.take(1000))
+      # activations_df = spark.createDataFrame(activations_df.take(1000))
 
       # Combine activations model and tensor -> value into a single column ...
       from pyspark.sql.functions import struct

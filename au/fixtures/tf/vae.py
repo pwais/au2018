@@ -220,9 +220,9 @@ class SimpleFCVAE(nnmodel.INNGenerativeModel):
         # This flow doesn't need uri
         train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
         train_ds = train_ds.batch(params.BATCH_SIZE)
-        # train_ds = train_ds.cache('/tmp/cache_yay_model')#os.path.join(params.MODEL_BASEDIR, 'train_cache'))
+        # train_ds = train_ds.cache(os.path.join(params.MODEL_BASEDIR, 'train_cache'))
         # train_ds = train_ds.prefetch(10)
-        train_ds = train_ds.repeat(100000)
+        # train_ds = train_ds.repeat(100000)
         return train_ds
     # train_input_fn = train_input_fn_cls()
     
