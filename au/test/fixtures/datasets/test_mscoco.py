@@ -60,7 +60,7 @@ class TestMSCOCOImageTable(unittest.TestCase):
       mscoco.Fixtures.create_test_fixtures()
       cls.have_fixtures = True
     except Exception as e:
-      print "Failed to create test fixtures: %s" % (e,)
+      print("Failed to create test fixtures: %s" % (e,))
 
     from _pytest.monkeypatch import MonkeyPatch
     monkeypatch = MonkeyPatch()

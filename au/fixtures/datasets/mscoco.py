@@ -149,7 +149,7 @@ class Fixtures(object):
   
   @classmethod
   def run_import(cls):
-    print 'TODO make program'
+    print('TODO make program')
     cls.download_all()
     cls.create_test_fixtures()
 
@@ -207,7 +207,7 @@ class AnnotationsIndexBase(object):
       images = anno_data['images']
       category_index = label_map_util.create_category_index(
                                         anno_data['categories'])
-      category_index = dict((str(k), v) for k, v in category_index.iteritems())
+      category_index = dict((str(k), v) for k, v in category_index.items())
       
       util.log.info("Have annotations index for %s images." % len(images))
       util.log.info("Category index: \n\n%s" % pprint.pformat(category_index))
@@ -236,7 +236,7 @@ class AnnotationsIndexBase(object):
 
         import pickle
         d = shelve.open(dest, protocol=pickle.HIGHEST_PROTOCOL)
-        d.update(data.iteritems())
+        d.update(iter(data.items()))
         d.close()
 
       # Keeping the below data in memory will OOM almost any reasonable box,
@@ -293,7 +293,7 @@ class AnnotationsIndexBase(object):
         'category_name': cls.get_category_name_for_id(anno['category_id']),
         'anno_index': anno_index,
       }
-      kwargs.update(anno.iteritems())
+      kwargs.update(iter(anno.items()))
       bbox = BBox(**anno)
       bboxen.append(bbox)
     return bboxen
@@ -330,7 +330,7 @@ class AnnotationsIndexBase(object):
         'category_name': cls.get_category_name_for_id(anno['category_id']),
         'anno_index': anno_index,
       }
-      kwargs.update(anno.iteritems())
+      kwargs.update(iter(anno.items()))
       mask = Mask(**kwargs)
       masks.append(mask)
     return masks

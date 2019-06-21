@@ -41,7 +41,7 @@ def test_spark_numpy_df():
     from pyspark.sql import Row
 
     wrapped_rows = [
-      Row(**dict((k, NumpyArray(v)) for k, v in row.iteritems()))
+      Row(**dict((k, NumpyArray(v)) for k, v in row.items()))
       for row in rows
     ]
 
@@ -54,7 +54,7 @@ def test_spark_numpy_df():
     decoded_wrapped_rows = df2.collect()
     
     decoded_rows = [
-      dict((k, v.arr if v else v) for k, v in row.asDict().iteritems())
+      dict((k, v.arr if v else v) for k, v in row.asDict().items())
       for row in decoded_wrapped_rows
     ]
     
@@ -130,7 +130,7 @@ def test_spark_df_to_tf_dataset():
       (2, 'r2', np.array([6.])),
       (3, 'r3', np.array([7., 8., 9.])),
     ]
-    items = zip(sorted(tf_dataset_to_list(ds)), sorted(expected))
+    items = list(zip(sorted(tf_dataset_to_list(ds)), sorted(expected)))
     for actual, exp in items:
       assert len(actual) == len(exp)
       for i in range(len(actual)):

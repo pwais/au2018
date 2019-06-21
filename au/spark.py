@@ -121,12 +121,12 @@ class Spark(object):
       dist.parse_command_line()
       dist.run_commands()
 
-    egg_path = os.path.join(tmp_path, MODNAME + '-0.0.0-py2.7.egg')
-    assert os.path.exists(egg_path)
+    egg_path = os.path.join(tmp_path, MODNAME + '-0.0.0-py3.6.egg')
+    assert os.path.exists(egg_path), f"Can't find {egg_path}"
     log.info("... done.  Egg at %s" % egg_path)
     return egg_path
 
-    # This didn't work so well ...
+    # NB: This approach didn't work so well:
     # Typically we want to give spark the egg from:
     #  $ python setup.py bdist_egg
     # from setuptools.command import bdist_egg
@@ -160,7 +160,7 @@ class Spark(object):
     if cls.CONF is not None:
       builder = builder.config(conf=cls.CONF)
     if cls.CONF_KV is not None:
-      for k, v in cls.CONF_KV.iteritems():
+      for k, v in cls.CONF_KV.items():
         builder = builder.config(k, v)
     builder = builder.config('spark.port.maxRetries', '96')
     builder = builder.config('spark.task.maxFailures', '10')
@@ -345,14 +345,14 @@ class Spark(object):
       import random
       x, y = random.random(), random.random()
       return x*x + y*y < 1
-    count = sc.parallelize(range(0, num_samples)).filter(inside).count()
+    count = sc.parallelize(list(range(0, num_samples))).filter(inside).count()
     pi = 4 * float(count) / num_samples
     util.log.info("Pi estimate: %s" % pi)
     assert abs(pi - 3.14) < 0.1, "Spark program had an error?"
 
   @staticmethod
   def test_egg(spark):
-    EXPECTED_EGG_NAME = 'au-0.0.0-py2.7.egg'
+    EXPECTED_EGG_NAME = 'au-0.0.0-py3.6.egg'
 
     def worker_test(_):
       # Normally, pytest puts the local source tree on the PYTHONPATH.  That
@@ -372,7 +372,7 @@ class Spark(object):
       for p in sys.path:
         if EXPECTED_EGG_NAME in p:
           egg_path = p
-      assert egg_path, 'Egg not found in sys.path %s' % (sys.path,)
+      assert egg_path, f"Egg not found in {sys.path}"
 
       ## Is the egg any good?
       import zipfile
@@ -391,7 +391,7 @@ class Spark(object):
     
     sc = spark.sparkContext
     N = max(1, Spark.num_executors(spark)) # Try to test all executors
-    rdd = sc.parallelize(range(N), numSlices=N)
+    rdd = sc.parallelize(list(range(N)), numSlices=N)
     res = rdd.map(worker_test).collect()
     assert len(res) == N
     paths = [info['filepath'] for info in res]
@@ -454,7 +454,7 @@ class Spark(object):
     
     sc = spark.sparkContext
     N = max(1, Spark.num_executors(spark)) # Try to test all executors
-    y = range(N)
+    y = list(range(N))
     rdd = sc.parallelize(y)
     res = rdd.map(foo).collect()
     assert len(res) == N
@@ -602,7 +602,7 @@ def spark_df_to_tf_dataset(
         if not rows:
           # Tensorflow expects empty numpy columns of promised dtype
           import numpy as np
-          print 'no rows'
+          print('no rows')
           return tuple(
             np.empty(0, dtype=tf_dtype.as_numpy_dtype)
             for tf_dtype in tf_element_types
@@ -614,7 +614,7 @@ def spark_df_to_tf_dataset(
         # tuple of arrays.  So we re-organize the rows into columns, each
         # which has a known type.
         import itertools
-        cwise = list(itertools.izip(*xformed))
+        cwise = list(zip(*xformed))
 
         return cwise
       

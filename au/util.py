@@ -56,7 +56,7 @@ def as_row_of_constants(inst):
   for attr in sorted(dir(inst)):
     if is_constant_field(attr):
       v = getattr(inst, attr)
-      if isinstance(v, (basestring, unicode, float, int, list, dict)):
+      if isinstance(v, (str, float, int, list, dict)):
         row[attr] = v
       else:
         subrow = as_row_of_constants(v)
@@ -65,7 +65,7 @@ def as_row_of_constants(inst):
             row[attr] = v.__name__
           else:
             row[attr] = v.__class__.__name__
-        for col, colval in subrow.iteritems():
+        for col, colval in subrow.items():
           row[attr + '_' + col] = colval
   return row
 
@@ -463,14 +463,14 @@ def download(uri, dest, try_expand=True):
     COLS = 70
     full = int(COLS * percentage / 100)
     bar = full * "#" + (COLS - full) * " "
-    sys.stdout.write(u"\u001b[1000D[" + bar + "] " + str(percentage) + "%")
+    sys.stdout.write("\u001b[1000D[" + bar + "] " + str(percentage) + "%")
     sys.stdout.flush()
   
   fname = os.path.split(uri)[-1]
   tempdest = tempfile.NamedTemporaryFile(suffix='_' + fname)
   try:
     log.info("Fetching %s ..." % uri)
-    response = urllib.urlopen(uri)
+    response = urllib.request.urlopen(uri)
     size = int(response.info().get('Content-Length').strip())
     log.info("... downloading %s MB ..." % (float(size) * 1e-6))
     chunk = min(size, 8192)
@@ -678,11 +678,11 @@ class GPUPool(object):
     self._slock = SystemLock(name_prefix='au.GPUPool', name=name, abspath=path)
 
   def _set_gpus(self, lst):
-    with open(self._slock.path, 'w') as f:
+    with open(self._slock.path, 'wb') as f:
       pickle.dump(lst, f, protocol=pickle.HIGHEST_PROTOCOL)
 
   def _get_gpus(self):
-    with open(self._slock.path, 'r') as f:
+    with open(self._slock.path, 'rb') as f:
       try:
         return pickle.load(f)
       except EOFError:
@@ -774,7 +774,7 @@ class Worker(object):
         
       # Expose to subclass if subclass needs them
       self._gpu_ids = [h.index for h in handles]
-      print 'self.__gpu_ids', self._gpu_ids, os.getpid()
+      print('self.__gpu_ids', self._gpu_ids, os.getpid())
       yield
 
       # `handles` will expire and release GPUs
@@ -863,7 +863,7 @@ def tf_create_session_config(restrict_gpus=GPUS_UNRESTRICTED, extra_opts=None):
 #   config.intra_op_parallelism_threads = 0
 #   config.inter_op_parallelism_threads = 0
   
-  for k, v in extra_opts.iteritems():
+  for k, v in extra_opts.items():
     setattr(config, k, v)
   return config
 
@@ -1048,7 +1048,7 @@ def tf_variable_summaries(var, prefix=''):
     prefix = prefix[:prefix.find('/')] # Exclude slashes in var name
     prefix = prefix[:prefix.find(':')] # Exclude : too
     prefix = prefix + '/'
-    print prefix, var.name
+    print(prefix, var.name)
   
   with tf.name_scope(prefix + 'summaries'):
     mean = tf.reduce_mean(var)

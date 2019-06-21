@@ -108,8 +108,8 @@ class ImageRow(object):
         # https://stackoverflow.com/a/49507268
         # Can skip for python3 ...
         v = getattr(self, k)
-        if isinstance(v, basestring):
-          v = unicode(v.encode('utf-8'))
+        if isinstance(v, str):
+          v = str(v.encode('utf-8'))
           
         attrs.append((k, v))
 
@@ -183,7 +183,7 @@ class ImageRow(object):
   def fname(self):
     has_fnamable_label = (
       self.label is not '' and
-      isinstance(self.label, (basestring, int, float))) 
+      isinstance(self.label, (str, int, float))) 
     
     toks = (
       self.dataset,

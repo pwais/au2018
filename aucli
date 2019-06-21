@@ -101,7 +101,6 @@ class DockerEnv(object):
       {docker} run
         --name {container_name}
         -d -it -P
-        -u $(id -u):$(id -g)
         --net=host
         -v `pwd`:/opt/au:z
         -v {ivy2_persisted_cache}:/root/.ivy2:z

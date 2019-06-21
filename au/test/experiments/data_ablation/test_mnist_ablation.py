@@ -15,20 +15,20 @@ import pytest
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_mnist_ablation') 
 
 
-def test_my_fun_tassst():
-  from au.spark import Spark
-  spark = Spark.getOrCreate()
+# def test_my_fun_tassst():
+#   from au.spark import Spark
+#   spark = Spark.getOrCreate()
 
-  import pdb; pdb.set_trace()
+#   import pdb; pdb.set_trace()
 
-  # experiment = mnist_ablated.Experiment(run_name='default.2019-02-15-06_35_17.H8ONI')
-  experiment = mnist_ablated.Experiment(run_name='default.2019-02-03-07_25_48.GIBOB')
-  experiment._build_activations(spark=spark)
-  #experiment.run(spark=spark)
-  # df = experiment.as_df(spark)
-  #report = mnist_ablated.ExperimentReport(spark, experiment)
-  #report.save()
-  # import ipdb; ipdb.set_trace()
+#   # experiment = mnist_ablated.Experiment(run_name='default.2019-02-15-06_35_17.H8ONI')
+#   experiment = mnist_ablated.Experiment(run_name='default.2019-02-03-07_25_48.GIBOB')
+#   experiment._build_activations(spark=spark)
+#   #experiment.run(spark=spark)
+#   # df = experiment.as_df(spark)
+#   #report = mnist_ablated.ExperimentReport(spark, experiment)
+#   #report.save()
+#   # import ipdb; ipdb.set_trace()
   
   
 
@@ -98,10 +98,10 @@ class TestMNISTAblatedDataset(unittest.TestCase):
     UniformAblated.setup(params=self.params)
     class_counts = UniformAblated.get_class_freq(self.spark, raw_counts=True)
 
-    print 'Whole dataset counts:'
+    print('Whole dataset counts:')
     self.std_class_counts.show()
 
-    print 'Ablated counts:'
+    print('Ablated counts:')
     class_counts.show()
 
     std_rows = sorted(self.std_class_counts.collect())
@@ -118,7 +118,7 @@ class TestMNISTAblatedDataset(unittest.TestCase):
             for v in (test_counts / std_counts))
   
   def test_single_class_ablate(self):
-    print "TODO"
+    print("TODO")
 
 def test_micro_experiment(monkeypatch):
   testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
@@ -147,7 +147,7 @@ def test_micro_experiment(monkeypatch):
       0.99,
     ),
 
-    'all_classes': range(3), # Generate fewer and smaller Treatments
+    'all_classes': list(range(3)), # Generate fewer and smaller Treatments
   }
 
   mnist.MNISTDataset.setup(params=CONF['params_base'])

@@ -103,7 +103,7 @@ class TestMNISTDataset(unittest.TestCase):
       self._check_test_0_img(rows=df.collect())
 
       df = mnist.MNISTDataset.get_class_freq(spark)
-      print 'MNISTDataset.get_class_freq:'
+      print('MNISTDataset.get_class_freq:')
       df.show()
       for row in df.collect():
         # We should have a reasonable sample ...

@@ -331,7 +331,7 @@ class model_fn(object):
           'precision': tf.metrics.precision,
           'recall': tf.metrics.recall,
         }
-        for name, ftor in name_to_ftor.iteritems():
+        for name, ftor in name_to_ftor.items():
           full_name = name + '_' + k_name
           eval_metric_ops[full_name] = ftor(name=full_name, **metric_kwargs)
 

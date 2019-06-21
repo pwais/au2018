@@ -152,7 +152,7 @@ class Fixtures(object):
         set(EXPECTED_FILE_TO_DEST.keys())
         & set(os.path.dirname(p) for p in src_paths))
     if found:
-      print "Found the following files, which we will import:"
+      print("Found the following files, which we will import:")
       pprint.pprint(list(found))
 
     spark = Spark.getOrCreate()
@@ -167,11 +167,11 @@ class Fixtures(object):
     
     def run_safe(cmd):
       if args.dry_run:
-        print "DRY RUN SKIPPED: " + cmd
+        print("DRY RUN SKIPPED: " + cmd)
       else:
         util.run_cmd(cmd)
 
-    for fname, dest in sorted(EXPECTED_FILE_TO_DEST.iteritems()):
+    for fname, dest in sorted(EXPECTED_FILE_TO_DEST.items()):
       src_path = get_path(fname, src_paths)
       if not src_path:
         continue
@@ -183,7 +183,7 @@ class Fixtures(object):
         archive_rdd = Spark.archive_rdd(spark, cls.FIXTURES.video_zip())
         archive_rdd = archive_rdd.filter(lambda fw: 'mov' in fw.name)
         n_vids = archive_rdd.count()
-        print "Found %s videos in %s ..." % (n_vids, src_path)
+        print("Found %s videos in %s ..." % (n_vids, src_path))
         
         if args.all_videos:
           max_videos = n_vids
@@ -193,7 +193,7 @@ class Fixtures(object):
         vids = sorted(archive_rdd.map(lambda fw: fw.name).collect())
         vids = set(vids[:max_videos])
         vids_to_import = archive_rdd.filter(lambda fw: fw.name in vids)
-        print "... importing %s videos ..." % len(vids_to_import.count())
+        print("... importing %s videos ..." % len(vids_to_import.count()))
         
         dry_run = args.dry_run
         dest_dir = cls.video_dir()
@@ -201,13 +201,13 @@ class Fixtures(object):
           vid_dest = os.path.join(dest_dir, fw.name)
           util.mkdir(os.path.dirname(vid_dest))
           if dry_run:
-            print "DRY RUN SKIPPED: " + f.name
+            print("DRY RUN SKIPPED: " + f.name)
           else:
             with open(vid_dest, 'wc') as f:
               f.write(fw.data)
         vids_to_import.foreach(copy_vid)
 
-        print "... import complete! Imported to %s ." % dest_dir  
+        print("... import complete! Imported to %s ." % dest_dir)  
 
       else:
         cmd = 'cp -v %s %s' % (src_path, dest)
@@ -216,17 +216,17 @@ class Fixtures(object):
       
     ### Index Data
     if args.skip_reindex:
-      print "Skipping (re-)index phase"
+      print("Skipping (re-)index phase")
       return
     
     if args.dry_run:
-      print "DRY RUN SKIPPED index & setup phase"
+      print("DRY RUN SKIPPED index & setup phase")
     else:
-      print "Cleaning index and debug dirs ..."
+      print("Cleaning index and debug dirs ...")
       util.cleandir(cls.video_index_root())
       util.cleandir(cls.video_debug_dir())
       
-      print "Running video setup ..."
+      print("Running video setup ...")
       VideoDataset.setup(spark, all_videos=args.all_videos)
 
 ### Data
@@ -243,7 +243,7 @@ _Meta_DEFAULTS = {
   'video': '',
 }
 class Meta(object):
-  __slots__ = _Meta_DEFAULTS.keys()
+  __slots__ = list(_Meta_DEFAULTS.keys())
 
   def __init__(self, **kwargs):
     for k in self.__slots__:
@@ -395,7 +395,7 @@ class InfoDataset(object):
   @classmethod
   def videonames(cls):
     video_to_fw = cls._video_to_fw_cache()
-    return video_to_fw.keys()
+    return list(video_to_fw.keys())
 
   @classmethod
   def get_meta_for_video(cls, videoname):
@@ -566,7 +566,7 @@ class VideoMeta(object):
   """A row in the index/bdd100k_videos table.  Designed to speed up Spark jobs
   against raw BDD100k videos"""
 
-  __slots__ = _VideoMeta_DEFAULTS.keys()
+  __slots__ = list(_VideoMeta_DEFAULTS.keys())
     
   def __init__(self, **kwargs):
     for k in self.__slots__:
@@ -830,7 +830,7 @@ class VideoDebugWebpage(object):
 
     # We'll embed relative paths in the HTML
     map_fname = os.path.basename(map_path)
-    plot_fnames = map(os.path.basename, plot_paths)
+    plot_fnames = list(map(os.path.basename, plot_paths))
 
     map_html = ''
     if map_fname:
@@ -912,7 +912,7 @@ class VideoDebugWebpage(object):
     for t, g in TimeseriesRow.get_series('gps', ts):
       title = "\\n".join(
         k + ' = ' + str(v)
-        for k , v in sorted(g.to_dict().iteritems())
+        for k , v in sorted(g.to_dict().items())
         if v)
       gmap.marker(g.latitude, g.longitude, title=title)
 
@@ -944,7 +944,7 @@ class VideoDebugWebpage(object):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     paths = []
-    for title, vts in sorted(TSs.iteritems()):
+    for title, vts in sorted(TSs.items()):
 
       # Vanilla plot of v(t)
       fig = plt.figure()
@@ -958,10 +958,10 @@ class VideoDebugWebpage(object):
         # Based upon: https://stackoverflow.com/a/295466
         import unicodedata
         import re
-        value = unicode(value)
+        value = str(value)
         value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore')
-        value = unicode(re.sub('[^\w\s-]', '', value).strip().lower())
-        value = unicode(re.sub('[-\s]+', '-', value))
+        value = str(re.sub('[^\w\s-]', '', value).strip().lower())
+        value = str(re.sub('[-\s]+', '-', value))
         return value
 
       dest = dest_base + '.' + to_filename(title) + '.png'
@@ -1028,7 +1028,7 @@ class VideoDataset(object):
 
   @classmethod
   def videonames(cls):
-    return cls._videoname_to_video().keys()
+    return list(cls._videoname_to_video().keys())
 
   @classmethod
   def get_video(cls, videoname):

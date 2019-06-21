@@ -35,7 +35,7 @@ class INNModel(object):
       self.update(**overrides)
     
     def update(self, **overrides):
-      for k, v in overrides.iteritems():
+      for k, v in overrides.items():
         setattr(self, k, v)
 
     def make_normalize_ftor(self):
@@ -181,38 +181,38 @@ class Activations(object):
     self._model_to_tensor_to_value[model_name][tensor_name] = tensor_value
   
   def set_tensors(self, model_name, tensor_name_to_value):
-    for tn, tv in tensor_name_to_value.iteritems():
+    for tn, tv in tensor_name_to_value.items():
       self.set_tensor(model_name, tn, tv)
 
   def get_tensor(self, model_name, tensor_name):
     return self._model_to_tensor_to_value.get(model_name, {}).get(tensor_name)
 
   def get_models(self):
-    return self._model_to_tensor_to_value.keys()
+    return list(self._model_to_tensor_to_value.keys())
   
   def get_default_model(self):
-    return sorted(self._model_to_tensor_to_value.iterkeys())[0]
+    return sorted(self._model_to_tensor_to_value.keys())[0]
   
   def get_tensor_names(self, model_name):
-    return self._model_to_tensor_to_value.get(model_name, {}).keys()
+    return list(self._model_to_tensor_to_value.get(model_name, {}).keys())
 
   def to_rows(self):
     # pyspark sees Row as a struct / map type
     from pyspark.sql import Row
     
     # TODO refine into rowable adapter thing ...
-    for model, t_to_v in self._model_to_tensor_to_value.iteritems():
+    for model, t_to_v in self._model_to_tensor_to_value.items():
       yield Row(
         model=model,
         tensor_to_value=dict(
-          (tn, pickle.dumps(tv)) for tn, tv in t_to_v.iteritems()),
+          (tn, pickle.dumps(tv)) for tn, tv in t_to_v.items()),
       )
 
   @staticmethod
   def from_rows(rows):
     acts = Activations()
     for row in rows:
-      for tn, tvb in row.tensor_to_value.iteritems():
+      for tn, tvb in row.tensor_to_value.items():
         acts.set_tensor(row.model, tn, pickle.loads(tvb))
     return acts
 
@@ -252,14 +252,14 @@ class FillActivationsTFDataset(FillActivationsBase):
 
     self.overall_thruput.start_block()
     
-    import Queue
+    import queue
     import tensorflow as tf
 
     util.log.info(
       "Filling activations for %s ..." % self.tigraph_factory.model_name)
     
     graph = tf.Graph()
-    processed_rows = Queue.Queue()
+    processed_rows = queue.Queue()
 
     # Push normalization onto the Tensorflow tf.Dataset threadpool via the
     # generator below.  Read more after the function.

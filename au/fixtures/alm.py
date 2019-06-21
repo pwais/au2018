@@ -49,7 +49,7 @@ class ImageRowToExampleXForm(object):
   }
 
   def __init__(self, **kwargs):
-    for k, v in self.DEFAULTS.iteritems():
+    for k, v in self.DEFAULTS.items():
       setattr(self, k, kwargs.get(k, v))
 
   def __call__(self, row):
@@ -120,7 +120,7 @@ class ActivationsDataset(object):
 
         def part_to_tf_cache(pid, iter_image_rows):          
           try:
-            row = iter_image_rows.next()
+            row = next(iter_image_rows)
           except StopIteration as e:
             util.log.info("Empty partition, skipping %s" % pid)
             return []
@@ -129,7 +129,7 @@ class ActivationsDataset(object):
           def get_dtype(v):
             if hasattr(v, 'dtype'):
               return tf.dtypes.as_dtype(v.dtype)
-            elif isinstance(v, (basestring, unicode)):
+            elif isinstance(v, str):
               return tf.string
             else:
               return tf.dtypes.as_dtype(v)

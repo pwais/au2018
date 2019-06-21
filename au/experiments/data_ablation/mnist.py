@@ -292,7 +292,7 @@ class ExperimentReport(object):
       from pyspark.sql import Row
       if isinstance(class_dist, Row):
         class_dist = class_dist.asDict()
-      min_key, min_value = min(class_dist.iteritems(), key=lambda k_v: k_v[-1])
+      min_key, min_value = min(iter(class_dist.items()), key=lambda k_v: k_v[-1])
       return Row(class_id=str(min_key), keep_frac=min_value)
     
     get_ablated_class_udf = udf(
@@ -524,7 +524,7 @@ class Experiment(object):
       0.5,
     ),
 
-    'all_classes': range(10),
+    'all_classes': list(range(10)),
   }
 
   @property
@@ -532,7 +532,7 @@ class Experiment(object):
     return os.path.join(self.exp_basedir, self.run_name)
 
   def __init__(self, **conf):
-    for k, v in self.DEFAULTS.iteritems():
+    for k, v in self.DEFAULTS.items():
       setattr(self, k, conf.get(k) or v)
 
   def run(self, spark=None):
@@ -659,7 +659,7 @@ class Experiment(object):
 
   def _get_params_meta(self, params):
     d = util.as_row_of_constants(params)
-    exp_dict = dict((k, getattr(self, k)) for k in self.DEFAULTS.iterkeys())
+    exp_dict = dict((k, getattr(self, k)) for k in self.DEFAULTS.keys())
     exp_dict['params_base'] = util.as_row_of_constants(['params_base'])
     d['EXPERIMENT'] = exp_dict
     return d
@@ -693,7 +693,7 @@ class Experiment(object):
     for dist in gen_ablated_dists(self.all_classes, self.single_class_ablations):
       params = copy.deepcopy(self.params_base)
 
-      ablated_frac, ablated_class = min((frac, c) for c, frac in dist.iteritems())
+      ablated_frac, ablated_class = min((frac, c) for c, frac in dist.items())
 
       for i in range(self.trials_per_treatment):
         params = copy.deepcopy(params)
@@ -737,7 +737,7 @@ if __name__ == '__main__':
   import sys
   mnist.MNISTDataset.setup()
   
-  print "Example usage: python mnist.py run_name=my_run"
+  print("Example usage: python mnist.py run_name=my_run")
 
   kv_args = dict(a.split('=') for a in sys.argv if '=' in a)
   e = Experiment(**kv_args)

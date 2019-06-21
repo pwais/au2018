@@ -65,7 +65,7 @@ class BDD100kTests(unittest.TestCase):
       bdd100k.Fixtures.create_test_fixtures()
       cls.have_fixtures = True
     except Exception as e:
-      print "Failed to create test fixtures: %s" % (e,)
+      print("Failed to create test fixtures: %s" % (e,))
 
   @pytest.mark.slow
   def test_info_dataset(self):

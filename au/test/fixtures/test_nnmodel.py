@@ -125,7 +125,7 @@ def _check_rows(fixture, filled_rows):
       visible_path = row.to_debug()
       imageio.imwrite(visible_path + '.sobel_x.png', sobel_x)
       imageio.imwrite(visible_path + '.sobel_y.png', sobel_y)
-      print("Debug images saved to %s" % visible_path)
+      print(("Debug images saved to %s" % visible_path))
 
 def test_activations_sobel(monkeypatch):
   fixture = _create_fixture(monkeypatch)

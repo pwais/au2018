@@ -231,7 +231,7 @@ def test_create_video():
   path = os.path.join(VID_TEMPDIR, 'test_video.mov')
   with open(path, 'wc') as f:
     f.write(v.get_bytes())
-    print "Wrote video to %s for inspection" % path
+    print("Wrote video to %s for inspection" % path)
 
   import imageio
   reader = imageio.get_reader(path)
