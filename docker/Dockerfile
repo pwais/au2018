@@ -1,4 +1,4 @@
-FROM tensorflow/tensorflow:1.12.0-gpu
+FROM tensorflow/tensorflow:1.14.0-gpu-py3-jupyter
 
 # We don't care for __pycache__ and .pyc files; sometimes VSCode doesn't clean
 # up properly when deleting things and the cache gets stale.
@@ -9,13 +9,13 @@ COPY docker/sources.list /etc/apt/sources.list
 
 ## Required for installing things
 RUN apt-get update
-RUN apt-get install -y curl git python-dev wget
+RUN apt-get install -y curl git python3-dev wget
 
 
 
-## Java
+## Java 8.  NB: can't use Java 11 yet for Spark
 RUN \
-  apt-get install -y default-jdk && \
+  apt-get install -y openjdk-8-jdk && \
   ls -lhat /usr/lib/jvm/java-8-openjdk-amd64 && \
   echo JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 >> /etc/environment
 ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
@@ -23,10 +23,10 @@ ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
 
 
 ## Bazel -- might not need this ...
-RUN \
-  apt-get install -y bash-completion && \
-  wget --progress=bar:force:noscroll https://github.com/bazelbuild/bazel/releases/download/0.16.1/bazel_0.16.1-linux-x86_64.deb && \
-  dpkg -i bazel_0.16.1-linux-x86_64.deb 
+#RUN \
+#  apt-get install -y bash-completion && \
+#  wget --progress=bar:force:noscroll https://github.com/bazelbuild/bazel/releases/download/0.16.1/bazel_0.16.1-linux-x86_64.deb && \
+#  dpkg -i bazel_0.16.1-linux-x86_64.deb 
 
 
 
@@ -36,7 +36,7 @@ ENV LD_LIBRARY_PATH $LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/lib:/
 RUN \
   ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 && \
   ldconfig && \
-  python -c 'from tensorflow.python.client import device_lib; device_lib.list_local_devices()' 
+  python3 -c 'from tensorflow.python.client import device_lib; device_lib.list_local_devices()' 
 
 
 
@@ -53,7 +53,7 @@ RUN curl -L --retry 3 \
  && mv /opt/hadoop-$HADOOP_VERSION $HADOOP_HOME \
  && rm -rf $HADOOP_HOME/share/doc
 
-ENV SPARK_VERSION 2.4.0
+ENV SPARK_VERSION 2.4.3
 ENV SPARK_PACKAGE spark-${SPARK_VERSION}-bin-without-hadoop
 ENV SPARK_HOME /opt/spark
 ENV SPARK_DIST_CLASSPATH "$HADOOP_HOME/etc/hadoop/*:$HADOOP_HOME/share/hadoop/common/lib/*:$HADOOP_HOME/share/hadoop/common/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/hdfs/lib/*:$HADOOP_HOME/share/hadoop/hdfs/*:$HADOOP_HOME/share/hadoop/yarn/lib/*:$HADOOP_HOME/share/hadoop/yarn/*:$HADOOP_HOME/share/hadoop/mapreduce/lib/*:$HADOOP_HOME/share/hadoop/mapreduce/*:$HADOOP_HOME/share/hadoop/tools/lib/*"
@@ -63,7 +63,7 @@ RUN curl -L --retry 3 \
   | gunzip \
   | tar x -C /opt/ \
  && mv /opt/$SPARK_PACKAGE $SPARK_HOME \
- && pip install findspark
+ && pip3 install findspark==1.3.0
 COPY docker/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
 ## Alluxio
@@ -108,7 +108,7 @@ RUN \
     tree \
     vim \
     wget && \
-  pip install ipdb && \
+  pip3 install ipdb && \
   curl -LO https://github.com/BurntSushi/ripgrep/releases/download/0.10.0/ripgrep_0.10.0_amd64.deb && \
   dpkg -i ripgrep_0.10.0_amd64.deb
 
@@ -120,26 +120,26 @@ RUN \
 
 ## AU Python
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
-RUN python -c 'import imageio; imageio.plugins.ffmpeg.download()'
+RUN pip3 install -r /tmp/requirements.txt
+RUN python3 -c 'import imageio; imageio.plugins.ffmpeg.download()'
 
 
 ## TF Models
 ENV PYTHONPATH $PYTHONPATH:/opt/au/external/tensorflow_models/research:/opt/au/external/tensorflow_models/research/slim:/opt/au/external/tensorflow_models/official:/opt/au/external/tensorflow_models/
 RUN \
-  apt-get install -y protobuf-compiler python-pil python-lxml python-tk && \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y protobuf-compiler python-pil python-lxml python-tk && \
   pip install Cython contextlib2 matplotlib && \
   cd /tmp && \
   git clone https://github.com/cocodataset/cocoapi.git && \
   cd cocoapi/PythonAPI && \
-  python setup.py install
+  python3 setup.py install
 
 
 ## TF CNN Vis
-RUN pip install scipy h5py wget Pillow six scikit-image
+RUN pip3 install scipy h5py wget Pillow six scikit-image
 
 ## tsnet
-RUN apt-get install -y libblas-dev libatlas-base-dev && pip install tsne
+RUN apt-get install -y libblas-dev libatlas-base-dev && pip3 install tsne
 
 ## Kubespray
 # See docker/kubespray_requirements.txt for notes
@@ -151,7 +151,7 @@ ENV PATH $PATH:/opt/au/kubespray/inventory/default/artifacts/
 ## Gcloud
 RUN \
   curl https://sdk.cloud.google.com | bash && \
-  pip install -U crcmod 
+  pip3 install -U crcmod 
 
 # gcsfuse does NOT support read cache :P
 # and s3fs is broken too it seems

@@ -35,7 +35,7 @@ import subprocess
 import sys
 
 AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
-DOCKER_IMAGE_VERSION = 'v1.4.2'
+DOCKER_IMAGE_VERSION = 'v1.5.0'
 DOCKER_IMAGE = os.environ.get(
   'AU_DOCKER_IMAGE', 'au2018/env:' + DOCKER_IMAGE_VERSION)
 CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
@@ -101,6 +101,7 @@ class DockerEnv(object):
       {docker} run
         --name {container_name}
         -d -it -P
+        -u $(id -u):$(id -g)
         --net=host
         -v `pwd`:/opt/au:z
         -v {ivy2_persisted_cache}:/root/.ivy2:z
@@ -350,24 +351,24 @@ class KubeCluster(object):
       "Are you in an aucli --shell ?"
     
     if not os.path.exists(cls.SSH_KEYFILE):
-      print
-      print
-      print "\t\tPlease copy or symlink a cluster SSH private key to "
-      print "\t\t\t" + cls.SSH_KEYFILE
-      print "\t\t(e.g. ln -s /outer_root/home/au/.ssh/your_key_file "  + cls.SSH_KEYFILE + " )"
-      print "\t\tand run ./aucli --kube-init again."
-      print
+      print()
+      print()
+      print("\t\tPlease copy or symlink a cluster SSH private key to ")
+      print("\t\t\t" + cls.SSH_KEYFILE)
+      print("\t\t(e.g. ln -s /outer_root/home/au/.ssh/your_key_file "  + cls.SSH_KEYFILE + " )")
+      print("\t\tand run ./aucli --kube-init again.")
+      print()
       sys.exit(1)
     
     if not os.path.exists(cls.HOSTS_INI):
       run_cmd('cp -v ' + cls.HOSTS_INI_TEMPLATE + ' ' + cls.HOSTS_INI)
     
-    print
-    print
-    print "\t\tNow please edit " + cls.HOSTS_INI + " to spec your cluster."
-    print "\t\tAfterwards, run $ aucli --kube-up"
-    print
-    print
+    print()
+    print()
+    print("\t\tNow please edit " + cls.HOSTS_INI + " to spec your cluster.")
+    print("\t\tAfterwards, run $ aucli --kube-up")
+    print()
+    print()
     sys.exit(0)
   
   @classmethod
@@ -412,12 +413,12 @@ class KubeCluster(object):
   def test(cls):
     assert os.path.exists(cls.ADMIN_CONF), "Did cluster bring-up succeed?"
 
-    print
-    print
-    print "Path to kubectl:"
-    print cls.KUBECTL
-    print
-    print
+    print()
+    print()
+    print("Path to kubectl:")
+    print(cls.KUBECTL)
+    print()
+    print()
 
     cmd = """
       {KUBECTL} --kubeconfig {ADMIN_CONF} get all --all-namespaces && \
