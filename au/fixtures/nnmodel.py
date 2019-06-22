@@ -1,5 +1,8 @@
 import os
 import pickle
+import sys
+
+import numpy as np
 
 from au import conf
 from au import util
@@ -205,7 +208,8 @@ class Activations(object):
       yield Row(
         model=model,
         tensor_to_value=dict(
-          (tn, pickle.dumps(tv)) for tn, tv in t_to_v.items()),
+          (tn, bytearray(pickle.dumps(tv)))
+          for tn, tv in t_to_v.items()),
       )
 
   @staticmethod
@@ -300,7 +304,7 @@ class FillActivationsTFDataset(FillActivationsBase):
                       output_types=(tf.string, tf.uint8),
                       output_shapes=(tf.TensorShape([]), input_shape))
       d = d.batch(self.tigraph_factory.batch_size)
-      uris, input_image = d.make_one_shot_iterator().get_next()
+      uris, input_image = tf.compat.v1.data.make_one_shot_iterator(d).get_next()
       uris = tf.identity(uris, name=uris_op_name)
     
     util.log.info("Creating inference graph ...")
@@ -312,11 +316,11 @@ class FillActivationsTFDataset(FillActivationsBase):
     # with final_graph.as_default() as g:
     #   uris = tf.identity(uris, name='au_uris')
     #   assert uris.graph is g
-    # ^^ this would be nice but is broken idk :(
+    # ^^ this would be a nice check but is broken idk :(
     util.log.info("... done creating inference graph.")
 
     with final_graph.as_default():
-      # TODO: support using single GPUs; requires running in a subprocess
+      # TODO: support using single GPUs-- requires running in a subprocess
       # due to Tensorflow memory madness :( 
       with util.tf_cpu_session() as sess:
           
@@ -341,7 +345,13 @@ class FillActivationsTFDataset(FillActivationsBase):
             tensor_to_value = dict(
                         (name, output[i][n,...])
                         for i, name in enumerate(tensors_to_eval))
-            row_uri = str(tensor_to_value.pop(uris_tensor_name))
+            row_uri = tensor_to_value.pop(uris_tensor_name)
+            
+            if sys.version_info.major == 2:
+              row_uri = str(row_uri)
+            else:
+              # Tensorflow makes `row_uri` a shapeless array :(
+              row_uri = np.reshape(row_uri, (1,))[0].decode('utf-8')
 
             # Find the row corresponding to this output
             MAX_TRIES = 100
@@ -372,7 +382,7 @@ class FillActivationsTFDataset(FillActivationsBase):
             self.overall_thruput.update_tallies(n=1)
             self.overall_thruput.maybe_log_progress(n=1000)
     
-    tf.reset_default_graph()
+    tf.compat.v1.reset_default_graph()
     self.overall_thruput.stop_block()
 
 
@@ -429,6 +439,7 @@ class ActivationsTable(object):
                 )
       
       activation_row_rdd = activated.mapPartitions(to_activation_rows)
+      # import pdb; pdb.set_trace()
       df = spark.createDataFrame(activation_row_rdd)
       df.show()
       partition_cols = list(dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)

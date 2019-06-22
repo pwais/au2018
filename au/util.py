@@ -786,9 +786,23 @@ class Worker(object):
     if self.SYSTEM_EXCLUSIVE:
       ctx = self._SYSTEM_LOCK
     
-    from contextlib import nested
-    ctx = nested(ctx, self.__maybe_lock_gpus())
+    ## BEGIN from contextlib import nested
+    # Gee thanks Guido! :P https://stackoverflow.com/a/39158985
+    try:
+      from contextlib import nested  # Python 2
+    except ImportError:
+      from contextlib import ExitStack, contextmanager
 
+      @contextmanager
+      def nested(*contexts):
+        """Reimplementation of nested in python 3."""
+        with ExitStack() as stack:
+          for ctx in contexts:
+            stack.enter_context(ctx)
+          yield contexts
+    ## END from contextlib import nested
+    
+    ctx = nested(ctx, self.__maybe_lock_gpus())
     with ctx:
       log.info("Starting worker %s ..." % self._name)
       if self.PROCESS_ISOLATED:
@@ -856,15 +870,15 @@ def tf_create_session_config(restrict_gpus=GPUS_UNRESTRICTED, extra_opts=None):
   extra_opts = extra_opts or {}
   
   import tensorflow as tf
-  config = tf.ConfigProto()
+  config = tf.compat.v1.ConfigProto()
 
   tf_session_config_restrict_gpus(config, restrict_gpus=restrict_gpus)
   config.log_device_placement = False
   
-  # Let the system pick number of threads
-#   config.intra_op_parallelism_threads = 0
-#   config.inter_op_parallelism_threads = 0
-  
+  # # Enable CPU XLA!
+  # config.graph_options.optimizer_options.global_jit_level = \
+  #   tf.OptimizerOptions.ON_1
+
   for k, v in extra_opts.items():
     setattr(config, k, v)
   return config
@@ -882,7 +896,7 @@ def tf_create_session(config=None):
   config = config or tf_create_session_config()
 
   import tensorflow as tf
-  sess = tf.Session(config=config)
+  sess = tf.compat.v1.Session(config=config)
   return sess
 
 def tf_cpu_session(config=None):

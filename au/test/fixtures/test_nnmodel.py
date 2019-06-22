@@ -25,11 +25,11 @@ class Sobel(nnmodel.INNModel):
     def create_frozen_graph_def(self):
       g = tf.Graph()
       with g.as_default():
-        input_image = tf.placeholder(
+        input_image = tf.compat.v1.placeholder(
           tf.uint8,
           self.params.INPUT_TENSOR_SHAPE,
           name=self.params.INPUT_TENSOR_NAME)
-        uris = tf.placeholder(
+        uris = tf.compat.v1.placeholder(
           tf.string,
           [None],
           name=self.params.INPUT_URIS_NAME)
@@ -118,8 +118,8 @@ def _check_rows(fixture, filled_rows):
                   conf.AU_ROOT,
                   'au/test/202228408_eccfe4790e.jpg.png.sobel_x.png')
       
-      assert sobel_y_bytes == open(SOBEL_Y_TEST_IMG_PATH).read()
-      assert sobel_x_bytes == open(SOBEL_X_TEST_IMG_PATH).read()
+      assert sobel_y_bytes == open(SOBEL_Y_TEST_IMG_PATH, 'rb').read()
+      assert sobel_x_bytes == open(SOBEL_X_TEST_IMG_PATH, 'rb').read()
 
       # For debugging
       visible_path = row.to_debug()
@@ -162,6 +162,6 @@ def test_fill_activations_table(monkeypatch):
     assert df.count() == expected_num_rows
     df.show()
 
-    imagerow_rdd = TestActivationsTable.to_imagerow_rdd(spark=spark)
+    imagerow_rdd = TestActivationsTable.as_imagerow_rdd(spark=spark)
     rows = imagerow_rdd.collect()
     _check_rows(fixture, rows)

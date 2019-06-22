@@ -20,6 +20,7 @@ def test_mnist_train(monkeypatch):
   params = mnist.MNIST.Params()
   params.TRAIN_EPOCHS = 10
   params.LIMIT = 1000
+  mnist.MNISTDataset.setup(params=params)
   model = mnist.MNIST.load_or_train(params)
 
 
@@ -44,7 +45,7 @@ class TestMNISTDataset(unittest.TestCase):
     cls.actual_test_0_path = os.path.join(
                   TEST_TEMPDIR,
                   'data/MNIST/test/MNIST-test-label_7-mnist_test_0.png')
-    cls.expected_test_0_bytes = open(testconf.MNIST_TEST_IMG_PATH, 'r').read()
+    cls.expected_test_0_bytes = open(testconf.MNIST_TEST_IMG_PATH, 'rb').read()
     cls.expected_test_0 = imageio.imread(testconf.MNIST_TEST_IMG_PATH)
 
   def _check_test_0_img(self, rows=None, tuples=None):
@@ -57,6 +58,7 @@ class TestMNISTDataset(unittest.TestCase):
 
     for t in tuples or []:
       arr, label, uri = t
+      uri = uri.decode('utf-8')
       if 'mnist_test_0' in uri:
         def normalize(im):
           from au.fixtures.dataset import ImageRow
@@ -142,8 +144,6 @@ def test_mnist_igraph(monkeypatch):
   igraph = model.get_inference_graph()
   assert igraph != nnmodel.TFInferenceGraphFactory()
 
-  # params = mnist.MNIST.Params()
-  # params.LIMIT = 100 # num images
   mnist.MNISTDataset.setup(params=params)
   rows = list(mnist.MNISTDataset.iter_all_rows())
 
@@ -152,11 +152,9 @@ def test_mnist_igraph(monkeypatch):
   assert len(out_rows) == len(rows)
   for row in out_rows:
     acts = row.attrs['activations']
-    act = acts[0]
-    assert act.model_name == igraph.model_name
-    tensor_to_value = act.tensor_to_value
+    assert igraph.model_name in acts.get_models()
     for tensor_name in model.igraph.output_names:
-      assert tensor_name in tensor_to_value
+      t = acts.get_tensor(igraph.model_name, tensor_name)
       
       # Check that we have a non-empty array
-      assert tensor_to_value[tensor_name].shape
+      assert t.shape
