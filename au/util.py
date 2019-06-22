@@ -559,6 +559,7 @@ class GPUInfo(object):
 
     # NB: nvidia doesn't actually return *valid* csv.
     # Why would they? They make hardware, not software!
+    out = out.decode('utf-8')
     out = out.replace(', ', ',')
 
     import csv

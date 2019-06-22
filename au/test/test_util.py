@@ -150,14 +150,14 @@ def test_archive_fliyweight_zip():
   util.cleandir(TEST_TEMPDIR)
   
   # Create the fixture
-  ss = ['foo', 'bar', 'baz']
+  ss = [b'foo', b'bar', b'baz']
   
   fixture_path = os.path.join(TEST_TEMPDIR, 'test.zip')
   
   import zipfile
   with zipfile.ZipFile(fixture_path, mode='w') as z:
     for s in ss:
-      z.writestr(s, s)
+      z.writestr(s.decode('utf-8'), s)
   
   fws = util.ArchiveFileFlyweight.fws_from(fixture_path)
   assert len(fws) == len(ss)
@@ -172,12 +172,12 @@ def test_ds_store_is_stupid():
 
 
 NVIDIA_SMI_MOCK_OUTPUT = (
-"""index, name, utilization.memory [%], name, memory.total [MiB], memory.free [MiB], memory.used [MiB]
+b"""index, name, utilization.memory [%], name, memory.total [MiB], memory.free [MiB], memory.used [MiB]
 0, GeForce GTX 1060 with Max-Q Design, 2, GeForce GTX 1060 with Max-Q Design, 6072, 5796, 276
 """)
 
 NVIDIA_SMI_MOCK_OUTPUT_8_K80s = (
-"""index, name, utilization.memory [%], name, memory.total [MiB], memory.free [MiB], memory.used [MiB]
+b"""index, name, utilization.memory [%], name, memory.total [MiB], memory.free [MiB], memory.used [MiB]
 0, Tesla K80, 0, Tesla K80, 11441, 11441, 0
 1, Tesla K80, 0, Tesla K80, 11441, 11441, 0
 2, Tesla K80, 0, Tesla K80, 11441, 11441, 0
