@@ -1,5 +1,7 @@
 """A module with Spark-related utilities"""
 
+import sys
+
 from au import conf
 from au import util
 
@@ -29,6 +31,10 @@ except Exception as e:
   """ % (e,)
   raise Exception(msg)
 
+def egg_py_suffix():
+  py_vers = (sys.version_info.major, sys.version_info.minor)
+  py_suffix = '-py{}.{}.egg'.format(*py_vers)
+  return py_suffix
 
 class Spark(object):
   # Default to local Spark master
@@ -121,8 +127,8 @@ class Spark(object):
       dist.parse_command_line()
       dist.run_commands()
 
-    egg_path = os.path.join(tmp_path, MODNAME + '-0.0.0-py3.6.egg')
-    assert os.path.exists(egg_path), f"Can't find {egg_path}"
+    egg_path = os.path.join(tmp_path, MODNAME + '-0.0.0' + egg_py_suffix())
+    assert os.path.exists(egg_path), "Can't find {}".format(egg_path)
     log.info("... done.  Egg at %s" % egg_path)
     return egg_path
 
@@ -352,7 +358,7 @@ class Spark(object):
 
   @staticmethod
   def test_egg(spark):
-    EXPECTED_EGG_NAME = 'au-0.0.0-py3.6.egg'
+    EXPECTED_EGG_NAME = 'au-0.0.0' + egg_py_suffix()
 
     def worker_test(_):
       # Normally, pytest puts the local source tree on the PYTHONPATH.  That
@@ -372,7 +378,7 @@ class Spark(object):
       for p in sys.path:
         if EXPECTED_EGG_NAME in p:
           egg_path = p
-      assert egg_path, f"Egg not found in {sys.path}"
+      assert egg_path, "Egg not found in {}".format(sys.path)
 
       ## Is the egg any good?
       import zipfile
