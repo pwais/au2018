@@ -1,4 +1,4 @@
-FROM tensorflow/tensorflow:1.12.0-gpu-py3-jupyter
+FROM tensorflow/tensorflow:1.12.0-gpu-py3
 
 # We don't care for __pycache__ and .pyc files; sometimes VSCode doesn't clean
 # up properly when deleting things and the cache gets stale.
@@ -9,7 +9,14 @@ COPY docker/sources.list /etc/apt/sources.list
 
 ## Required for installing things
 RUN apt-get update
-RUN apt-get install -y curl git python3-dev wget
+RUN \
+  apt-get install -y \
+  curl \
+  git \
+  python-dev \
+  python-pip \
+  python3-dev \
+  wget
 
 
 
@@ -62,8 +69,7 @@ RUN curl -L --retry 3 \
   "https://www.apache.org/dyn/mirrors/mirrors.cgi?action=download&filename=spark/spark-${SPARK_VERSION}/${SPARK_PACKAGE}.tgz" \
   | gunzip \
   | tar x -C /opt/ \
- && mv /opt/$SPARK_PACKAGE $SPARK_HOME \
- && pip3 install findspark==1.3.0
+ && mv /opt/$SPARK_PACKAGE $SPARK_HOME
 COPY docker/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
 ## Alluxio
@@ -144,7 +150,7 @@ RUN apt-get install -y libblas-dev libatlas-base-dev && pip3 install tsne
 ## Kubespray
 # See docker/kubespray_requirements.txt for notes
 COPY docker/kubespray_requirements.txt /tmp/kubespray_requirements.txt
-RUN pip install -r /tmp/kubespray_requirements.txt
+RUN pip3 install -r /tmp/kubespray_requirements.txt
 ENV PATH $PATH:/opt/au/kubespray/inventory/default/artifacts/
 
 
@@ -166,4 +172,6 @@ RUN \
 COPY cluster/alluxio /opt/au/cluster/alluxio
 COPY aucli /opt/au/aucli
 WORKDIR /opt/au
-RUN SPARK_LOCAL_IP=127.0.0.1 SPARK_MASTER=local[4] /opt/au/aucli --test-spark 
+RUN \
+  pip2 install findspark==1.3.0 && \
+  SPARK_LOCAL_IP=127.0.0.1 SPARK_MASTER=local[4] /opt/au/aucli --test-spark 
