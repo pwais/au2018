@@ -169,8 +169,7 @@ class BDD100kTests(unittest.TestCase):
       TestTable.MODEL_PARAMS.INFERENCE_BATCH_SIZE = 10
       TestTable.setup(spark=spark)
 
-
-"""
+r"""
 TODO DELETEME Notes on data growth:
 
  'MobilenetV2/Logits/output:0',

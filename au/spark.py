@@ -11,11 +11,20 @@ from contextlib import contextmanager
 
 import numpy as np
 
-# Try to provide a helpful error message if we can't find Spark / Java
+# Try to find Spark / Java, and produce a helpful error message otherwise
 try:
   import findspark
   findspark.init()
 
+  # In python3, we filter:
+  #  "py4j-0.10.7-src.zip/py4j/java_gateway.py:2020: 
+  #      DeprecationWarning: invalid escape sequence \*"
+  if sys.version_info.major >= 3:
+    import warnings
+    warnings.filterwarnings(
+      action='ignore',
+      message=r'invalid escape sequence')
+    
   import pyspark
   from pyspark.sql import types
 
@@ -25,7 +34,7 @@ except Exception as e:
       higher.  Mebbe try installing using:
         $ pip install pyspark
       That will fix import errors.  To get Java, try:
-        $ apt-get install -y default-jdk && \
+        $ apt-get install -y openjdk-8-jdk && \
           echo JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 >> /etc/environment
       Original error: %s
   """ % (e,)
@@ -98,6 +107,11 @@ class Spark(object):
           "falling back to %s" % cls.SRC_ROOT)
         src_root = cls.SRC_ROOT
     
+    if sys.version_info.major >= 3:
+      # For whatever reason,
+      # In py 2.7.x, setuptools wants the path of the python module
+      # In py 3.x, setuptools wants the directory containing the python module
+      src_root = os.path.dirname(src_root)
     log.info("Using source root %s " % src_root)
 
     # Below is a programmatic way to run something like:
@@ -549,178 +563,179 @@ class NumpyArray(object):
     return isinstance(other, self.__class__) and other.arr == self.arr
 
 
-def spark_df_to_tf_dataset(
-      spark_df,
-      spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
-      tf_element_types, # E.g. [tf.int64]
-      non_deterministic_element_order=True,
-      num_reader_threads=-1):
-    """Create a tf.data.Dataset that reads from the Spark Dataframe
-    `spark_df`.  Executes parallel reads using the Tensorflow's internal
-    (native code) threadpool.  Each thread reads a single Spark partition
-    at a time.
+# # FIXME
+# def spark_df_to_tf_dataset(
+#       spark_df,
+#       spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
+#       tf_element_types, # E.g. [tf.int64]
+#       non_deterministic_element_order=True,
+#       num_reader_threads=-1):
+#     """Create a tf.data.Dataset that reads from the Spark Dataframe
+#     `spark_df`.  Executes parallel reads using the Tensorflow's internal
+#     (native code) threadpool.  Each thread reads a single Spark partition
+#     at a time.
 
-    This utility is similar to Petastorm's `make_reader()` but is far simpler
-    and leverages Tensorflow's build-in threadpool (so we let Tensorflow
-    do the read scheduling).
+#     This utility is similar to Petastorm's `make_reader()` but is far simpler
+#     and leverages Tensorflow's build-in threadpool (so we let Tensorflow
+#     do the read scheduling).
 
-    Args:
-      spark_df (pyspark.sql.DataFrame): Read from this Dataframe
-      spark_row_to_tf_element (func): 
-        Use this function to map each pyspark.sql.Row in `spark_df`
-        to a tuple that represents a single element of the
-        induced TF Dataset.
-      tf_element_types (tuple):
-        The types of the elements that `spark_row_to_tf_element` returns;
-        e.g. (tf.float32, tf.string).
-      non_deterministic_element_order (bool):
-        Allow the resulting tf.data.Dataset to have elements in
-        non-deterministic order for speed gains.
-      num_reader_threads (int):
-        Tell Tensorflow to use this many reader threads, or use -1
-        to provision one reader thread per CPU core.
+#     Args:
+#       spark_df (pyspark.sql.DataFrame): Read from this Dataframe
+#       spark_row_to_tf_element (func): 
+#         Use this function to map each pyspark.sql.Row in `spark_df`
+#         to a tuple that represents a single element of the
+#         induced TF Dataset.
+#       tf_element_types (tuple):
+#         The types of the elements that `spark_row_to_tf_element` returns;
+#         e.g. (tf.float32, tf.string).
+#       non_deterministic_element_order (bool):
+#         Allow the resulting tf.data.Dataset to have elements in
+#         non-deterministic order for speed gains.
+#       num_reader_threads (int):
+#         Tell Tensorflow to use this many reader threads, or use -1
+#         to provision one reader thread per CPU core.
     
-    Returns:
-      tf.data.Dataset: The induced TF Datset with one element per
-        row in `spark_df`.
-    """
+#     Returns:
+#       tf.data.Dataset: The induced TF Datset with one element per
+#         row in `spark_df`.
+#     """
 
-    if num_reader_threads < 1:
-      import multiprocessing
-      num_reader_threads = multiprocessing.cpu_count()
+#     if num_reader_threads < 1:
+#       import multiprocessing
+#       num_reader_threads = multiprocessing.cpu_count()
 
-    # Each Tensorflow reader thread will read a single Spark partition
-    from pyspark.sql.functions import spark_partition_id
-    df = spark_df.withColumn('_spark_part_id', spark_partition_id())
+#     # Each Tensorflow reader thread will read a single Spark partition
+#     from pyspark.sql.functions import spark_partition_id
+#     df = spark_df.withColumn('_spark_part_id', spark_partition_id())
     
-    import tensorflow as tf
-    def to_dataset(pid_tensor):
-      """Given a Tensor containing a single Spark partition ID,
-      return a TF Dataset that contains all elements from that partition."""
-      pds = tf.data.Dataset.from_tensors(pid_tensor)
+#     import tensorflow as tf
+#     def to_dataset(pid_tensor):
+#       """Given a Tensor containing a single Spark partition ID,
+#       return a TF Dataset that contains all elements from that partition."""
+#       pds = tf.data.Dataset.from_tensors(pid_tensor)
       
-      def pid_to_element_cols(pid):
-        pid = pid[0]
-        util.log.info("Fetching partition %s" % pid)
-        part_df = df.filter('_spark_part_id == %s' % pid)
-          # TODO: this is a linear scan :(  find a more efficient way
-        rows = part_df.collect()
-        if not rows:
-          # Tensorflow expects empty numpy columns of promised dtype
-          import numpy as np
-          print('no rows')
-          return tuple(
-            np.empty(0, dtype=tf_dtype.as_numpy_dtype)
-            for tf_dtype in tf_element_types
-          )
-        util.log.info("FetchED partition %s" % pid)
-        xformed = [spark_row_to_tf_element(row) for row in rows]
+#       def pid_to_element_cols(pid):
+#         pid = pid[0]
+#         util.log.info("Fetching partition %s" % pid)
+#         part_df = df.filter('_spark_part_id == %s' % pid)
+#           # TODO: this is a linear scan :(  find a more efficient way
+#         rows = part_df.collect()
+#         if not rows:
+#           # Tensorflow expects empty numpy columns of promised dtype
+#           import numpy as np
+#           util.log.warn("No rows!")
+#           return tuple(
+#             np.empty(0, dtype=tf_dtype.as_numpy_dtype)
+#             for tf_dtype in tf_element_types
+#           )
+#         util.log.info("FetchED partition %s" % pid)
+#         xformed = [spark_row_to_tf_element(row) for row in rows]
 
-        # Sadly TF py_func can't easily return a list of objects, just a
-        # tuple of arrays.  So we re-organize the rows into columns, each
-        # which has a known type.
-        import itertools
-        cwise = list(zip(*xformed))
+#         # Sadly TF py_func can't easily return a list of objects, just a
+#         # tuple of arrays.  So we re-organize the rows into columns, each
+#         # which has a known type.
+#         import itertools
+#         cwise = list(zip(*xformed))
 
-        return cwise
+#         return cwise
       
-      pds = pds.map(
-        lambda p: tuple(tf.py_func(
-          pid_to_element_cols, [p], tf_element_types)))
-            # NB: why tuple()? https://github.com/tensorflow/tensorflow/issues/12396#issuecomment-323407387
+#       pds = pds.map(
+#         lambda p: tf.numpy_function(
+#           pid_to_element_cols, [p], tf_element_types))
+#             # NB: why tuple()? https://github.com/tensorflow/tensorflow/issues/12396#issuecomment-323407387
       
-      # import uuid
-      # path = '/tmp/cache_yay_' + str(uuid.uuid4())
-      # print 'save cache for pid to ', path
-      # pds = pds.cache(path)
-      # print 'warming cache'
-      # with util.tf_data_session(pds) as (sess, iter_dataset):
-      #   n = 0
-      #   for _ in iter_dataset():
-      #     n += 1
-      #   print 'warmed', n
-      # util.rm_rf(path + '_0.lockfile')
-      return pds
+#       # import uuid
+#       # path = '/tmp/cache_yay_' + str(uuid.uuid4())
+#       # print 'save cache for pid to ', path
+#       # pds = pds.cache(path)
+#       # print 'warming cache'
+#       # with util.tf_data_session(pds) as (sess, iter_dataset):
+#       #   n = 0
+#       #   for _ in iter_dataset():
+#       #     n += 1
+#       #   print 'warmed', n
+#       # util.rm_rf(path + '_0.lockfile')
+#       return pds
 
 
 
-    # maybe_row = df.take(1)
-    # assert maybe_row
-    # ex = spark_row_to_tf_element(maybe_row[0])
-    # def get_dtype(v):
-    #   if hasattr(v, 'dtype'):
-    #     return tf.dtypes.as_dtype(v.dtype)
-    #   elif isinstance(v, (basestring, unicode)):
-    #     return tf.string
-    #   else:
-    #     return tf.dtypes.as_dtype(v)
-    # output_shapes = tuple(
-    #   v.shape[0] if hasattr(v, 'shape') else None
-    #   for v in ex
-    # )
-    # output_types = tuple(get_dtype(v) for v in ex)
+#     # maybe_row = df.take(1)
+#     # assert maybe_row
+#     # ex = spark_row_to_tf_element(maybe_row[0])
+#     # def get_dtype(v):
+#     #   if hasattr(v, 'dtype'):
+#     #     return tf.dtypes.as_dtype(v.dtype)
+#     #   elif isinstance(v, (basestring, unicode)):
+#     #     return tf.string
+#     #   else:
+#     #     return tf.dtypes.as_dtype(v)
+#     # output_shapes = tuple(
+#     #   v.shape[0] if hasattr(v, 'shape') else None
+#     #   for v in ex
+#     # )
+#     # output_types = tuple(get_dtype(v) for v in ex)
 
-    # def gen_examples(p):
-    #   util.log.info("Fetching partition %s" % p)
-    #   print 'fetch', p
-    #   part_df = df.filter('_spark_part_id == %s' % p)
-    #   for i, row in enumerate(part_df.collect()):
-    #     yield spark_row_to_tf_element(row)
-    #     print 'y', p, i
-    #   print 'fetch done', p
-    #   util.log.info("FetchED partition %s" % p)
+#     # def gen_examples(p):
+#     #   util.log.info("Fetching partition %s" % p)
+#     #   print 'fetch', p
+#     #   part_df = df.filter('_spark_part_id == %s' % p)
+#     #   for i, row in enumerate(part_df.collect()):
+#     #     yield spark_row_to_tf_element(row)
+#     #     print 'y', p, i
+#     #   print 'fetch done', p
+#     #   util.log.info("FetchED partition %s" % p)
 
-    # import threading
-    # l = threading.Lock()
-    # ppid = [-1]
-    # path_prefix = '/tmp/cache_yay_'
-    # def to_dataset(pid_tensor):
-    #   # print 'pid_tensor', pid_tensor
-    #   # with l:
-    #   #   ppid[0] += 1
-    #   #   pid = ppid[0]
-    #   # print 'pid', pid
-    #   pds = tf.data.Dataset.from_generator(
-    #             gen_examples,
-    #             output_types=output_types,
-    #             output_shapes=output_shapes,
-    #             args=[pid_tensor])
-    #   # pds = pds.cache(tf.strings.format(path_prefix + '{}', pid_tensor))
-    #   return pds
-
-
+#     # import threading
+#     # l = threading.Lock()
+#     # ppid = [-1]
+#     # path_prefix = '/tmp/cache_yay_'
+#     # def to_dataset(pid_tensor):
+#     #   # print 'pid_tensor', pid_tensor
+#     #   # with l:
+#     #   #   ppid[0] += 1
+#     #   #   pid = ppid[0]
+#     #   # print 'pid', pid
+#     #   pds = tf.data.Dataset.from_generator(
+#     #             gen_examples,
+#     #             output_types=output_types,
+#     #             output_shapes=output_shapes,
+#     #             args=[pid_tensor])
+#     #   # pds = pds.cache(tf.strings.format(path_prefix + '{}', pid_tensor))
+#     #   return pds
 
 
-    # for _ in range(10):
-    #   print 'df.rdd.getNumPartitions()', df.rdd.getNumPartitions()
-    # dss = [tf.data.Dataset.from_tensors([pid]) for pid in range(df.rdd.getNumPartitions())]
 
 
-    ds = tf.data.Dataset.from_tensor_slices(
-      [n for n in df.select('_spark_part_id').distinct().collect()]
-    )
+#     # for _ in range(10):
+#     #   print 'df.rdd.getNumPartitions()', df.rdd.getNumPartitions()
+#     # dss = [tf.data.Dataset.from_tensors([pid]) for pid in range(df.rdd.getNumPartitions())]
+
+
+#     ds = tf.data.Dataset.from_tensor_slices(
+#       [n for n in df.select('_spark_part_id').distinct().collect()]
+#     )
     
-    # range(df.rdd.getNumPartitions())
-    # ds = ds.interleave(to_dataset,
-    #           cycle_length=10 * num_reader_threads)
-    ds = ds.apply(
-            # Use `parallel_interleave` to have the Tensorflow reader
-            # threadpool read in parallel from Spark
-            tf.data.experimental.parallel_interleave(
-              to_dataset,
-              cycle_length=num_reader_threads,
-              sloppy=non_deterministic_element_order))
+#     # range(df.rdd.getNumPartitions())
+#     # ds = ds.interleave(to_dataset,
+#     #           cycle_length=10 * num_reader_threads)
+#     ds = ds.apply(
+#             # Use `parallel_interleave` to have the Tensorflow reader
+#             # threadpool read in parallel from Spark
+#             tf.data.experimental.parallel_interleave(
+#               to_dataset,
+#               cycle_length=num_reader_threads,
+#               sloppy=non_deterministic_element_order))
     
-    # `ds` is now a dataset where elements are grouped by Spark partition, e.g.
-    # [x1_p1, x2_p1, ...], [x1_p2, x2_p2, ...], ...
-    # We want a dataset that's flat:
-    # [x1_p1, x2_p1, ..., x1_p2, x2_p2, ...], ...
-    # The user expects a tf.data.Dataset that fascades a flat sequence of
-    # elements.  (Because, among other things, the user wants to choose
-    # a batch size independent of Spark partition size).  Thus we
-    # use `unbatch` below.
-    ds = ds.apply(tf.contrib.data.unbatch())
-    return ds
+#     # `ds` is now a dataset where elements are grouped by Spark partition, e.g.
+#     # [x1_p1, x2_p1, ...], [x1_p2, x2_p2, ...], ...
+#     # We want a dataset that's flat:
+#     # [x1_p1, x2_p1, ..., x1_p2, x2_p2, ...], ...
+#     # The user expects a tf.data.Dataset that fascades a flat sequence of
+#     # elements.  (Because, among other things, the user wants to choose
+#     # a batch size independent of Spark partition size).  Thus we
+#     # use `unbatch` below.
+#     ds = ds.apply(tf.data.experimental.unbatch())
+#     return ds
 
 
 """

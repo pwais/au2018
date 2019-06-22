@@ -1,4 +1,5 @@
-FROM tensorflow/tensorflow:1.12.0-gpu-py3
+FROM tensorflow/tensorflow:1.14.0-gpu-py3-jupyter
+  # NB: bionic-based image
 
 # We don't care for __pycache__ and .pyc files; sometimes VSCode doesn't clean
 # up properly when deleting things and the cache gets stale.
@@ -7,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE 1
 # Use GCloud mirrors because they're faster, especially in gcloud
 COPY docker/sources.list /etc/apt/sources.list
 
-## Required for installing things
+## Required for installing and testing things
 RUN apt-get update
 RUN \
   apt-get install -y \
@@ -29,16 +30,15 @@ ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
 
 
 
-## Bazel -- might not need this ...
-#RUN \
-#  apt-get install -y bash-completion && \
-#  wget --progress=bar:force:noscroll https://github.com/bazelbuild/bazel/releases/download/0.16.1/bazel_0.16.1-linux-x86_64.deb && \
-#  dpkg -i bazel_0.16.1-linux-x86_64.deb 
-
-
-
 ## Tensorflow
-# Fix nvidia stubs and test tensorflow
+# Fix nvidia stubs and test tensorflow.  Docker build will typically
+# not run with a GPU, even if the machine has one, so this test
+# will likely exercise the libcuda.so.1 stub library and show:
+#   "failed call to cuInit: UNKNOWN ERROR (-1)"
+#   "no NVIDIA GPU device is present: /dev/nvidia0 does not exist"
+# which is a recoverable "error" on a non-gpu machine.  Without
+# this stub in place, tensorflow-gpu will typically segfault on
+# a machine with no GPUs
 ENV LD_LIBRARY_PATH $LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64/stubs
 RUN \
   ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 && \
@@ -72,6 +72,8 @@ RUN curl -L --retry 3 \
  && mv /opt/$SPARK_PACKAGE $SPARK_HOME
 COPY docker/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
+
+
 ## Alluxio
 RUN \
   apt-get install -y libfuse-dev && \
@@ -86,6 +88,8 @@ RUN \
 #  mkdir -p /mnt/alluxio-ramdisk && mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk
 COPY docker/alluxio-site.properties /opt/alluxio/conf/alluxio-site.properties
 
+
+
 ## Gluster
 RUN \
   apt-get install -y software-properties-common && \
@@ -93,6 +97,8 @@ RUN \
   apt-get update && \
   apt-get install -y glusterfs-client && \
   glusterfs --version
+
+
 
 ## Dev tools
 COPY docker/.vimrc /root/.vimrc
@@ -124,10 +130,13 @@ RUN \
 #                 -C /usr/local/bin docker/docker \
 #  && rm docker-${DOCKERVERSION}.tgz
 
+
+
 ## AU Python
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install -r /tmp/requirements.txt
 RUN python3 -c 'import imageio; imageio.plugins.ffmpeg.download()'
+
 
 
 ## TF Models
@@ -141,17 +150,21 @@ RUN \
   python3 setup.py install
 
 
+
 ## TF CNN Vis
 RUN pip3 install scipy h5py wget Pillow six scikit-image
 
 ## tsnet
 RUN apt-get install -y libblas-dev libatlas-base-dev && pip3 install tsne
 
+
+
 ## Kubespray
 # See docker/kubespray_requirements.txt for notes
 COPY docker/kubespray_requirements.txt /tmp/kubespray_requirements.txt
 RUN pip3 install -r /tmp/kubespray_requirements.txt
 ENV PATH $PATH:/opt/au/kubespray/inventory/default/artifacts/
+
 
 
 ## Gcloud
@@ -168,7 +181,8 @@ RUN \
 #  apt-get install -y gcsfuse
 
 
-## AU
+
+## Smoke Test for AU
 COPY cluster/alluxio /opt/au/cluster/alluxio
 COPY aucli /opt/au/aucli
 WORKDIR /opt/au

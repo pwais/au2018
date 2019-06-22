@@ -1,6 +1,7 @@
 import io
 import os
 from collections import OrderedDict
+import sys
 
 import cv2
 import imageio
@@ -108,14 +109,18 @@ class ImageRow(object):
         # https://stackoverflow.com/a/49507268
         # Can skip for python3 ...
         v = getattr(self, k)
-        if isinstance(v, str):
+        if sys.version_info.major == 2 and isinstance(v, str):
           v = str(v.encode('utf-8'))
           
         attrs.append((k, v))
 
       elif k == '_image_bytes':
-        attrs.append(('image_bytes', bytearray(self.image_bytes)))
-          # NB: must be bytearray to support parquet / pyspark type inference
+        image_bytes = self.image_bytes
+        if sys.version_info.major == 2:
+          attrs.append(('image_bytes', bytearray(image_bytes)))
+            # NB: must be bytearray to support parquet / pyspark type inference
+        else:
+          attrs.append(('image_bytes', image_bytes))
 #       elif k == '_label_bytes':
 #         attrs.append(('label_bytes', self.label_bytes))
     return OrderedDict(attrs)
@@ -404,7 +409,7 @@ class FillNormalized(object):
       normalized = self.norm_func(normalized)
     
     row.attrs = row.attrs or {}
-    
+
     row.attrs.update({
       'normalized': normalized,
     })

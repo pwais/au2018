@@ -960,8 +960,8 @@ class VideoDebugWebpage(object):
         import re
         value = str(value)
         value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore')
-        value = str(re.sub('[^\w\s-]', '', value).strip().lower())
-        value = str(re.sub('[-\s]+', '-', value))
+        value = str(re.sub(r'[^\w\s-]', '', value).strip().lower())
+        value = str(re.sub(r'[-\s]+', '-', value))
         return value
 
       dest = dest_base + '.' + to_filename(title) + '.png'

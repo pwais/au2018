@@ -48,5 +48,5 @@ class VideoFixture(object):
       fps=self.fps,
       codec=self.codec)
     
-    return open(temp_path).read()
+    return open(temp_path, 'rb').read()
 

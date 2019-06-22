@@ -229,7 +229,7 @@ def test_create_video():
                       'test_create_video')
   util.cleandir(VID_TEMPDIR)
   path = os.path.join(VID_TEMPDIR, 'test_video.mov')
-  with open(path, 'wc') as f:
+  with open(path, 'wb') as f:
     f.write(v.get_bytes())
     print("Wrote video to %s for inspection" % path)
 

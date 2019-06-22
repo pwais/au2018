@@ -331,10 +331,9 @@ class _IArchive(object):
   
   def __init__(self, path):
     self.archive_path = path
-    self.thread_data = threading.local()
 
   def _setup(self, archive_path):
-    pass
+    self.thread_data = threading.local()
 
   @classmethod
   def list_names(cls, archive_path):
@@ -348,8 +347,9 @@ class _IArchive(object):
     return self._archive_get(name)
 
 class _ZipArchive(_IArchive):
-  
+
   def _setup(self, archive_path):
+    super(_ZipArchive, self)._setup(archive_path)
     if not hasattr(self.thread_data, 'zipfile'):
       import zipfile
       self.thread_data.zipfile = zipfile.ZipFile(archive_path)
@@ -446,13 +446,14 @@ def download(uri, dest, try_expand=True):
   # Import urllib
   try:
     import urllib.error as urlliberror
-    import urllib.request as urllib
+    import urllib.request
     HTTPError = urlliberror.HTTPError
     URLError = urlliberror.URLError
   except ImportError:
     import urllib2 as urllib
     HTTPError = urllib.HTTPError
     URLError = urllib.URLError
+    import urllib.request
     
   import patoolib
  
