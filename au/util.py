@@ -911,7 +911,7 @@ def tf_data_session(dataset, sess=None, config=None):
   import tensorflow as tf
 
   # Must declare these before the graph gets finalized below
-  iterator = dataset.make_one_shot_iterator()
+  iterator = tf.compat.v1.data.make_one_shot_iterator(dataset)
   next_element = iterator.get_next()
   
   # Silly way to iterate over a tf.Dataset

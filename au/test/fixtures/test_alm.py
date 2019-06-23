@@ -23,10 +23,10 @@ def _filled_mock_activations(row):
   row.attrs['activations'] = acts
   return row
 
-class TestBasicAutoencoder(unittest.TestCase):
-
+# NB: In python3 we need these at package scope ...
+class MockActivationTable(nnmodel.ActivationsTable):
   @classmethod
-  def setUpClass(cls):
+  def setup(cls, spark=None):
     # Set up our test image table
     from _pytest.monkeypatch import MonkeyPatch
     monkeypatch = MonkeyPatch()
@@ -41,44 +41,48 @@ class TestBasicAutoencoder(unittest.TestCase):
       for r in dataset.ImageTable.iter_all_rows()
     ]
 
-  def test_example_xform(self):
-    xform = alm.ImageRowToExampleXForm()
-    for row in self.FILLED_ROWS:
-      ex = xform(row)
-      np.testing.assert_array_equal(ex.x, ex.y.flatten())
-      assert ex.uri == row.uri
-    
-  def test_activation_dataset(self):
-    
-    class MockActivationTable(nnmodel.ActivationsTable):
-      @classmethod
-      def as_imagerow_rdd(cls, spark=None):
-        with testutils.LocalSpark.sess(spark) as spark:
-          return spark.sparkContext.parallelize(self.FILLED_ROWS)
-      
-    class TestActivationDataset(alm.ActivationsDataset):
-      ACTIVATIONS_TABLE = MockActivationTable
-    
-    with testutils.LocalSpark.sess() as spark:
-      ds = TestActivationDataset.as_tf_dataset(spark)
-      with util.tf_data_session(ds) as (sess, iter_dataset):
-        ds_tuples = list(iter_dataset())
+  @classmethod
+  def as_imagerow_rdd(cls, spark=None):
+    with testutils.LocalSpark.sess(spark) as spark:
+      return spark.sparkContext.parallelize(cls.FILLED_ROWS)
+  
+class TestActivationDataset(alm.ActivationsDataset):
+  ACTIVATIONS_TABLE = MockActivationTable
 
-    assert len(ds_tuples) == len(self.FILLED_ROWS)
-    
-    for x, y, uri in ds_tuples:
-      np.testing.assert_array_equal(x, y.flatten())
 
-      # Spot-check a specific image
-      test_img_fname = '2929331372_398d58807e.jpg'
-      if test_img_fname in uri:
-        test_img_path = os.path.join(
-                          conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
-                          test_img_fname)
-        import imageio
-        expected_visible = imageio.imread(test_img_path)
-        import cv2
-        expected_visible = cv2.resize(
-                                expected_visible,
-                                (self.IMAGE_W, self.IMAGE_H))
-        np.testing.assert_array_equal(y, expected_visible)
+def test_example_xform():
+  with testutils.LocalSpark.sess() as spark:
+    MockActivationTable.setup(spark=spark)
+  xform = alm.ImageRowToExampleXForm()
+  for row in MockActivationTable.FILLED_ROWS:
+    ex = xform(row)
+    np.testing.assert_array_equal(ex.x, ex.y.flatten())
+    assert ex.uri == row.uri
+    
+def test_basic_autoencoder_activation_dataset():
+  with testutils.LocalSpark.sess() as spark:
+    MockActivationTable.setup(spark=spark)
+    ds = TestActivationDataset.as_tf_dataset(spark)
+    with util.tf_data_session(ds) as (sess, iter_dataset):
+      ds_tuples = list(iter_dataset())
+
+  assert len(ds_tuples) == len(MockActivationTable.FILLED_ROWS)
+  
+  for x, y, uri in ds_tuples:
+    uri = uri.decode('utf-8')
+    np.testing.assert_array_equal(x, y.flatten())
+
+    # Spot-check a specific image
+    test_img_fname = '2929331372_398d58807e.jpg'
+    if test_img_fname in uri:
+      test_img_path = os.path.join(
+                        conf.AU_IMAGENET_SAMPLE_IMGS_DIR,
+                        test_img_fname)
+      import imageio
+      expected_visible = imageio.imread(test_img_path)
+      import cv2
+      expected_visible = cv2.resize(
+                              expected_visible,
+                              (MockActivationTable.IMAGE_W,
+                               MockActivationTable.IMAGE_H))
+      np.testing.assert_array_equal(y, expected_visible.flatten())

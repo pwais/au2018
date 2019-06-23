@@ -14,7 +14,8 @@ mnist_params = mnist.MNIST.Params(
                   BATCH_SIZE=10000,
                   INFERENCE_BATCH_SIZE=1000,
                   TRAIN_EPOCHS=30,
-                  TRAIN_WORKER_CLS=util.WholeMachineWorker)
+                  TRAIN_WORKER_CLS=util.WholeMachineWorker,
+                  NORM_FUNC = lambda x: x / 255.)
 class MNISTTrainActivations(nnmodel.ActivationsTable):
   SPLIT = 'train'
   TABLE_NAME = 'mnist_train_activations'

@@ -80,15 +80,14 @@ class ImageRowToExampleXForm(object):
       y = row.as_numpy()
     y = y.flatten()
 
-    # MNIST FIXME FIXMEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
-    y = y / 255.
+    # # MNIST FIXME FIXMEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+    # y = y / 255.
     
     assert x is not None and y is not None
     x = x.astype(self.x_dtype)
     y = y.astype(self.y_dtype)
 
     return Example(uri=row.uri, x=x, y=y)
-
 
 class ActivationsDataset(object):
 
@@ -118,14 +117,18 @@ class ActivationsDataset(object):
       with Spark.sess(spark) as spark:
         imagerow_rdd = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
 
-        def part_to_tf_cache(pid, iter_image_rows):          
+        row_xform = cls.ROW_XFORM
+
+        def part_to_tf_cache(pid, iter_image_rows):
+          import tensorflow as tf
+          import cloudpickle
           try:
             row = next(iter_image_rows)
           except StopIteration as e:
             util.log.info("Empty partition, skipping %s" % pid)
             return []
           
-          ext = cls.ROW_XFORM(row).astuple()
+          ext = row_xform(row).astuple()
           def get_dtype(v):
             if hasattr(v, 'dtype'):
               return tf.dtypes.as_dtype(v.dtype)
@@ -141,7 +144,7 @@ class ActivationsDataset(object):
           def gen_examples():
             yield ext
             for row in iter_image_rows:
-              ex = cls.ROW_XFORM(row)
+              ex = row_xform(row)
               yield ex.astuple()
           ds = tf.data.Dataset.from_generator(
                 gen_examples,
@@ -164,8 +167,8 @@ class ActivationsDataset(object):
             util.log.info("Saved %s ex to %s" % (n,cache_path))
           return [
             (cache_path, 
-             cloudpickle.dumps(output_shapes),
-             cloudpickle.dumps(output_types),
+              cloudpickle.dumps(output_shapes),
+              cloudpickle.dumps(output_types),
             )
           ]
 

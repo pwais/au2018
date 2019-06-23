@@ -29,22 +29,23 @@ def test_mobilenet_inference_graph(monkeypatch):
   all_preds = set()
   for row in out_rows:
     acts = row.attrs['activations']
-    tensor_to_value = acts[0].tensor_to_value
+    assert model.igraph.model_name in acts.get_models()
     for tensor_name in model.igraph.output_names:
-      assert tensor_name in tensor_to_value
+      t = acts.get_tensor(igraph.model_name, tensor_name)
       
       # Check that we have a non-empty array
-      assert tensor_to_value[tensor_name].shape
+      assert t.shape
 
       # If weights fail to load, the net will predict uniformly for
       # everything.  Make sure that doesn't happen!
       if tensor_name == 'MobilenetV2/Predictions/Reshape_1:0':
-        preds = tuple(tensor_to_value[tensor_name])
+        preds = tuple(t)
         assert preds not in all_preds
         all_preds.add(preds)
       
         # The Small model consistently gets this one right
-        assert '202228408_eccfe4790e.jpg' in ' '.join(row.uri for row in out_rows)
+        uriss = ' '.join(row.uri for row in out_rows)
+        assert '202228408_eccfe4790e.jpg' in uriss
         if '202228408_eccfe4790e.jpg' in row.uri:
           from slim.datasets import imagenet
           label_map = imagenet.create_readable_names_for_imagenet_labels()
