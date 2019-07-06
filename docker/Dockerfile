@@ -157,7 +157,13 @@ RUN pip3 install scipy h5py wget Pillow six scikit-image
 ## tsnet
 RUN apt-get install -y libblas-dev libatlas-base-dev && pip3 install tsne
 
-
+## Argoverse
+RUN \
+  apt-get install -y libsm6 libxext6 libxrender-dev && \
+  cd /tmp && \
+  git clone https://github.com/argoai/argoverse-api.git && \
+  pip3 install -e argoverse-api && \
+  cd -
 
 ## Kubespray
 # See docker/kubespray_requirements.txt for notes

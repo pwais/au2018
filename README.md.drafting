@@ -10,7 +10,15 @@ Named after Aurie Ginsberg
 See [the `cluster` module](cluster/README.md) about setting up a cluster.
 
 
+yes please https://arxiv.org/pdf/1803.05598.pdf  https://github.com/google-research/google-research/blob/master/large_margin/margin_loss.py
 wow https://arxiv.org/pdf/1701.04722.pdf
+good https://arxiv.org/pdf/1905.01067.pdf
+
+very halpful perspective:
+ http://efrosgans.eecs.berkeley.edu/CVPR18_slides/VAE_GANS_by_Rosca.pdf
+ beta vae good results https://openreview.net/references/pdf?id=Sy2fzU9gl 
+ out of distribution https://arxiv.org/pdf/1906.02845.pdf https://arxiv.org/pdf/1906.02994.pdf 
+ inverting neural nets https://arxiv.org/pdf/1902.02767.pdf 
 
 useful:
   * https://github.com/shaohua0116/VAE-Tensorflow/blob/master/demo.ipynb
@@ -18,6 +26,8 @@ useful:
 
 
 https://www.cs.cmu.edu/~tom/10701_sp11/recitations/Recitation_9.pdf
+
+useful PAC http://www.cs.cmu.edu/~avrim/ML07/lect-09-28.pdf 
 
 pytest au -s --runslow -k test_mnist_save_png
 

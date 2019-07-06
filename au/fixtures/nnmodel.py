@@ -439,7 +439,6 @@ class ActivationsTable(object):
                 )
       
       activation_row_rdd = activated.mapPartitions(to_activation_rows)
-      # import pdb; pdb.set_trace()
       df = spark.createDataFrame(activation_row_rdd)
       df.show()
       partition_cols = list(dataset.ImageRow.DEFAULT_PQ_PARTITION_COLS)
@@ -485,6 +484,7 @@ class ActivationsTable(object):
         irow.attrs['activations'] = acts
         return irow
 
+      to_imagerow(joined.rdd.collect()[0])
       return joined.rdd.map(to_imagerow)
 
   @classmethod

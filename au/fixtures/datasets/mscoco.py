@@ -103,6 +103,7 @@ class Fixtures(object):
   TEST_FIXTURE_DIR = os.path.join(conf.AU_DY_TEST_FIXTURES, 'mscoco')
   NUM_IMAGES_IN_TEST_ZIP = 100
 
+
   ## Source Data
 
   @classmethod
@@ -117,12 +118,14 @@ class Fixtures(object):
   def index_dir(cls):
     return os.path.join(cls.ROOT, 'index')
 
+
   ## Test Data
 
   @classmethod
   def test_fixture(cls, path):
     relpath = os.path.relpath(path, cls.ROOT)
     return os.path.join(cls.TEST_FIXTURE_DIR, relpath)
+
 
   ## Setup
 
@@ -149,7 +152,6 @@ class Fixtures(object):
   
   @classmethod
   def run_import(cls):
-    print('TODO make program')
     cls.download_all()
     cls.create_test_fixtures()
 

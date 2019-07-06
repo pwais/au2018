@@ -106,10 +106,34 @@ class ActivationsDataset(object):
   def as_tf_dataset(cls, spark=None):
     import cloudpickle
     import tensorflow as tf
+
+    DOC = """
+    Notes on the approach below:
+     * We tried picking one partition of an RDD / DF at a time, but Spark can
+        do an O(P) operation (where the RDD / DF has P partitions) just to
+        compute / find the requested partition each time.  Therefore
+        it makes no sense to create a tf.data.Dataset that iterates
+        over Spark partitions :(
+     * We tried both pyarrow / snappy and Petastorm to facilitate reading
+        a tf.data.Dataset from parquet data.  We found in both cases that
+        training (MNIST) was I/O bound and substantially slower than
+        using tf.data.Dataset cache files.
+     * The use case we settle upon for now is *single-machine* multi-GPU
+        training, where the machine has enough local storage (or an
+        Alluxio cache) to store the f.data.Dataset cache file version 
+        of the train / test set locally.  We make this choice because
+        (it seems) without deeper modifications to Tensorflow (or some
+        excessively complicated approach like Tensorpack / Petastorm)
+        the best way to avoid I/O-bound training *past the first epoch*
+        is to have the data cached locally.
+    
+    Thus what appears below works in practice and is substantially simpler
+    than, say, Tensorpack or Petastorm.
+    """
+
     meta_path = os.path.join(cls.ds_cache_root(), 'au_spark_tf_meta.pkl')
     if not os.path.exists(meta_path):
       util.log.info("Caching TF dataset to %s ..." % cls.ds_cache_root())
-
       util.mkdir(cls.ds_cache_root())
 
       # TODO TODO hash the dataset for auto cache-busting
@@ -118,6 +142,7 @@ class ActivationsDataset(object):
         imagerow_rdd = cls.ACTIVATIONS_TABLE.as_imagerow_rdd(spark=spark)
 
         row_xform = cls.ROW_XFORM
+        cache_root = cls.ds_cache_root()
 
         def part_to_tf_cache(pid, iter_image_rows):
           import tensorflow as tf
@@ -151,14 +176,7 @@ class ActivationsDataset(object):
                 output_types=output_types,
                 output_shapes=output_shapes)
 
-          # def serialize_example(ex):
-          #   example_proto = tf.train.Example(
-          #     features=tf.train.Features(feature={
-          #       'x': 
-          #     }
-
-
-          cache_path = os.path.join(cls.ds_cache_root(), 'cache_%s' % pid)
+          cache_path = os.path.join(cache_root, 'cache_%s' % pid)
           ds = ds.cache(cache_path)
           with util.tf_data_session(ds) as (sess, iter_ds):
             n = 0
@@ -179,10 +197,19 @@ class ActivationsDataset(object):
           cloudpickle.dump(meta_rows, f)
         util.log.info("... done caching; saved meta on %s files to %s" % (
           len(meta_rows), meta_path))
-    
+  
     with open(meta_path, 'rb') as f:
       meta_rows = cloudpickle.load(f)
     
+    # Below, we create a tf.data.Dataset that is the union of the cache
+    # files.  Highlights:
+    #  * We use a dummy generator function, since TF will read from the
+    #      cache files and not touch the actual generator
+    #  * We have observed that Dataset.concatenate() can make TF slow on
+    #      training start-up when a dataset has many partitions, each
+    #      created from an `apply()` operation.  Sadly, some sort of
+    #      type-check inside TF is O(n^2), for `n` partitions.  This approach
+    #      (using from_generator()) avoids the O(n^2) check.
     util.log.info("Creating TF dataset from %s cache files in %s ..." % (
       len(meta_rows), cls.ds_cache_root()))
     ds = None
