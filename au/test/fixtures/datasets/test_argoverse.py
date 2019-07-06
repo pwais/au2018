@@ -28,6 +28,10 @@ class TestArgoverseImageTable(unittest.TestCase):
                         'test_argoverse')
     testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
 
+  def test_basic(self):
+    assert av.Fixtures.TRACKING_SAMPLE in av.Fixtures.all_tarballs()
+    assert av.Fixtures.TRACKING_SAMPLE in av.Fixtures.all_tracking_tarballs()
+
   def test_sample(self):
     if not self.have_fixtures:
       return
@@ -39,5 +43,16 @@ class TestArgoverseImageTable(unittest.TestCase):
     loader = av.Fixtures.get_loader(test_uri)
     print('Loaded', loader)
     assert loader.image_count == 3441
+
+    all_uris = list(av.Fixtures.iter_image_uris('sample'))
+    assert len(all_uris) == 3441
+    
+    EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978406365860408'
+    assert EXPECTED_URI in set(str(uri) for uri in all_uris)
+
+    frame = av.AVFrame(uri=EXPECTED_URI)
+    import imageio
+    imageio.imwrite('/opt/au/tasttt.png', frame.debug_image,format='png')
+
 
 

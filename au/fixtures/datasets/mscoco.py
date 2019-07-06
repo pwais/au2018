@@ -20,32 +20,17 @@ from au import conf
 from au import util
 from au.fixtures import dataset
 from au.spark import Spark
+from au.fixtures.datasets import common
 
-class BBox(object):
-  __slots__ = (
-    'x', 'y', 'width', 'height',
-    'im_width', 'im_height',
-    'area',
-    'is_crowd',
-    'category_id',
-    'category_name',
-    'anno_index', # To link with mask, if needed
+class BBox(common.BBox):
+  __slots__ = tuple(
+    list(common.BBox.__slots__) + [
+      'area',
+      'is_crowd',
+      'category_id',
+      'anno_index', # To link with mask, if needed
+    ]
   )
-
-  def __getstate__(self):
-    return self.to_dict()
-  
-  def __setstate__(self, d):
-    for k in self.__slots__:
-      setattr(self, k, d.get(k, ''))
-
-
-  def __init__(self, **kwargs):
-    for k in self.__slots__:
-      setattr(self, k, kwargs.get(k))
-  
-  def to_dict(self):
-    return dict((k, getattr(self, k, None)) for k in self.__slots__)
 
 class Mask(object):
   __slots__ = (
