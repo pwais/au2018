@@ -137,25 +137,29 @@ class BBox(common.BBox):
 
       x1, x2 = np.min(uv[:, 0]), np.max(uv[:, 0])
       y1, y2 = np.min(uv[:, 1]), np.max(uv[:, 1])
+      z = np.max(uv[:,2])
 
       num_onscreen = sum(
         1
         for x, y in ((x1, y1), (x2, y2))
         if (0 <= x < bbox.im_width) and (0 <= y < bbox.im_height))
 
-      bbox.has_offscreen = (num_onscreen < 2)
-      bbox.is_visible = (
-        (num_onscreen == 0) or
-        (object_label_record.occlusion == 100))
-
+      bbox.has_offscreen = (z <= 0) or (num_onscreen < 2)
+      bbox.is_visible = all((
+        z > 0,
+        num_onscreen > 0,
+        object_label_record.occlusion < 100))
 
       # Clamp to screen
       def iround(v):
-        return int(math.round(v))
+        return int(round(v))
       x1 = np.clip(iround(x1), 0, bbox.im_width - 1)
       x2 = np.clip(iround(x2), 0, bbox.im_width - 1)
       y1 = np.clip(iround(y1), 0, bbox.im_height - 1)
       y2 = np.clip(iround(y2), 0, bbox.im_height - 1)
+
+      # x1, x2 = uv[0, 0], uv[1, 0]
+      # y1, y2 = uv[0, 1], uv[1, 1]
 
       bbox.x = x1
       bbox.y = y1
@@ -362,8 +366,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     pts = ego_dest_t_SE3_ego_pts_t.transform_point_cloud(pts)
     
     from argoverse.utils.calibration import point_cloud_to_homogeneous
-    pts = point_cloud_to_homogeneous(pts).T
-    assert False, (pts, pts.shape)
+    # pts = point_cloud_to_homogeneous(pts)
     return pts
     
 

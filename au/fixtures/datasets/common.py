@@ -1,11 +1,12 @@
 
 def hash_to_rbga(x, s=0.8, v=0.8):
   import colorsys
-  import sys  
+  import sys
 
-  h = hash(str(x)) / float(sys.maxint)
+  h = hash(str(x)) / float(sys.maxsize)
   r, g, b = colorsys.hsv_to_rgb(h, s, v)
-  return 255. * r, 255. * g, 255. * b, 255.
+  
+  return int(255. * r), int(255. * g), int(255. * b), int(255.)
 
 class BBox(object):
   """An object in an image; in particular, an (ideally amodal) bounding box
@@ -23,6 +24,8 @@ class BBox(object):
     for k in self.__slots__:
       setattr(self, k, d.get(k, ''))
 
+  def __str__(self):
+    return str(self.to_dict())
 
   def __init__(self, **kwargs):
     for k in self.__slots__:
@@ -37,12 +40,11 @@ class BBox(object):
     assert self.im_height == img.shape[0]
     assert self.im_width == img.shape[1]
 
-    color = hash_to_rbg(self.category_name)
+    color = hash_to_rbga(self.category_name)
 
     # Use Tensorflow Models
     from object_detection.utils.visualization_utils import \
       draw_bounding_box_on_image_array
-    
     draw_bounding_box_on_image_array(
         img,
         self.y,
