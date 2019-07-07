@@ -21,12 +21,12 @@ class TestArgoverseImageTable(unittest.TestCase):
     tracking_sample = av.Fixtures.tarball_dir(av.Fixtures.TRACKING_SAMPLE)
     cls.have_fixtures = os.path.exists(tracking_sample)
     
-    from _pytest.monkeypatch import MonkeyPatch
-    monkeypatch = MonkeyPatch()
-    TEST_TEMPDIR = os.path.join(
-                        testconf.TEST_TEMPDIR_ROOT,
-                        'test_argoverse')
-    testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+    # from _pytest.monkeypatch import MonkeyPatch
+    # monkeypatch = MonkeyPatch()
+    # TEST_TEMPDIR = os.path.join(
+    #                     testconf.TEST_TEMPDIR_ROOT,
+    #                     'test_argoverse')
+    # testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
 
   def test_basic(self):
     assert av.Fixtures.TRACKING_SAMPLE in av.Fixtures.all_tarballs()
@@ -52,7 +52,11 @@ class TestArgoverseImageTable(unittest.TestCase):
 
     frame = av.AVFrame(uri=EXPECTED_URI)
     import imageio
+    # TODO create fixture
     imageio.imwrite('/opt/au/tasttt.png', frame.debug_image,format='png')
+
+    with testutils.LocalSpark.sess() as spark:
+      av.Fixtures.label_df(spark, splits=('sample',))
 
 
 

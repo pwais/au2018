@@ -51,6 +51,9 @@ class FrameURI(object):
   
   def __str__(self):
     return self.to_str()
+  
+  def to_dict(self):
+    return dict((k, getattr(self, k, '')) for k in self.__slots__)
 
   @staticmethod
   def from_str(s):
@@ -122,7 +125,8 @@ class BBox(common.BBox):
       bbox.width_meters = object_label_record.width
       bbox.height_meters = object_label_record.height
 
-      bbox.distance_meters = np.min(np.linalg.norm(bbox.cuboid_pts, axis=-1))
+      bbox.distance_meters = \
+        float(np.min(np.linalg.norm(bbox.cuboid_pts, axis=-1)))
 
       from argoverse.utils.transform import quat2rotmat
         # NB: must use quat2rotmat due to Argo-specific quaternions
@@ -137,34 +141,32 @@ class BBox(common.BBox):
 
       x1, x2 = np.min(uv[:, 0]), np.max(uv[:, 0])
       y1, y2 = np.min(uv[:, 1]), np.max(uv[:, 1])
-      z = np.max(uv[:,2])
+      z = float(np.max(uv[:,2]))
 
       num_onscreen = sum(
         1
         for x, y in ((x1, y1), (x2, y2))
         if (0 <= x < bbox.im_width) and (0 <= y < bbox.im_height))
 
-      bbox.has_offscreen = (z <= 0) or (num_onscreen < 2)
+      bbox.has_offscreen = ((z <= 0) or (num_onscreen < 2))
       bbox.is_visible = all((
         z > 0,
         num_onscreen > 0,
         object_label_record.occlusion < 100))
 
       # Clamp to screen
-      def iround(v):
-        return int(round(v))
-      x1 = np.clip(iround(x1), 0, bbox.im_width - 1)
-      x2 = np.clip(iround(x2), 0, bbox.im_width - 1)
-      y1 = np.clip(iround(y1), 0, bbox.im_height - 1)
-      y2 = np.clip(iround(y2), 0, bbox.im_height - 1)
+      x1 = np.clip(round(x1), 0, bbox.im_width - 1)
+      x2 = np.clip(round(x2), 0, bbox.im_width - 1)
+      y1 = np.clip(round(y1), 0, bbox.im_height - 1)
+      y2 = np.clip(round(y2), 0, bbox.im_height - 1)
 
       # x1, x2 = uv[0, 0], uv[1, 0]
       # y1, y2 = uv[0, 1], uv[1, 1]
 
-      bbox.x = x1
-      bbox.y = y1
-      bbox.width = x2 - x1
-      bbox.height = y2 - y1
+      bbox.x = int(x1)
+      bbox.y = int(y1)
+      bbox.width = int(x2 - x1)
+      bbox.height = int(y2 - y1)
 
     bbox = BBox()
     fill_cuboid_pts(bbox)
@@ -190,9 +192,9 @@ class AVFrame(object):
     'image_width',
     'image_height',
     
-    # Lidar
-    '_cloud',
-    'cloud_interpolated',
+    # # Lidar
+    # '_cloud',
+    # 'cloud_interpolated',
   )
 
   def __init__(self, **kwargs):
@@ -489,8 +491,7 @@ class Fixtures(object):
       base_path = cls.tarball_dir(tarball)
       for log_dir in cls.get_log_dirs(base_path):
         log_id = os.path.split(log_dir)[-1]
-        loader = cls.get_loader(
-                      FrameURI(tarball_name=tarball, log_id=log_id))
+        loader = cls.get_loader(FrameURI(tarball_name=tarball, log_id=log_id))
         for camera, ts_to_path in loader.timestamp_image_dict.items():
           for ts in ts_to_path.keys():
             yield FrameURI(
@@ -500,7 +501,32 @@ class Fixtures(object):
               camera=camera,
               timestamp=ts)
 
-  
+  @classmethod
+  def label_df(cls, spark, splits=None):
+    if not splits:
+      splits = cls.SPLITS
+    
+    split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
+    def iter_uris(s):
+      for uri in cls.iter_image_uris(s):
+        yield uri
+    uri_rdd = split_rdd.flatMap(iter_uris)
+    uri_rdd = uri_rdd.repartition(100)
+    def iter_label_rows(uri):
+      from pyspark.sql import Row
+      frame = AVFrame(uri=uri)
+      for box in frame.image_bboxes:
+        row = box.to_dict()
+        IGNORE = ('cuboid_pts',)
+        for attr in IGNORE:
+          row.pop(attr)
+        row.update(uri=str(uri), **uri.to_dict())
+        yield Row(**row)
+    
+    df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
+    df = df.cache()
+    import pdb; pdb.set_trace()
+    df.show()
   
 
   ## Setup

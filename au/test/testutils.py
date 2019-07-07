@@ -1,11 +1,12 @@
 import itertools
+import multiprocessing
 
 from au import conf
 from au import spark
 from au.fixtures import dataset
 
 class LocalSpark(spark.Spark):
-  MASTER = 'local[8]'
+  MASTER = 'local[%s]' % multiprocessing.cpu_count()
 
 def iter_video_images(n, w, h):
   images_dir = conf.AU_IMAGENET_SAMPLE_IMGS_DIR
