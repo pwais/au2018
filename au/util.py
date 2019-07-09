@@ -46,6 +46,19 @@ def ichunked(seq, n):
     else:
       break
 
+def hash_to_rbg(x, s=0.8, v=0.8):
+  import colorsys
+  import sys
+
+  # NB: as of Python3, the seed to __hash__() is not stable,
+  # but hash(int) is stable
+  import hashlib
+  h_i = int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
+  h = (hash(h_i) % 2654435769) / 2654435769.
+  r, g, b = colorsys.hsv_to_rgb(h, s, v)
+  
+  return int(255. * r), int(255. * g), int(255. * b)
+
 def as_row_of_constants(inst):
   from collections import OrderedDict
   row = OrderedDict()

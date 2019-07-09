@@ -316,14 +316,6 @@ class ExperimentReport(object):
     ]
     panels = []
 
-    def hash_to_color(class_id):
-      # Bokeh colorsys usage appears broken, and Bokeh embedding CSS
-      # color strings appears broken ...
-      import colorsys
-      h = hash(str(class_id)) % 255
-      r, g, b = colorsys.hsv_to_rgb(h / 255., 1., 1.)
-      return 255. * r, 255. * b, 255. * g
-
     ALPHA = 0.2
 
     ### Target Class vs Others
@@ -348,7 +340,7 @@ class ExperimentReport(object):
       fig.circle(
           x='keep_frac', y='value', source=source,
           size=10,
-          color=hash_to_color(target_class),
+          color=util.hash_to_rbg(target_class),
           alpha=ALPHA,
           legend='%s ablated' % target_class)
     fig.legend.location = 'bottom_right'
@@ -377,7 +369,7 @@ class ExperimentReport(object):
         fig.circle(
             x='keep_frac', y='value', source=source,
             size=10,
-            color=hash_to_color(target_class),
+            color=util.hash_to_rbg(target_class),
             alpha=ALPHA,
             legend='%s ablated' % target_class)
         
@@ -454,7 +446,7 @@ class ExperimentReport(object):
       fig.circle(
           x='keep_frac', y='value', source=source,
           size=10,
-          color=hash_to_color(target_class),
+          color=util.hash_to_rbg(target_class),
           alpha=ALPHA,
           legend='%s ablated' % target_class)
     fig.legend.location = 'bottom_right'

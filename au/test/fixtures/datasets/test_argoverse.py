@@ -35,28 +35,45 @@ class TestArgoverseImageTable(unittest.TestCase):
   def test_sample(self):
     if not self.have_fixtures:
       return
+
+
+    if False: # Returnme
+      test_uri = av.FrameURI(
+                    tarball_name=av.Fixtures.TRACKING_SAMPLE,
+                    log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
+
+      loader = av.Fixtures.get_loader(test_uri)
+      print('Loaded', loader)
+      assert loader.image_count == 3441
+
+      all_uris = list(av.Fixtures.iter_image_uris('sample'))
+      assert len(all_uris) == 3441
+      
+      EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978406365860408'
+      assert EXPECTED_URI in set(str(uri) for uri in all_uris)
+
+      frame = av.AVFrame(uri=EXPECTED_URI)
+      import imageio
+      # TODO create fixture
+      imageio.imwrite('/opt/au/tasttt.png', frame.get_debug_image(),format='png')
+
+    # with testutils.LocalSpark.sess() as spark:
+      # df = av.Fixtures.label_df(spark, splits=('sample',))
+      # df.write.parquet(
+      #   '/tmp/av_yay_df',
+      #   mode='overwrite',
+      #   compression='lz4')
+      # df = spark.read.parquet('/tmp/av_yay_df')
+      # df = df.toPandas()
+      # df.to_pickle('/tmp/av_yay_pdf')
+      # assert False
+
+    import pandas as pd
+    df = pd.read_pickle('/tmp/av_yay_pdf')
+
     
-    test_uri = av.FrameURI(
-                  tarball_name=av.Fixtures.TRACKING_SAMPLE,
-                  log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
-
-    loader = av.Fixtures.get_loader(test_uri)
-    print('Loaded', loader)
-    assert loader.image_count == 3441
-
-    all_uris = list(av.Fixtures.iter_image_uris('sample'))
-    assert len(all_uris) == 3441
-    
-    EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978406365860408'
-    assert EXPECTED_URI in set(str(uri) for uri in all_uris)
-
-    frame = av.AVFrame(uri=EXPECTED_URI)
-    import imageio
-    # TODO create fixture
-    imageio.imwrite('/opt/au/tasttt.png', frame.debug_image,format='png')
-
-    with testutils.LocalSpark.sess() as spark:
-      av.Fixtures.label_df(spark, splits=('sample',))
+    h = av.HistogramWithExamples()
+    h.run(df)
 
 
 

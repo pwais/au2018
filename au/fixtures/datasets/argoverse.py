@@ -15,7 +15,29 @@ from argoverse.data_loading.argoverse_tracking_loader import \
   ArgoverseTrackingLoader
 
 
+###
 ### Utils
+###
+
+AV_OBJ_CLASS_TO_COARSE = {
+  "VEHICLE":            'car',
+  "PEDESTRIAN":         'ped',
+  "ON_ROAD_OBSTACLE":   'other',
+  "LARGE_VEHICLE":      'car',
+  "BICYCLE":            'bike',
+  "BICYCLIST":          'ped',
+  "BUS":                'car',
+  "OTHER_MOVER":        'other',
+  "TRAILER":            'car',
+  "MOTORCYCLIST":       'ped',
+  "MOPED":              'bike',
+  "MOTORCYCLE":         'bike',
+  "STROLLER":           'other',
+  "EMERGENCY_VEHICLE":  'car',
+  "ANIMAL":             'ped',
+  "WHEELCHAIR":         'ped',
+  "SCHOOL_BUS":         'car',
+}
 
 def get_image_width_height(camera):
   from argoverse.utils import camera_stats
@@ -32,8 +54,11 @@ class FrameURI(object):
     'log_id',       # E.g. c6911883-1843-3727-8eaa-41dc8cda8993
     'split',        # Official Argoverse split (see Fixtures.SPLITS)
     'camera',       # E.g. ring_front_center
-    'timestamp')    # E.g. 315975652303331336, yes this is GPS time :P :P
+    'timestamp',    # E.g. 315975652303331336, yes this is GPS time :P :P
+    'track_id')     # Optional; a UUID of a specific track / annotation
   
+  OPTIONAL = ('track_id',)
+
   PREFIX = 'argoverse://'
 
   def __init__(self, **kwargs):
@@ -46,7 +71,8 @@ class FrameURI(object):
   def to_str(self):
     path = '&'.join(
       attr + '=' + str(getattr(self, attr))
-      for attr in self.__slots__)
+      for attr in self.__slots__
+      if getattr(self, attr))
     return self.PREFIX + path
   
   def __str__(self):
@@ -60,7 +86,7 @@ class FrameURI(object):
     assert s.startswith(FrameURI.PREFIX)
     toks_s = s[len(FrameURI.PREFIX):]
     toks = toks_s.split('&')
-    assert len(toks) == len(FrameURI.__slots__)
+    assert len(toks) >= (len(FrameURI.__slots__) - len(FrameURI.OPTIONAL))
     iu = FrameURI(**dict(tok.split('=') for tok in toks))
     return iu
 
@@ -237,10 +263,17 @@ class AVFrame(object):
       ]
     return self._image_bboxes
 
-  @property
-  def debug_image(self):
+  def get_debug_image(self):
     img = np.copy(self.image)
     
+    if self.uri.track_id:
+      # Draw a gold box first; then the draw() calls below will draw over
+      # the box.
+      WHITE = (225, 225, 255)
+      for bbox in self.image_bboxes:
+        if bbox.track_id == self.uri.track_id:
+          bbox.draw_in_image(img, color=WHITE, thickness=8)
+
     for bbox in self.image_bboxes:
       if bbox.is_visible:
         bbox.draw_in_image(img)
@@ -373,9 +406,9 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     
 
 
-
-
+###
 ### Data
+###
 
 class Fixtures(object):
 
@@ -507,26 +540,36 @@ class Fixtures(object):
       splits = cls.SPLITS
     
     split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
-    def iter_uris(s):
-      for uri in cls.iter_image_uris(s):
-        yield uri
-    uri_rdd = split_rdd.flatMap(iter_uris)
-    uri_rdd = uri_rdd.repartition(100)
+    uri_rdd = split_rdd.flatMap(lambda split: cls.iter_image_uris(split))
+    
+    # Read frames in parallel
+    uri_rdd = uri_rdd.repartition(1000)
+    
     def iter_label_rows(uri):
-      from pyspark.sql import Row
       frame = AVFrame(uri=uri)
       for box in frame.image_bboxes:
+        row = {}
+        
+        # Obj
         row = box.to_dict()
         IGNORE = ('cuboid_pts',)
         for attr in IGNORE:
           row.pop(attr)
-        row.update(uri=str(uri), **uri.to_dict())
+        
+        # Context
+        import copy
+        obj_uri = copy.deepcopy(uri)
+        obj_uri.track_id = box.track_id
+        row.update(uri=str(obj_uri), **obj_uri.to_dict())
+        row.update(
+          city=cls.get_loader(uri).city_name,
+          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(bbox.category_name, ''))
+        
+        from pyspark.sql import Row
         yield Row(**row)
     
     df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
-    df = df.cache()
-    import pdb; pdb.set_trace()
-    df.show()
+    return df
   
 
   ## Setup
@@ -543,6 +586,93 @@ class Fixtures(object):
     cls.download_all()
 
 
+
+###
+### Mining
+###
+
+class HistogramWithExamples(object):
+  
+  def run(self, df):
+    df = df[df.is_visible == True]
+
+    MACRO_FACETS = (
+      'camera',
+      'city',
+      'split',
+    )
+
+    METRICS = (
+      'distance_meters',
+      'height_meters',
+      'width_meters',
+      'length_meters',
+      'height',
+      'width',
+      'relative_yaw_radians',
+    )
+
+    MICRO_FACETS = (
+      'category_name',
+      'occlusion',
+      # 'coarse_category',
+    )
+    # class + any occlusion
+    # class + edge of image
+
+    # centroid distance between bike and rider?
+
+    def make_plot(df, metric, micro_facet=None):
+      from bokeh import plotting
+      from bokeh.models import ColumnDataSource
+
+      fig = plotting.figure(
+              title='todo',
+              tools='',
+              plot_width=1000,
+              x_axis_label=metric,
+              y_axis_label='Count')
+      
+      def add_hist(df, bins=50, legend='all'):
+        df = df.dropna() # FIXME SOME METRICS HAVE NANS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        hist, edges = np.histogram(df[metric], bins=bins)
+        fig.quad(
+          top=hist, bottom=0, left=edges[:-1], right=edges[1:],
+          alpha=0.5, legend=legend, color=util.hash_to_rbg(legend))
+
+      if micro_facet:
+        for val in df[micro_facet].unique():
+          add_hist(df[df[micro_facet] == val], legend=val)
+      else:
+        add_hist(df)
+        
+      return fig
+    
+    figs = []
+    for metric in METRICS:
+      figs.append(make_plot(df, metric))
+      for mf in MICRO_FACETS:
+        figs.append(make_plot(df, metric, micro_facet=mf))
+    
+    panels = []
+    for i, fig in enumerate(figs):
+      from bokeh.models.widgets import Panel
+      panels.append(Panel(child=fig, title=str(i)))
+    
+    from bokeh.models.widgets import Tabs
+    t = Tabs(tabs=panels)
+    def save_plot(tabs):
+      from bokeh import plotting
+      if tabs is None:
+        return
+      
+      dest = '/opt/au/yay_plot.html'
+      plotting.output_file(dest, title='my title', mode='inline')
+      plotting.save(tabs)
+      util.log.info("Wrote to %s" % dest)
+    save_plot(t)
+
+    
 
 
 

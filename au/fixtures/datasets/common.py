@@ -1,12 +1,4 @@
-
-def hash_to_rbga(x, s=0.8, v=0.8):
-  import colorsys
-  import sys
-
-  h = hash(str(x)) / float(sys.maxsize)
-  r, g, b = colorsys.hsv_to_rgb(h, s, v)
-  
-  return int(255. * r), int(255. * g), int(255. * b), int(255.)
+from au import util
 
 class BBox(object):
   """An object in an image; in particular, an (ideally amodal) bounding box
@@ -36,11 +28,12 @@ class BBox(object):
       (k, getattr(self, k, None))
       for k in self.__slots__)
 
-  def draw_in_image(self, img):
+  def draw_in_image(self, img, color=None, thickness=2):
     assert self.im_height == img.shape[0]
     assert self.im_width == img.shape[1]
 
-    color = hash_to_rbga(self.category_name)
+    if not color:
+      color = util.hash_to_rbg(self.category_name)
 
     # Use Tensorflow Models
     from object_detection.utils.visualization_utils import \
@@ -52,6 +45,6 @@ class BBox(object):
         self.y + self.height,
         self.x + self.width,
         color=color,
-        thickness=2,
+        thickness=thickness,
         display_str_list=[self.category_name],
         use_normalized_coordinates=False)
