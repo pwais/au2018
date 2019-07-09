@@ -610,11 +610,11 @@ class HistogramWithExamples(object):
       'height',
       'width',
       'relative_yaw_radians',
+      'occlusion',
     )
 
     MICRO_FACETS = (
       'category_name',
-      'occlusion',
       # 'coarse_category',
     )
     # class + any occlusion
@@ -622,42 +622,109 @@ class HistogramWithExamples(object):
 
     # centroid distance between bike and rider?
 
-    def make_plot(df, metric, micro_facet=None):
+    def make_panel(df, metric, micro_facet):
       from bokeh import plotting
       from bokeh.models import ColumnDataSource
+      import pandas as pd
 
+      df = df.dropna() # FIXME SOME METRICS HAVE NANS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+      ## Organize Data
+      micro_facets_values = list(df[micro_facet].unique())
+      micro_facets_values.append('all')
+      legend_to_panel_df = {}
+      for mf in micro_facets_values:
+        if mf == 'all':
+          mf_data = pd.DataFrame(df)
+        else:
+          mf_data = df[df[micro_facet] == mf]
+        hist, edges = np.histogram(mf_data[metric], bins=100)
+        mf_df = pd.DataFrame(dict(
+          count=hist, proportion=hist / np.sum(hist),
+          left=edges[:-1], right=edges[1:],
+        ))
+        mf_df['legend'] = mf
+        from bokeh.colors import RGB
+        mf_df['color'] = RGB(*util.hash_to_rbg(mf))
+        legend_to_panel_df[mf] = mf_df
+      
+      # # Make checkbox group that can filter data
+      # plot_src = ColumnDataSource(pd.DataFrame({}))
+      # def update_plot_data(legends_to_plot): # type: str
+      #   plot_df = pd.concat(
+      #                 df
+      #                 for legend, df in legend_to_panel_df.items()
+      #                 if legend in legends_to_plot)
+      #   plot_df.sort_values(['legend', 'left'])
+      #   plot_src.data.update(ColumnDataSource(plot_df).data)
+      
+      # # Initially only plot the 'all' series
+      # update_plot_data(micro_facets_values)
+      
+      # def update(attr, old, new):
+      #     to_plot = [checkbox_group.labels[i] for i in checkbox_group.active]
+      #     update_plot_data(to_plot)
+
+      # from bokeh.models.widgets import CheckboxGroup
+      # checkbox_group = CheckboxGroup(
+      #                   labels=sorted(micro_facets_values),
+      #                   active=[1] * len(micro_facets_values))
+      # checkbox_group.on_change('active', update)
+
+      ## Make the plot
+      title = metric + ' vs ' + micro_facet
       fig = plotting.figure(
-              title='todo',
-              tools='',
-              plot_width=1000,
+              title=title,
+              plot_width=1200,
               x_axis_label=metric,
               y_axis_label='Count')
-      
-      def add_hist(df, bins=50, legend='all'):
-        df = df.dropna() # FIXME SOME METRICS HAVE NANS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        hist, edges = np.histogram(df[metric], bins=bins)
-        fig.quad(
-          top=hist, bottom=0, left=edges[:-1], right=edges[1:],
-          alpha=0.5, legend=legend, color=util.hash_to_rbg(legend))
+      for _, plot_src in legend_to_panel_df.items():
+        plot_src = ColumnDataSource(plot_src)
+        r = fig.quad(
+          source=plot_src, bottom=0, top='count', left='left', right='right',
+          color='color', fill_alpha=0.5,
+          hover_fill_color='color', hover_fill_alpha=1.0,
+          legend='legend')
+        from bokeh.models import HoverTool
+        fig.add_tools(
+          HoverTool(
+            renderers=[r],
+            mode='vline',
+            tooltips=[
+              ('Facet', '@legend'),
+              ('Count', '@count'),
+              ('Proportion', '@proportion'),
+              ('Value', '@left'),
+            ]))
+      fig.legend.click_policy = 'hide'
 
-      if micro_facet:
-        for val in df[micro_facet].unique():
-          add_hist(df[df[micro_facet] == val], legend=val)
-      else:
-        add_hist(df)
-        
-      return fig
-    
-    figs = []
-    for metric in METRICS:
-      figs.append(make_plot(df, metric))
-      for mf in MICRO_FACETS:
-        figs.append(make_plot(df, metric, micro_facet=mf))
+      # for item in legend.items:
+      #   from bokeh.models import CustomJS
+      #   item.renderers[0].js_on_change(
+      #     "visible",
+      #     CustomJS(args=dict(fig=fig), code="console.log(fig);fig.reset.emit();"))
+      
+      
+      # fig.add_tools(
+      #   HoverTool(tooltips=,
+      #     mode='vline'))
+      # fig.legend.click_policy = 'hide'
+
+      # from bokeh.layouts import WidgetBox
+      # controls = WidgetBox(checkbox_group)
+      
+      # from bokeh.layouts import row
+      # layout = row(fig, sizing_mode='scale_width')
+
+      from bokeh.models.widgets import Panel
+      panel = Panel(child=fig, title=title)
+      return panel
     
     panels = []
-    for i, fig in enumerate(figs):
-      from bokeh.models.widgets import Panel
-      panels.append(Panel(child=fig, title=str(i)))
+    for mf in MICRO_FACETS:
+      panels.extend(
+        make_panel(df, metric, mf)
+        for metric in METRICS)
     
     from bokeh.models.widgets import Tabs
     t = Tabs(tabs=panels)

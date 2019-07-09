@@ -398,9 +398,9 @@ class ExperimentReport(object):
         
         from bokeh.models import Whisker
         w = Whisker(
-            source=source,
-            base='mean_value', lower='std_lower', upper='std_upper',
-            line_color='black')
+              source=source,
+              base='mean_value', lower='std_lower', upper='std_upper',
+              line_color='black')
         fig.add_layout(w)
 
       # Precision
