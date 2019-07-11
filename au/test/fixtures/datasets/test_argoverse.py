@@ -57,16 +57,20 @@ class TestArgoverseImageTable(unittest.TestCase):
       # TODO create fixture
       imageio.imwrite('/opt/au/tasttt.png', frame.get_debug_image(),format='png')
 
-    # with testutils.LocalSpark.sess() as spark:
-      # df = av.Fixtures.label_df(spark, splits=('sample',))
-      # df.write.parquet(
-      #   '/tmp/av_yay_df',
-      #   mode='overwrite',
-      #   compression='lz4')
-      # df = spark.read.parquet('/tmp/av_yay_df')
-      # df = df.toPandas()
-      # df.to_pickle('/tmp/av_yay_pdf')
-      # assert False
+
+    if False:
+
+      with testutils.LocalSpark.sess() as spark:
+        df = av.Fixtures.label_df(spark, splits=('sample','tracking_train1','tracking_train2'))
+        import pdb; pdb.set_trace()
+        # df.write.parquet(
+        #   '/tmp/av_yay_df',
+        #   mode='overwrite',
+        #   compression='lz4')
+        # df = spark.read.parquet('/tmp/av_yay_df')
+        # df = df.toPandas()
+        # df.to_pickle('/tmp/av_yay_pdf')
+        # assert False
 
     import pandas as pd
     df = pd.read_pickle('/tmp/av_yay_pdf')

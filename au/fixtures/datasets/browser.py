@@ -9,15 +9,15 @@ df = None
 from flask import request
 @app.route('/test', methods=['GET'])
 def stream():
-  global spark
-  if not spark:
-    spark = Spark.getOrCreate()
-  global df
-  if not df:
-    from au.fixtures.datasets import argoverse as av
-    df = av.Fixtures.label_df(spark, splits=('sample',))
-    df = df.cache()
-    df.show()
+  # global spark
+  # if not spark:
+  #   spark = Spark.getOrCreate()
+  # global df
+  # if not df:
+  #   from au.fixtures.datasets import argoverse as av
+  #   df = av.Fixtures.label_df(spark, splits=('sample',))
+  #   df = df.cache()
+  #   df.show()
 
   from au.fixtures.datasets import argoverse as av
 

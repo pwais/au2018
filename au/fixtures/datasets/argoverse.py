@@ -109,6 +109,7 @@ class BBox(common.BBox):
       # Has the ObjectLabelRecord been motion-corrected?
       'motion_corrected',
       'cuboid_pts',       # In robot ego frame
+      'ego_to_obj',       # Translation vector in ego frame
     ]
   )
 
@@ -158,6 +159,7 @@ class BBox(common.BBox):
         # NB: must use quat2rotmat due to Argo-specific quaternions
       rotmat = quat2rotmat(object_label_record.quaternion)
       bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
+      bbox.ego_to_obj = object_label_record.translation
 
     def fill_bbox_core(bbox):
       bbox.category_name = object_label_record.label_class
@@ -535,6 +537,76 @@ class Fixtures(object):
               timestamp=ts)
 
   @classmethod
+  def _impute_rider_for_bikes(cls, spark, df):
+    BIKE = ["BICYCLE", "MOPED", "MOTORCYCLE"]
+    RIDER = ["BICYCLIST", "MOTORCYCLIST"]
+    BIKE_AND_RIDER = BIKE + RIDER
+
+    # Sub-select just bike and rider rows from `df` to improve performance
+    bikes_df = df.filter(
+      df.category_name.isin(BIKE_AND_RIDER) &
+      df.is_visible)
+    bikes_df = bikes_df.select(
+                  'uri',
+                  'track_id',
+                  'category_name',
+                  'ego_to_obj')
+
+    def iter_nearest_rider(uri_rows):
+      uri, rows = uri_rows
+      rows = list(rows) # Spark gives us a generator
+      bike_rows = [r for r in rows if r.category_name in BIKE]
+      rider_rows = [r for r in rows if r.category_name in RIDER]
+      from six.moves.urllib import parse
+      print(
+        'rider_rows',
+        [parse.urlencode({'uri': r.uri}) for r in rider_rows],
+        'bike_rows',
+        [parse.urlencode({'uri': r.uri}) for r in bike_rows])
+      
+      # The best pair has smallest euclidean distance between centroids
+      def l2_dist(r1, r2):
+        a1 = np.array([r1.ego_to_obj.x, r1.ego_to_obj.y, r1.ego_to_obj.z])
+        a2 = np.array([r2.ego_to_obj.x, r2.ego_to_obj.y, r2.ego_to_obj.z])
+        return float(np.linalg.norm(a2 - a1))
+
+      # Bikes may not have riders, so loop over bikes looking for riders
+      for bike in bike_rows:
+        if rider_rows:
+          best_rider, distance = min(
+                          (rider, l2_dist(bike, rider))
+                          for rider in rider_rows)
+          nearest_rider = dict(
+            uri=bike.uri,
+            track_id=bike.track_id,
+            best_rider_track_id=best_rider.track_id,
+            best_rider_distance=distance,
+          )
+
+          from pyspark.sql import Row
+          yield Row(**nearest_rider)
+    
+    # We'll group all rows in our DF by URI, then do bike<->rider
+    # for each URI (i.e. all the rows for a single URI).  The matching
+    # will spit out a new DataFrame, which we'll join against the 
+    # original `df` in order to "add" the columns encoding the
+    # bike<->rider matchings.
+    uri_chunks_rdd = bikes_df.rdd.groupBy(lambda r: r.uri)
+    nearest_rider = uri_chunks_rdd.flatMap(iter_nearest_rider)
+    nearest_rider_df = spark.createDataFrame(nearest_rider)
+    
+    joined = df.join(nearest_rider_df, ['uri', 'track_id'], 'outer')
+
+    # Don't allow nulls; those can't be compared and/or written to Parquet
+    joined = joined.na.fill({
+                  'best_rider_distance': float('inf'),
+                  'best_rider_track_id': ''
+    })
+    import pdb; pdb.set_trace()
+    print('moof')
+    return joined
+
+  @classmethod
   def label_df(cls, spark, splits=None):
     if not splits:
       splits = cls.SPLITS
@@ -546,15 +618,24 @@ class Fixtures(object):
     uri_rdd = uri_rdd.repartition(1000)
     
     def iter_label_rows(uri):
+      from collections import namedtuple
+      pt = namedtuple('pt', 'x y z')
+
       frame = AVFrame(uri=uri)
       for box in frame.image_bboxes:
         row = {}
-        
+
         # Obj
+        # TODO make spark accept numpy and numpy float64 things
         row = box.to_dict()
-        IGNORE = ('cuboid_pts',)
+        IGNORE = ('cuboid_pts', 'ego_to_obj')
         for attr in IGNORE:
-          row.pop(attr)
+          v = row.pop(attr)
+          if hasattr(v, 'shape'):
+            if len(v.shape) == 1:
+              row[attr] = pt(*v.tolist())
+            else:
+              row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
         
         # Context
         import copy
@@ -563,12 +644,18 @@ class Fixtures(object):
         row.update(uri=str(obj_uri), **obj_uri.to_dict())
         row.update(
           city=cls.get_loader(uri).city_name,
-          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(bbox.category_name, ''))
+          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
         
         from pyspark.sql import Row
         yield Row(**row)
     
-    df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
+    P = '/tmp/yay_label_df_cache'
+    if not os.path.exists('/tmp/yay_label_df_cache'):
+      df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
+      df.write.parquet(P, mode='overwrite')
+    print('fixme')
+    df = spark.read.parquet(P)
+    df = cls._impute_rider_for_bikes(spark, df)
     return df
   
 
@@ -636,16 +723,29 @@ class HistogramWithExamples(object):
       for mf in micro_facets_values:
         if mf == 'all':
           mf_data = pd.DataFrame(df)
+          mf_uris = df['uri']
         else:
           mf_data = df[df[micro_facet] == mf]
+          mf_uris = df[df[micro_facet] == mf]['uri']
         hist, edges = np.histogram(mf_data[metric], bins=100)
         mf_df = pd.DataFrame(dict(
           count=hist, proportion=hist / np.sum(hist),
           left=edges[:-1], right=edges[1:],
+          uris=[df.loc[inds]['uri'] for inds in h_inds],
         ))
         mf_df['legend'] = mf
         from bokeh.colors import RGB
         mf_df['color'] = RGB(*util.hash_to_rbg(mf))
+
+        h_inds = np.digitize(mf_data[metric], edges)
+        mf_df['uri'] = [
+          df.loc[h_inds == i]['uri'][:10]
+          for i in range(min(h_inds), max(h_inds) + 1)
+        ]
+        assert False
+        print([df.loc[h_inds == i]['uri'][:10]
+          for i in range(min(h_inds), max(h_inds) + 1)])
+
         legend_to_panel_df[mf] = mf_df
       
       # # Make checkbox group that can filter data
@@ -675,6 +775,7 @@ class HistogramWithExamples(object):
       title = metric + ' vs ' + micro_facet
       fig = plotting.figure(
               title=title,
+              tools='tap',
               plot_width=1200,
               x_axis_label=metric,
               y_axis_label='Count')
@@ -696,13 +797,11 @@ class HistogramWithExamples(object):
               ('Proportion', '@proportion'),
               ('Value', '@left'),
             ]))
+        
+        plot_src
+
       fig.legend.click_policy = 'hide'
 
-      # for item in legend.items:
-      #   from bokeh.models import CustomJS
-      #   item.renderers[0].js_on_change(
-      #     "visible",
-      #     CustomJS(args=dict(fig=fig), code="console.log(fig);fig.reset.emit();"))
       
       
       # fig.add_tools(
@@ -712,12 +811,24 @@ class HistogramWithExamples(object):
 
       # from bokeh.layouts import WidgetBox
       # controls = WidgetBox(checkbox_group)
-      
-      # from bokeh.layouts import row
-      # layout = row(fig, sizing_mode='scale_width')
+      from bokeh.models.widgets import Div
+      ctxbox = Div(text="Placeholder")
+
+      from bokeh.models import TapTool
+      taptool = fig.select(type=TapTool)
+
+      from bokeh.models import CustomJS
+      taptool.callback = CustomJS(
+        args=dict(ctxbox=ctxbox),
+        code="""console.log(cb_data);ctxbox.text="" + cb_data.source.data.uris """)
+
+
+
+      from bokeh.layouts import row
+      layout = row(fig, ctxbox)
 
       from bokeh.models.widgets import Panel
-      panel = Panel(child=fig, title=title)
+      panel = Panel(child=layout, title=title)
       return panel
     
     panels = []
