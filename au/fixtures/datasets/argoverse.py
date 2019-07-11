@@ -709,7 +709,7 @@ class HistogramWithExamples(object):
 
     # centroid distance between bike and rider?
 
-    def make_panel(df, metric, micro_facet):
+    def make_panel(df, metric, micro_facet, bins=100):
       from bokeh import plotting
       from bokeh.models import ColumnDataSource
       import pandas as pd
@@ -723,29 +723,49 @@ class HistogramWithExamples(object):
       for mf in micro_facets_values:
         if mf == 'all':
           mf_data = pd.DataFrame(df)
-          mf_uris = df['uri']
         else:
           mf_data = df[df[micro_facet] == mf]
-          mf_uris = df[df[micro_facet] == mf]['uri']
-        hist, edges = np.histogram(mf_data[metric], bins=100)
+        hist, edges = np.histogram(mf_data[metric], bins=bins)
         mf_df = pd.DataFrame(dict(
           count=hist, proportion=hist / np.sum(hist),
           left=edges[:-1], right=edges[1:],
-          uris=[df.loc[inds]['uri'] for inds in h_inds],
         ))
         mf_df['legend'] = mf
         from bokeh.colors import RGB
         mf_df['color'] = RGB(*util.hash_to_rbg(mf))
 
-        h_inds = np.digitize(mf_data[metric], edges)
-        mf_df['uri'] = [
-          df.loc[h_inds == i]['uri'][:10]
-          for i in range(min(h_inds), max(h_inds) + 1)
+        # NB: we'd want to use np.digitize() here, but it's not always the
+        # inverse of np.histogram() https://github.com/numpy/numpy/issues/4217
+        def to_display(df_subset):
+          from six.moves.urllib import parse
+          TEMPLATE = """<a href="{href}">{title}</a>"""
+          BASE = "http://au5:5000/test?"
+          links = [
+            TEMPLATE.format(
+                        title="Example " + str(i + 1),
+                        href=BASE + parse.urlencode({'uri': uri}))
+            for i, uri in enumerate(df_subset['uri'][:10])
+          ]
+          return mf + '<br/><br/>' + '<br/>'.join(links)
+        mf_df['display'] = [
+          to_display(
+            mf_data[
+              (lo <= mf_data[metric]) & (mf_data[metric] < hi)])
+          for lo, hi in zip(edges[:-1], edges[1:])
         ]
-        assert False
-        print([df.loc[h_inds == i]['uri'][:10]
-          for i in range(min(h_inds), max(h_inds) + 1)])
+        
+        # pd.Series([
+        #   df.loc[h_inds == i]['uri']
+        #   for i in range(0, bins)
+        # ])
+        # def to_display(i):
+        #   rows = df.loc[h_inds == i]
+        #   uris = rows['uri'][:10]
+        #   disp = mf + '<br/>' + '<br/>'.join(str(i) for i, uri in enumerate(uris))
+        #   return disp
 
+        # mf_df['context_display'] = [to_display(i) for i in range(0, bins)]
+        # import pdb; pdb.set_trace()
         legend_to_panel_df[mf] = mf_df
       
       # # Make checkbox group that can filter data
@@ -775,7 +795,7 @@ class HistogramWithExamples(object):
       title = metric + ' vs ' + micro_facet
       fig = plotting.figure(
               title=title,
-              tools='tap',
+              tools='tap,pan,wheel_zoom,box_zoom,reset',
               plot_width=1200,
               x_axis_label=metric,
               y_axis_label='Count')
@@ -820,12 +840,15 @@ class HistogramWithExamples(object):
       from bokeh.models import CustomJS
       taptool.callback = CustomJS(
         args=dict(ctxbox=ctxbox),
-        code="""console.log(cb_data);ctxbox.text="" + cb_data.source.data.uris """)
+        code="""
+          var idx = cb_data.source.selected['1d'].indices[0];
+          ctxbox.text='' + cb_data.source.data.display[idx];
+        """)
 
 
 
-      from bokeh.layouts import row
-      layout = row(fig, ctxbox)
+      from bokeh.layouts import column
+      layout = column(fig, ctxbox)
 
       from bokeh.models.widgets import Panel
       panel = Panel(child=layout, title=title)
