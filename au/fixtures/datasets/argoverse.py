@@ -39,6 +39,9 @@ AV_OBJ_CLASS_TO_COARSE = {
   "SCHOOL_BUS":         'car',
 }
 
+class MissingPose(ValueError):
+  pass
+
 def get_image_width_height(camera):
   from argoverse.utils import camera_stats
   if camera in camera_stats.RING_CAMERA_LIST:
@@ -135,15 +138,19 @@ class BBox(common.BBox):
     calib = loader.get_calibration(uri.camera)
 
     def fill_cuboid_pts(bbox):
-      cuboid_pts = object_label_record.as_3d_bbox()
+      bbox.cuboid_pts = object_label_record.as_3d_bbox()
+      bbox.motion_corrected = False
         # Points in robot frame
       if motion_corrected:
-        cuboid_pts = loader.get_motion_corrected_pts(
-                                    cuboid_pts,
+        try:
+          bbox.cuboid_pts = loader.get_motion_corrected_pts(
+                                    bbox.cuboid_pts,
                                     object_label_record.timestamp,
                                     uri.timestamp)
-      bbox.cuboid_pts = cuboid_pts
-      bbox.motion_corrected = motion_corrected
+          bbox.motion_corrected = True
+        except MissingPose:
+          # Garbage!
+          pass
 
     def fill_extra(bbox):
       bbox.track_id = object_label_record.track_id
@@ -259,9 +266,15 @@ class AVFrame(object):
     if not self._image_bboxes:
       t = self.uri.timestamp
       av_label_objects = self.loader.get_nearest_label_object(t)
+      def has_valid_labels(olr):
+        return not (
+          # Some of the labels are complete junk
+          np.isnan(olr.quaternion).any() or 
+          np.isnan(olr.translation).any())
       self._image_bboxes = [
         BBox.from_argoverse_label(self.uri, object_label_record)
         for object_label_record in av_label_objects
+        if has_valid_labels(object_label_record)
       ]
     return self._image_bboxes
 
@@ -382,7 +395,8 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
                               dest_timestamp,
                               self.root_dir,
                               self.current_log)
-    assert city_SE3_ego_dest_t
+    if city_SE3_ego_dest_t is None:
+      raise MissingPose()
 
     # get transformation to bring point in egovehicle frame to city frame,
     # at the time when the LiDAR sweep was recorded.
@@ -390,8 +404,8 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
                               pts_timestamp,
                               self.root_dir,
                               self.current_log)
-    assert city_SE3_ego_pts_t
-
+    if city_SE3_ego_pts_t is None:
+      raise MissingPose()
     
     # Argoverse SE3 does not want homogenous coords
     pts = np.copy(pts)
@@ -403,7 +417,6 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     pts = ego_dest_t_SE3_ego_pts_t.transform_point_cloud(pts)
     
     from argoverse.utils.calibration import point_cloud_to_homogeneous
-    # pts = point_cloud_to_homogeneous(pts)
     return pts
     
 
@@ -425,10 +438,10 @@ class Fixtures(object):
   )
 
   TRACKING_TARBALLS = (
-    "tracking_train1.tar.gz",
+    # "tracking_train1.tar.gz",
     "tracking_train2.tar.gz",
-    "tracking_train3.tar.gz",
-    "tracking_train4.tar.gz",
+    # "tracking_train3.tar.gz",
+    # "tracking_train4.tar.gz",
     "tracking_val.tar.gz",
     "tracking_test.tar.gz",
   )
@@ -548,6 +561,7 @@ class Fixtures(object):
       df.is_visible)
     bikes_df = bikes_df.select(
                   'uri',
+                  'frame_uri',
                   'track_id',
                   'category_name',
                   'ego_to_obj')
@@ -557,12 +571,6 @@ class Fixtures(object):
       rows = list(rows) # Spark gives us a generator
       bike_rows = [r for r in rows if r.category_name in BIKE]
       rider_rows = [r for r in rows if r.category_name in RIDER]
-      from six.moves.urllib import parse
-      print(
-        'rider_rows',
-        [parse.urlencode({'uri': r.uri}) for r in rider_rows],
-        'bike_rows',
-        [parse.urlencode({'uri': r.uri}) for r in bike_rows])
       
       # The best pair has smallest euclidean distance between centroids
       def l2_dist(r1, r2):
@@ -591,8 +599,10 @@ class Fixtures(object):
     # will spit out a new DataFrame, which we'll join against the 
     # original `df` in order to "add" the columns encoding the
     # bike<->rider matchings.
-    uri_chunks_rdd = bikes_df.rdd.groupBy(lambda r: r.uri)
+    uri_chunks_rdd = bikes_df.rdd.groupBy(lambda r: r.frame_uri)
     nearest_rider = uri_chunks_rdd.flatMap(iter_nearest_rider)
+    if nearest_rider.isEmpty():
+      return df
     nearest_rider_df = spark.createDataFrame(nearest_rider)
     
     joined = df.join(nearest_rider_df, ['uri', 'track_id'], 'outer')
@@ -602,8 +612,8 @@ class Fixtures(object):
                   'best_rider_distance': float('inf'),
                   'best_rider_track_id': ''
     })
-    import pdb; pdb.set_trace()
-    print('moof')
+    # import pdb; pdb.set_trace()
+    # print('moof')
     return joined
 
   @classmethod
@@ -611,51 +621,55 @@ class Fixtures(object):
     if not splits:
       splits = cls.SPLITS
     
-    split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
-    uri_rdd = split_rdd.flatMap(lambda split: cls.iter_image_uris(split))
+    # split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
+    # uri_rdd = split_rdd.flatMap(lambda split: cls.iter_image_uris(split))
     
-    # Read frames in parallel
-    uri_rdd = uri_rdd.repartition(1000)
+    # # Read frames in parallel
+    # uri_rdd = uri_rdd.repartition(1000)
     
-    def iter_label_rows(uri):
-      from collections import namedtuple
-      pt = namedtuple('pt', 'x y z')
+    # def iter_label_rows(uri):
+    #   from collections import namedtuple
+    #   pt = namedtuple('pt', 'x y z')
 
-      frame = AVFrame(uri=uri)
-      for box in frame.image_bboxes:
-        row = {}
+    #   frame = AVFrame(uri=uri)
+    #   for box in frame.image_bboxes:
+    #     row = {}
 
-        # Obj
-        # TODO make spark accept numpy and numpy float64 things
-        row = box.to_dict()
-        IGNORE = ('cuboid_pts', 'ego_to_obj')
-        for attr in IGNORE:
-          v = row.pop(attr)
-          if hasattr(v, 'shape'):
-            if len(v.shape) == 1:
-              row[attr] = pt(*v.tolist())
-            else:
-              row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
+    #     # Obj
+    #     # TODO make spark accept numpy and numpy float64 things
+    #     row = box.to_dict()
+    #     IGNORE = ('cuboid_pts', 'ego_to_obj')
+    #     for attr in IGNORE:
+    #       v = row.pop(attr)
+    #       if hasattr(v, 'shape'):
+    #         if len(v.shape) == 1:
+    #           row[attr] = pt(*v.tolist())
+    #         else:
+    #           row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
         
-        # Context
-        import copy
-        obj_uri = copy.deepcopy(uri)
-        obj_uri.track_id = box.track_id
-        row.update(uri=str(obj_uri), **obj_uri.to_dict())
-        row.update(
-          city=cls.get_loader(uri).city_name,
-          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
+    #     # Context
+    #     import copy
+    #     obj_uri = copy.deepcopy(uri)
+    #     obj_uri.track_id = box.track_id
+    #     row.update(
+    #       frame_uri=str(uri),
+    #       uri=str(obj_uri),
+    #       **obj_uri.to_dict())
+    #     row.update(
+    #       city=cls.get_loader(uri).city_name,
+    #       coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
         
-        from pyspark.sql import Row
-        yield Row(**row)
+    #     from pyspark.sql import Row
+    #     yield Row(**row)
     
+    # df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
+    # df = cls._impute_rider_for_bikes(spark, df)
     P = '/tmp/yay_label_df_cache'
-    if not os.path.exists('/tmp/yay_label_df_cache'):
-      df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
+    if not os.path.exists(P):
       df.write.parquet(P, mode='overwrite')
     print('fixme')
     df = spark.read.parquet(P)
-    df = cls._impute_rider_for_bikes(spark, df)
+    
     return df
   
 
@@ -680,8 +694,13 @@ class Fixtures(object):
 
 class HistogramWithExamples(object):
   
-  def run(self, df):
-    df = df[df.is_visible == True]
+  def run(self, spark, df):
+    import pyspark.sql
+    if not isinstance(df, pyspark.sql.DataFrame):
+      df = spark.createDataFrame(df)
+
+    df = df.filter(df.is_visible == True)
+    # df = df[df.is_visible == True]
 
     MACRO_FACETS = (
       'camera',
@@ -714,18 +733,28 @@ class HistogramWithExamples(object):
       from bokeh.models import ColumnDataSource
       import pandas as pd
 
-      df = df.dropna() # FIXME SOME METRICS HAVE NANS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
       ## Organize Data
-      micro_facets_values = list(df[micro_facet].unique())
+      # micro_facets_values = list(df[micro_facet].unique().to_numpy()) # FIXME ~~~~~~~~~~
+      micro_facets_values = [
+        getattr(row, micro_facet)
+        for row in df.select(micro_facet).distinct().collect()
+      ]
       micro_facets_values.append('all')
       legend_to_panel_df = {}
       for mf in micro_facets_values:
+        util.log.info("Building plots for %s - %s" % (metric, mf))
         if mf == 'all':
-          mf_data = pd.DataFrame(df)
+          # mf_src_df = pd.DataFrame(df)
+          mf_src_df = df
         else:
-          mf_data = df[df[micro_facet] == mf]
-        hist, edges = np.histogram(mf_data[metric], bins=bins)
+          # mf_src_df = df[df[micro_facet] == mf]
+          mf_src_df = df.filter(df[micro_facet] == mf)
+        print("begin p subq")
+        mf_metric_data = np.array([
+          getattr(r, metric)
+          for r in mf_src_df.select(metric).collect()
+        ])
+        hist, edges = np.histogram(mf_metric_data, bins=bins) 
         mf_df = pd.DataFrame(dict(
           count=hist, proportion=hist / np.sum(hist),
           left=edges[:-1], right=edges[1:],
@@ -736,23 +765,69 @@ class HistogramWithExamples(object):
 
         # NB: we'd want to use np.digitize() here, but it's not always the
         # inverse of np.histogram() https://github.com/numpy/numpy/issues/4217
-        def to_display(df_subset):
+        # def to_display(df_subset):
+        #   from six.moves.urllib import parse
+        #   TEMPLATE = """<a href="{href}">{title}</a><img src="{href}" width=300 /> """
+        #   BASE = "http://au5:5000/test?"
+        #   uris = [r.uri for r in df_subset.select('uri').limit(10).collect()]
+        #   links = [
+        #     TEMPLATE.format(
+        #                 title="Example " + str(i + 1),
+        #                 href=BASE + parse.urlencode({'uri': uri}))
+        #     for i, uri in enumerate(uris)
+        #   ]
+        #   print(df_subset)
+        #   return mf + '<br/><br/>' + '<br/>'.join(links)
+        print('displaying')
+
+        def bucket_to_display(bucket_irows):
+          bucket, irows = bucket_irows
           from six.moves.urllib import parse
-          TEMPLATE = """<a href="{href}">{title}</a>"""
+          TEMPLATE = """<a href="{href}">{title}</a><img src="{href}" width=300 /> """
           BASE = "http://au5:5000/test?"
+          import itertools
+          uris = [r.uri for r in itertools.islice(irows, 10)]
           links = [
             TEMPLATE.format(
                         title="Example " + str(i + 1),
                         href=BASE + parse.urlencode({'uri': uri}))
-            for i, uri in enumerate(df_subset['uri'][:10])
+            for i, uri in enumerate(uris)
           ]
-          return mf + '<br/><br/>' + '<br/>'.join(links)
+          print(bucket)
+          return bucket, mf + '<br/><br/>' + '<br/>'.join(links)
+
+        # for lo, hi in zip(edges[:-1], edges[1:]):
+        #   # idx = np.where(
+        #   #   (lo <= mf_metric_data) & (mf_metric_data < hi))[0]
+        #   # disps.append(to_display(mf_src_df.iloc[idx]))
+
+        #   df_subset = mf_src_df.filter(
+        #     (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi))
+        #   disps.append(to_display(df_subset))
+        #   print(metric, lo, hi)
+        # mf_df['display'] = disps
+        
+        from pyspark.sql import functions as F
+        col_def = None
+        buckets = list(zip(edges[:-1], edges[1:]))
+        for bucket_id, (lo, hi) in enumerate(buckets):
+          args = (
+                (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi),
+                bucket_id
+          )
+          if col_def is None:
+            col_def = F.when(*args)
+          else:
+            col_def = col_def.when(*args)
+        col_def = col_def.otherwise(-1)
+        df_bucketed = mf_src_df.withColumn('ag_plot_bucket', col_def)
+        bucketed_chunks = df_bucketed.rdd.groupBy(lambda r: r.ag_plot_bucket)
+        bucket_to_disp = dict(bucketed_chunks.map(bucket_to_display).collect())
         mf_df['display'] = [
-          to_display(
-            mf_data[
-              (lo <= mf_data[metric]) & (mf_data[metric] < hi)])
-          for lo, hi in zip(edges[:-1], edges[1:])
+          bucket_to_disp.get(b, '')
+          for b in range(len(buckets))
         ]
+        print('end displaying')
         
         # pd.Series([
         #   df.loc[h_inds == i]['uri']

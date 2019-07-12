@@ -58,11 +58,10 @@ class TestArgoverseImageTable(unittest.TestCase):
       imageio.imwrite('/opt/au/tasttt.png', frame.get_debug_image(),format='png')
 
 
-    if False:
+    if True:
 
       with testutils.LocalSpark.sess() as spark:
-        df = av.Fixtures.label_df(spark, splits=('sample','tracking_train1','tracking_train2'))
-        import pdb; pdb.set_trace()
+        df = av.Fixtures.label_df(spark, splits=('sample','train'))
         # df.write.parquet(
         #   '/tmp/av_yay_df',
         #   mode='overwrite',
@@ -71,13 +70,15 @@ class TestArgoverseImageTable(unittest.TestCase):
         # df = df.toPandas()
         # df.to_pickle('/tmp/av_yay_pdf')
         # assert False
+        # import pdb; pdb.set_trace()
+        df.show()
 
-    import pandas as pd
-    df = pd.read_pickle('/tmp/av_yay_pdf')
+    # import pandas as pd
+    # df = pd.read_pickle('/tmp/av_yay_pdf')
 
     
-    h = av.HistogramWithExamples()
-    h.run(df)
+        h = av.HistogramWithExamples()
+        h.run(spark, df)
 
 
 
