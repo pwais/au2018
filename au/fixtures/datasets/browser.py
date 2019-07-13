@@ -1,5 +1,7 @@
 import flask
 
+"""FLASK_ENV=development FLASK_APP=au/fixtures/datasets/browser.py flask run --host=au5.local"""
+
 app = flask.Flask(__name__)
 
 from au.spark import Spark
