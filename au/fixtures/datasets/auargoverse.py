@@ -1,3 +1,4 @@
+from __future__ import absolute_import
 
 import itertools
 import os
@@ -438,10 +439,10 @@ class Fixtures(object):
   )
 
   TRACKING_TARBALLS = (
-    # "tracking_train1.tar.gz",
+    "tracking_train1.tar.gz",
     "tracking_train2.tar.gz",
-    # "tracking_train3.tar.gz",
-    # "tracking_train4.tar.gz",
+    "tracking_train3.tar.gz",
+    "tracking_train4.tar.gz",
     "tracking_val.tar.gz",
     "tracking_test.tar.gz",
   )
@@ -678,15 +679,17 @@ class Fixtures(object):
   @classmethod
   def download_all(cls):
     util.mkdir(cls.tarball_path(''))
-    for tarball in cls.all_tarballs():
-      uri = cls.BASE_TARBALL_URL + '/' + tarball
-      util.download(uri, cls.zip_dir(fname), try_expand=True)
+    import multiprocessing
+    p = multiprocessing.Pool()
+    p.map(download, [(cls.BASE_TARBALL_URL + '/' + tarball, cls.tarball_dir(tarball)) for tarball in cls.all_tarballs()])
 
   @classmethod
   def run_import(cls):
     cls.download_all()
 
-
+def download(uri_dest):
+      uri, dest = uri_dest
+      util.download(uri, dest, try_expand=True)
 
 ###
 ### Mining
@@ -750,10 +753,11 @@ class HistogramWithExamples(object):
           # mf_src_df = df[df[micro_facet] == mf]
           mf_src_df = df.filter(df[micro_facet] == mf)
         print("begin p subq")
-        mf_metric_data = np.array([
+        mf_metric_data = [
           getattr(r, metric)
           for r in mf_src_df.select(metric).collect()
-        ])
+        ]
+        mf_metric_data = np.array([v for v in mf_metric_data if v is not None])
         hist, edges = np.histogram(mf_metric_data, bins=bins) 
         mf_df = pd.DataFrame(dict(
           count=hist, proportion=hist / np.sum(hist),

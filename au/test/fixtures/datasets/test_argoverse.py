@@ -1,5 +1,5 @@
 from au import util
-from au.fixtures.datasets import argoverse as av
+from au.fixtures.datasets import auargoverse as av
 from au.test import testconf
 from au.test import testutils
 
