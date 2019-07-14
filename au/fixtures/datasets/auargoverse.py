@@ -670,6 +670,7 @@ class Fixtures(object):
       df.write.parquet(P, mode='overwrite')
     print('fixme')
     df = spark.read.parquet(P)
+    # import pdb; pdb.set_trace()
     
     return df
   
@@ -713,13 +714,13 @@ class HistogramWithExamples(object):
 
     METRICS = (
       'distance_meters',
-      'height_meters',
-      'width_meters',
-      'length_meters',
-      'height',
-      'width',
-      'relative_yaw_radians',
-      'occlusion',
+      # 'height_meters',
+      # 'width_meters',
+      # 'length_meters',
+      # 'height',
+      # 'width',
+      # 'relative_yaw_radians',
+      # 'occlusion',
     )
 
     MICRO_FACETS = (
@@ -885,19 +886,17 @@ class HistogramWithExamples(object):
           color='color', fill_alpha=0.5,
           hover_fill_color='color', hover_fill_alpha=1.0,
           legend='legend')
-        from bokeh.models import HoverTool
-        fig.add_tools(
-          HoverTool(
-            renderers=[r],
-            mode='vline',
-            tooltips=[
-              ('Facet', '@legend'),
-              ('Count', '@count'),
-              ('Proportion', '@proportion'),
-              ('Value', '@left'),
-            ]))
-        
-        plot_src
+      from bokeh.models import HoverTool
+      fig.add_tools(
+        HoverTool(
+          # renderers=[r],
+          mode='vline',
+          tooltips=[
+            ('Facet', '@legend'),
+            ('Count', '@count'),
+            ('Proportion', '@proportion'),
+            ('Value', '@left'),
+          ]))
 
       fig.legend.click_policy = 'hide'
 

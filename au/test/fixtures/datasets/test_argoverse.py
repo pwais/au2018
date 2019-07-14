@@ -32,9 +32,9 @@ class TestArgoverseImageTable(unittest.TestCase):
     assert av.Fixtures.TRACKING_SAMPLE in av.Fixtures.all_tarballs()
     assert av.Fixtures.TRACKING_SAMPLE in av.Fixtures.all_tracking_tarballs()
 
-  def test_sample(self):
-    if not self.have_fixtures:
-      return
+  def test_samplexxxxxxx(self):
+    # if not self.have_fixtures:
+    #   return
 
 
     if False: # Returnme
@@ -61,7 +61,7 @@ class TestArgoverseImageTable(unittest.TestCase):
     if True:
 
       with testutils.LocalSpark.sess() as spark:
-        df = av.Fixtures.label_df(spark, splits=('sample','train'))
+        df = av.Fixtures.label_df(spark, splits=('sample','train','test'))
         # df.write.parquet(
         #   '/tmp/av_yay_df',
         #   mode='overwrite',
