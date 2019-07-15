@@ -567,18 +567,16 @@ class Fixtures(object):
       base_path = cls.tarball_dir(tarball)
       for log_dir in cls.get_log_dirs(base_path):
         log_id = os.path.split(log_dir)[-1]
-        yield FrameURI(tarball_name=tarball, log_id=log_id)
+        yield FrameURI(split=split, tarball_name=tarball, log_id=log_id)
 
   @classmethod
   def get_frame_uris(cls, log_frame_uri):
     loader = cls.get_loader(log_frame_uri)
     for camera, ts_to_path in loader.timestamp_image_dict.items():
       for ts in ts_to_path.keys():
-        yield FrameURI(
-          split=split,
-          camera=camera,
-          timestamp=ts,
-          **log_frame_uri.to_dict())
+        uri = log_frame_uri.to_dict()
+        uri.update(camera=camera, timestamp=ts)
+        yield FrameURI(**uri)
 
   
 
@@ -696,8 +694,12 @@ class AnnoTable(object):
     util.log.info("Building anno df for splits %s" % (splits,))
 
     # Be careful to hint to Spark how to parallelize reads
-    split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
-    luri_rdd = split_rdd.flatMap(cls.FIXTURES.get_log_uris)
+    luris = list(
+              itertools.chain.from_iterable(
+                    cls.FIXTURES.get_log_uris(split)
+                    for split in splits))
+    util.log.info("... reading from %s logs ..." % len(luris))
+    luri_rdd = spark.sparkContext.parallelize(luris, numSlices=len(luris))
     uri_rdd = luri_rdd.flatMap(cls.FIXTURES.get_frame_uris)
     uri_rdd = uri_rdd.repartition(1000).cache()
     util.log.info("... read %s URIs ..." % uri_rdd.count())
