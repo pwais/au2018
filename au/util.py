@@ -172,7 +172,7 @@ class ThruputObserver(object):
       self.__log_freq = n
     if (self.n % self.__log_freq) == 0:
       self.stop_block()
-      log.info("Progress for " + self.name + " " + str(id(self)) + "\n" + str(self))
+      log.info("Progress for \n" + str(self))
       self.start_block()
 
       if n == -1 and (n >= 1.7 * self.__log_freq):

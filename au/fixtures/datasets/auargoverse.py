@@ -660,7 +660,7 @@ class AnnoTable(object):
     return joined
 
   @classmethod
-  def build_anno_df(self, spark, splits=None):
+  def build_anno_df(cls, spark, splits=None):
     if not splits:
       splits = cls.FIXTURES.SPLITS
     
@@ -670,7 +670,7 @@ class AnnoTable(object):
     split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
     uri_rdd = split_rdd.flatMap(lambda split: cls.iter_image_uris(split))
     uri_rdd = uri_rdd.repartition(1000)
-    util.log.info("... read %s URIs ..." % uri_rdd.count())
+    # util.log.info("... read %s URIs ..." % uri_rdd.count())
     
     def iter_anno_rows(uri):
       from collections import namedtuple
@@ -712,7 +712,7 @@ class AnnoTable(object):
     return df
 
   @classmethod
-  def setup(self, spark=None):
+  def setup(cls, spark=None):
     if os.path.exists(cls.table_root()):
       return
     
