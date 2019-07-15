@@ -707,7 +707,7 @@ class AnnoTable(object):
         from pyspark.sql import Row
         yield Row(**row)
     
-    df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
+    df = spark.createDataFrame(uri_rdd.flatMap(iter_anno_rows))
     df = cls._impute_rider_for_bikes(spark, df)
     return df
 
