@@ -66,13 +66,6 @@ class FrameURI(object):
 
   PREFIX = 'argoverse://'
 
-  def __getstate__(self):
-    return self.to_dict()
-  
-  def __setstate__(self, d):
-    for k in self.__slots__:
-      setattr(self, k, d.get(k, ''))
-
   def __init__(self, **kwargs):
     # Use kwargs, then fall back to args
     for i, k in enumerate(self.__slots__):
