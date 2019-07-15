@@ -6,6 +6,7 @@ import os
 from au import conf
 from au import util
 from au.fixtures.datasets import common
+from au.spark import Spark
 
 import imageio
 import math
