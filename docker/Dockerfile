@@ -160,7 +160,7 @@ RUN apt-get install -y libblas-dev libatlas-base-dev && pip3 install tsne
 ## Argoverse
 RUN \
   apt-get install -y libsm6 libxext6 libxrender-dev && \
-  cd /tmp && \
+  mkdir -p /opt/argoverse && cd /opt/argoverse && \
   git clone https://github.com/argoai/argoverse-api.git && \
   pip3 install -e argoverse-api && \
   cd -
