@@ -503,7 +503,7 @@ def download(uri, dest, try_expand=True):
     chunk_size = min(size, 8192)
     t = ThruputObserver(name=uri, n_total=math.ceil(size / chunk_size))
     while True:
-      with t.observe(n=1, num_bytes=chunk_size)
+      with t.observe(n=1, num_bytes=chunk_size):
         data = response.read(chunk_size)
         if not data:
           break
