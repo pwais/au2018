@@ -119,13 +119,20 @@ class Proxy(object):
 
 class ThruputObserver(object):
   
-  def __init__(self, name='', log_on_del=False, only_stats=None, log_freq=100):
+  def __init__(
+      self,
+      name='',
+      log_on_del=False,
+      only_stats=None,
+      log_freq=100,
+      n_total=None):
     self.n = 0
     self.num_bytes = 0
     self.ts = []
     self.name = name
     self.log_on_del = log_on_del
     self.only_stats = only_stats or []
+    self.n_total = n_total
     self._start = None
     self.__log_freq = log_freq
   
@@ -191,19 +198,30 @@ class ThruputObserver(object):
     gbytes = 1e-9 * self.num_bytes
     total_time = sum(self.ts) or float('nan')
 
-    stats = (
+    stats = [
       ('N thru', self.n),
       ('N chunks', len(self.ts)),
       ('total time (sec)', total_time),
       ('total GBytes', gbytes),
       ('overall GBytes/sec', gbytes / total_time if total_time else '-'),
       ('Hz', float(self.n) / total_time if total_time else '-'),
-      ('Latency (per chunk)', ''),
-      ('avg (sec)', np.mean(self.ts) if self.ts else '-'),
-      ('p50 (sec)', np.percentile(self.ts, 50) if self.ts else '-'),
-      ('p95 (sec)', np.percentile(self.ts, 95) if self.ts else '-'),
-      ('p99 (sec)', np.percentile(self.ts, 99) if self.ts else '-'),
-    )
+    ]
+    if self.n_total is not None:
+      percent_complete = 100. * float(self.n) / self.n_total
+      eta_sec = (100. - percent_complete) * (total_time / percent_complete)
+      stats.extend([
+        ('Progress', ''),
+        ('Percent complete', percent_complete),
+        ('ETA (sec)', eta_sec)
+      ])
+    if len(self.ts) >= 2:
+      stats.extend([
+        ('Latency (per chunk)', ''),
+        ('avg (sec)', np.mean(self.ts)),
+        ('p50 (sec)', np.percentile(self.ts, 50)),
+        ('p95 (sec)', np.percentile(self.ts, 95)),
+        ('p99 (sec)', np.percentile(self.ts, 99)),
+      ])
     if self.only_stats:
       stats = tuple(
         (name, value)
@@ -473,13 +491,6 @@ def download(uri, dest, try_expand=True):
   if os.path.exists(dest):
     return
   
-  def show_progress(percentage):
-    COLS = 70
-    full = int(COLS * percentage / 100)
-    bar = full * "#" + (COLS - full) * " "
-    sys.stdout.write("\u001b[1000D[" + bar + "] " + str(percentage) + "%")
-    sys.stdout.flush()
-  
   fname = os.path.split(uri)[-1]
   tempdest = tempfile.NamedTemporaryFile(suffix='_' + fname)
   try:
@@ -487,15 +498,15 @@ def download(uri, dest, try_expand=True):
     response = urllib.request.urlopen(uri)
     size = int(response.info().get('Content-Length').strip())
     log.info("... downloading %s MB ..." % (float(size) * 1e-6))
-    chunk = min(size, 8192)
-    downloaded = 0
+    chunk_size = min(size, 8192)
+    t = ThruputObserver(name=uri, n_total=math.ceil(size / chunk_size))
     while True:
-      data = response.read(chunk)
+      data = response.read(chunk_size)
       if not data:
         break
       tempdest.write(data)
-      downloaded += len(data)
-      show_progress(100 * downloaded / size)
+
+      t.maybe_log_progress()
     sys.stdout.write("")
     sys.stdout.flush()
     log.info("... fetched!")

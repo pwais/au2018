@@ -549,12 +549,50 @@ class Fixtures(object):
               split=split,
               camera=camera,
               timestamp=ts)
+  
+
+  ## Setup
+
+  @classmethod
+  def download_all(cls, spark=None):
+    util.mkdir(cls.tarball_path(''))
+    util.log.info(
+      'Downloading %s tarballs in parallel' % len(cls.all_tarballs()))
+    with Spark.sess(spark) as spark):
+      Spark.run_callables(
+        spark,
+        (
+          lambda: (
+            util.download(
+              cls.BASE_TARBALL_URL + '/' + tarball,
+              cls.tarball_dir(tarball),
+              try_expand=True))
+          for tarball in cls.all_tarballs()
+        ))
+
+  @classmethod
+  def run_import(cls, spark=None):
+    with Spark.sess(spark) as spark:
+      cls.download_all(spark=spark)
+      AnnoTable.setup(spark=spark)
+
+
+
+class AnnoTable(object):
+
+  FIXTURES = Fixtures
+
+  @classmethod
+  def table_root(cls):
+    return os.path.join(conf.AU_TABLE_CACHE, 'argoverse_annos')
 
   @classmethod
   def _impute_rider_for_bikes(cls, spark, df):
     BIKE = ["BICYCLE", "MOPED", "MOTORCYCLE"]
     RIDER = ["BICYCLIST", "MOTORCYCLIST"]
     BIKE_AND_RIDER = BIKE + RIDER
+
+    util.log.info("Imputing rider <-> bike matchings ...")
 
     # Sub-select just bike and rider rows from `df` to improve performance
     bikes_df = df.filter(
@@ -603,8 +641,13 @@ class Fixtures(object):
     uri_chunks_rdd = bikes_df.rdd.groupBy(lambda r: r.frame_uri)
     nearest_rider = uri_chunks_rdd.flatMap(iter_nearest_rider)
     if nearest_rider.isEmpty():
+      util.log.info("... no matchings!")
       return df
     nearest_rider_df = spark.createDataFrame(nearest_rider)
+
+    matched = nearest_rider_df.filter(
+                          nearest_rider_df.best_rider_distance < float('inf'))
+    util.log.info("... matched %s bikes ." % matched.count())
     
     joined = df.join(nearest_rider_df, ['uri', 'track_id'], 'outer')
 
@@ -613,84 +656,71 @@ class Fixtures(object):
                   'best_rider_distance': float('inf'),
                   'best_rider_track_id': ''
     })
-    # import pdb; pdb.set_trace()
-    # print('moof')
     return joined
 
   @classmethod
-  def label_df(cls, spark, splits=None):
+  def build_anno_df(self, spark, splits=None):
     if not splits:
-      splits = cls.SPLITS
+      splits = cls.FIXTURES.SPLITS
     
-    # split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
-    # uri_rdd = split_rdd.flatMap(lambda split: cls.iter_image_uris(split))
-    
-    # # Read frames in parallel
-    # uri_rdd = uri_rdd.repartition(1000)
-    
-    # def iter_label_rows(uri):
-    #   from collections import namedtuple
-    #   pt = namedtuple('pt', 'x y z')
+    util.log.info("Building anno df for splits %s" % (splits,))
 
-    #   frame = AVFrame(uri=uri)
-    #   for box in frame.image_bboxes:
-    #     row = {}
+    # Be careful to hint to Spark how to parallelize reads
+    split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
+    uri_rdd = split_rdd.flatMap(lambda split: cls.iter_image_uris(split))
+    uri_rdd = uri_rdd.repartition(1000)
+    util.log.info("... read %s URIs ..." % uri_rdd.count())
+    
+    def iter_anno_rows(uri):
+      from collections import namedtuple
+      pt = namedtuple('pt', 'x y z')
 
-    #     # Obj
-    #     # TODO make spark accept numpy and numpy float64 things
-    #     row = box.to_dict()
-    #     IGNORE = ('cuboid_pts', 'ego_to_obj')
-    #     for attr in IGNORE:
-    #       v = row.pop(attr)
-    #       if hasattr(v, 'shape'):
-    #         if len(v.shape) == 1:
-    #           row[attr] = pt(*v.tolist())
-    #         else:
-    #           row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
+      frame = AVFrame(uri=uri)
+      for box in frame.image_bboxes:
+        row = {}
+
+        # Obj
+        # TODO make spark accept numpy and numpy float64 things
+        row = box.to_dict()
+        IGNORE = ('cuboid_pts', 'ego_to_obj')
+        for attr in IGNORE:
+          v = row.pop(attr)
+          if hasattr(v, 'shape'):
+            if len(v.shape) == 1:
+              row[attr] = pt(*v.tolist())
+            else:
+              row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
         
-    #     # Context
-    #     import copy
-    #     obj_uri = copy.deepcopy(uri)
-    #     obj_uri.track_id = box.track_id
-    #     row.update(
-    #       frame_uri=str(uri),
-    #       uri=str(obj_uri),
-    #       **obj_uri.to_dict())
-    #     row.update(
-    #       city=cls.get_loader(uri).city_name,
-    #       coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
+        # Anno Context
+        import copy
+        obj_uri = copy.deepcopy(uri)
+        obj_uri.track_id = box.track_id
+        row.update(
+          frame_uri=str(uri),
+          uri=str(obj_uri),
+          **obj_uri.to_dict())
+        row.update(
+          city=cls.get_loader(uri).city_name,
+          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
         
-    #     from pyspark.sql import Row
-    #     yield Row(**row)
+        from pyspark.sql import Row
+        yield Row(**row)
     
-    # df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
-    # df = cls._impute_rider_for_bikes(spark, df)
-    P = '/tmp/yay_label_df_cache'
-    if not os.path.exists(P):
-      df.write.parquet(P, mode='overwrite')
-    print('fixme')
-    df = spark.read.parquet(P)
-    # import pdb; pdb.set_trace()
-    
+    df = spark.createDataFrame(uri_rdd.flatMap(iter_label_rows))
+    df = cls._impute_rider_for_bikes(spark, df)
     return df
-  
-
-  ## Setup
 
   @classmethod
-  def download_all(cls):
-    util.mkdir(cls.tarball_path(''))
-    import multiprocessing
-    p = multiprocessing.Pool()
-    p.map(download, [(cls.BASE_TARBALL_URL + '/' + tarball, cls.tarball_dir(tarball)) for tarball in cls.all_tarballs()])
-
-  @classmethod
-  def run_import(cls):
-    cls.download_all()
-
-def download(uri_dest):
-      uri, dest = uri_dest
-      util.download(uri, dest, try_expand=True)
+  def setup(self, spark=None):
+    if os.path.exists(cls.table_root()):
+      return
+    
+    with Spark.sess(spark) as spark:
+      df = cls.build_anno_df(spark)
+      df.write.parquet(
+        cls.table_root(),
+        compression='gzip')
+      
 
 ###
 ### Mining
