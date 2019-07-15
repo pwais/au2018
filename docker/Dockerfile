@@ -162,6 +162,7 @@ RUN \
   apt-get install -y libsm6 libxext6 libxrender-dev && \
   mkdir -p /opt/argoverse && cd /opt/argoverse && \
   git clone https://github.com/argoai/argoverse-api.git && \
+  git -C argoverse-api checkout 737793f2d4e0bf8f8b92a96b86ccb53be62c8ebc && \
   pip3 install -e argoverse-api && \
   cd -
 
