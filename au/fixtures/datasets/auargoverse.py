@@ -539,8 +539,27 @@ class Fixtures(object):
     assert uri.log_id in log_id_to_loader, "Could not find log %s" % uri.log_id
     return log_id_to_loader[uri.log_id]
 
+  # @classmethod
+  # def iter_frame_uris(cls, split):
+  #   assert split in cls.SPLITS
+  #   tarballs = cls.all_tracking_tarballs()
+  #   tarballs = [t for t in tarballs if split in t]
+  #   for tarball in tarballs:
+  #     base_path = cls.tarball_dir(tarball)
+  #     for log_dir in cls.get_log_dirs(base_path):
+  #       log_id = os.path.split(log_dir)[-1]
+  #       loader = cls.get_loader(FrameURI(tarball_name=tarball, log_id=log_id))
+  #       for camera, ts_to_path in loader.timestamp_image_dict.items():
+  #         for ts in ts_to_path.keys():
+  #           yield FrameURI(
+  #             tarball_name=tarball,
+  #             log_id=log_id,
+  #             split=split,
+  #             camera=camera,
+  #             timestamp=ts)
+  
   @classmethod
-  def iter_frame_uris(cls, split):
+  def get_log_uris(cls, split):
     assert split in cls.SPLITS
     tarballs = cls.all_tracking_tarballs()
     tarballs = [t for t in tarballs if split in t]
@@ -548,15 +567,19 @@ class Fixtures(object):
       base_path = cls.tarball_dir(tarball)
       for log_dir in cls.get_log_dirs(base_path):
         log_id = os.path.split(log_dir)[-1]
-        loader = cls.get_loader(FrameURI(tarball_name=tarball, log_id=log_id))
-        for camera, ts_to_path in loader.timestamp_image_dict.items():
-          for ts in ts_to_path.keys():
-            yield FrameURI(
-              tarball_name=tarball,
-              log_id=log_id,
-              split=split,
-              camera=camera,
-              timestamp=ts)
+        yield FrameURI(tarball_name=tarball, log_id=log_id)
+
+  @classmethod
+  def get_frame_uris(cls, log_frame_uri):
+    loader = cls.get_loader(log_frame_uri)
+    for camera, ts_to_path in loader.timestamp_image_dict.items():
+      for ts in ts_to_path.keys():
+        yield FrameURI(
+          split=split,
+          camera=camera,
+          timestamp=ts,
+          **log_frame_uri.to_dict())
+
   
 
   ## Setup
@@ -674,7 +697,8 @@ class AnnoTable(object):
 
     # Be careful to hint to Spark how to parallelize reads
     split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
-    uri_rdd = split_rdd.flatMap(cls.FIXTURES.iter_frame_uris)
+    luri_rdd = split_rdd.flatMap(cls.FIXTURES.get_log_uris)
+    uri_rdd = luri_rdd.flatMap(cls.FIXTURES.get_frame_uris)
     uri_rdd = uri_rdd.repartition(1000).cache()
     util.log.info("... read %s URIs ..." % uri_rdd.count())
     
