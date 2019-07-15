@@ -369,9 +369,16 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     provide either an exact match or choose the closest available."""
 
     idx = self.get_nearest_lidar_sweep(timestamp)
+    if idx >= len(self.label_list):
+      util.log.error(
+        "Log %s has %s labels but %s lidar sweeps; idx %s out of range" % (
+          self.current_log, len(self.label_list),
+          len(self.lidar_timestamp_list), idx))
+      return []
+
     import argoverse.data_loading.object_label_record as object_label
     objs = object_label.read_label(self.label_list[idx])
-      # NB: actually reads a list of labels :P
+      # NB: the above actually reads a *list* of label objects :P
     
     # We hide the object timestamp in the label; I guess the Argoverse
     # authors didn't think the timestamp was important :P
