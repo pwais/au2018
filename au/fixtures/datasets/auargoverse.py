@@ -580,9 +580,8 @@ class Fixtures(object):
 
   @classmethod
   def run_import(cls, spark=None):
-    with Spark.sess(spark) as spark:
-      cls.download_all(spark=spark)
-      AnnoTable.setup(spark=spark)
+    cls.download_all(spark=spark)
+    AnnoTable.setup(spark=spark)
 
 
 
@@ -995,4 +994,5 @@ class HistogramWithExamples(object):
 
 
 if __name__ == '__main__':
-  Fixtures().run_import()
+  with Spark.sess() as spark:
+    Fixtures.run_import(spark=spark)
