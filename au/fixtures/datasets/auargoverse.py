@@ -558,7 +558,7 @@ class Fixtures(object):
     util.mkdir(cls.tarball_path(''))
     util.log.info(
       'Downloading %s tarballs in parallel' % len(cls.all_tarballs()))
-    with Spark.sess(spark) as spark):
+    with Spark.sess(spark) as spark:
       Spark.run_callables(
         spark,
         (

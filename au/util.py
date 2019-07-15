@@ -474,6 +474,8 @@ def download(uri, dest, try_expand=True):
   """Fetch `uri`, which is a file or archive, and put in `dest`, which
   is either a destination file path or destination directory."""
   
+  import math
+
   # Import urllib
   try:
     import urllib.error as urlliberror
@@ -501,11 +503,11 @@ def download(uri, dest, try_expand=True):
     chunk_size = min(size, 8192)
     t = ThruputObserver(name=uri, n_total=math.ceil(size / chunk_size))
     while True:
-      data = response.read(chunk_size)
-      if not data:
-        break
-      tempdest.write(data)
-
+      with t.observe(n=1, num_bytes=chunk_size)
+        data = response.read(chunk_size)
+        if not data:
+          break
+        tempdest.write(data)
       t.maybe_log_progress()
     sys.stdout.write("")
     sys.stdout.flush()
