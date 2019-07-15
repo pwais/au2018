@@ -668,9 +668,9 @@ class AnnoTable(object):
 
     # Be careful to hint to Spark how to parallelize reads
     split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
-    uri_rdd = split_rdd.flatMap(lambda split: cls.iter_image_uris(split))
+    uri_rdd = split_rdd.flatMap(lambda split: cls.FIXTURES.iter_image_uris(split))
     uri_rdd = uri_rdd.repartition(1000)
-    # util.log.info("... read %s URIs ..." % uri_rdd.count())
+    util.log.info("... read %s URIs ..." % uri_rdd.count())
     
     def iter_anno_rows(uri):
       from collections import namedtuple
@@ -701,7 +701,7 @@ class AnnoTable(object):
           uri=str(obj_uri),
           **obj_uri.to_dict())
         row.update(
-          city=cls.get_loader(uri).city_name,
+          city=cls.FIXTURES.get_loader(uri).city_name,
           coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
         
         from pyspark.sql import Row
