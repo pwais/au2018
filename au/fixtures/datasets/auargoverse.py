@@ -675,7 +675,7 @@ class AnnoTable(object):
     # Be careful to hint to Spark how to parallelize reads
     split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
     uri_rdd = split_rdd.flatMap(cls.FIXTURES.iter_frame_uris)
-    uri_rdd = uri_rdd.repartition(1000)
+    uri_rdd = uri_rdd.repartition(1000).cache()
     util.log.info("... read %s URIs ..." % uri_rdd.count())
     
     def iter_anno_rows(uri):
