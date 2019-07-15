@@ -501,7 +501,10 @@ def download(uri, dest, try_expand=True):
     size = int(response.info().get('Content-Length').strip())
     log.info("... downloading %s MB ..." % (float(size) * 1e-6))
     chunk_size = min(size, 8192)
-    t = ThruputObserver(name=uri, n_total=math.ceil(size / chunk_size))
+    t = ThruputObserver(
+          name=uri,
+          log_freq=10000,
+          n_total=math.ceil(size / chunk_size))
     while True:
       with t.observe(n=1, num_bytes=chunk_size):
         data = response.read(chunk_size)
