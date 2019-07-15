@@ -66,6 +66,13 @@ class FrameURI(object):
 
   PREFIX = 'argoverse://'
 
+  def __getstate__(self):
+    return self.to_dict()
+  
+  def __setstate__(self, d):
+    for k in self.__slots__:
+      setattr(self, k, d.get(k, ''))
+
   def __init__(self, **kwargs):
     # Use kwargs, then fall back to args
     for i, k in enumerate(self.__slots__):
@@ -533,7 +540,7 @@ class Fixtures(object):
     return log_id_to_loader[uri.log_id]
 
   @classmethod
-  def iter_image_uris(cls, split):
+  def iter_frame_uris(cls, split):
     assert split in cls.SPLITS
     tarballs = cls.all_tracking_tarballs()
     tarballs = [t for t in tarballs if split in t]
@@ -581,7 +588,7 @@ class Fixtures(object):
 
 class AnnoTable(object):
 
-  FIXTURES = Fixtures
+  FIXTURES = Fixtures()
 
   @classmethod
   def table_root(cls):
@@ -668,7 +675,7 @@ class AnnoTable(object):
 
     # Be careful to hint to Spark how to parallelize reads
     split_rdd = spark.sparkContext.parallelize(splits, numSlices=len(splits))
-    uri_rdd = split_rdd.flatMap(lambda split: cls.FIXTURES.iter_image_uris(split))
+    uri_rdd = split_rdd.flatMap(cls.FIXTURES.iter_frame_uris)
     uri_rdd = uri_rdd.repartition(1000)
     util.log.info("... read %s URIs ..." % uri_rdd.count())
     
