@@ -72,52 +72,56 @@ class HistogramWithExamplesPlotter(object):
   """Create and return a Bokeh plot depicting a histogram of a single column in
   a Spark DataFrame.  Clicking on a bar in the histogram will interactively
   show examples from that bucket.  Optionally facet the histogram using a
-  second column (e.g. a category column).
+  second column (e.g. a category column) by setting `SUB_PIVOT_COL`.
   """
 
   NUM_BINS = 50
 
-  MICRO_FACET_COL = None
+  SUB_PIVOT_COL = None
 
   # Plotting params
   TITLE = None  # By default use DataFrame Column name
 
-  def display_bucket(self, micro_facet, bucket_id, irows):
+  def display_bucket(self, sub_pivot, bucket_id, irows):
     import itertools
     rows_str = "<br />".join(str(r) for r in itertools.islice(irows, 5))
     TEMPLATE = """
-      <b>Facet: {mf} Bucket: {bucket_id} </b> <br/>
+      <b>Facet: {spv} Bucket: {bucket_id} </b> <br/>
       {rows}
       <br/> <br/>
     """
-    disp = TEMPLATE.format(mf=micro_facet, bucket_id=bucket_id, rows=rows_str)
+    disp = TEMPLATE.format(spv=sub_pivot, bucket_id=bucket_id, rows=rows_str)
     return bucket_id, disp
 
-  def _build_data_source_for_micro_facet(self, mfv, df, col):
+  def _build_data_source_for_sub_pivot(self, spv, df, col):
     import pandas as pd
-    util.log.info("... building data source for %s ..." % mfv)
+    util.log.info("... building data source for %s ..." % spv)
 
-    if mfv == 'ALL':
-      mf_src_df = df
+    if spv == 'ALL':
+      sp_src_df = df
     else:
-      mf_src_df = df.filter(df[self.MICRO_FACET_COL] == mfv)
+      sp_src_df = df.filter(df[self.SUB_PIVOT_COL] == spv)
       
-    util.log.info("... histogramming %s ..." % mfv)
-    hist, edges = df_histogram(df, col, self.NUM_BINS)
+    util.log.info("... histogramming %s ..." % spv)
+    hist, edges = df_histogram(sp_src_df, col, self.NUM_BINS)
 
     # Use this Pandas Dataframe to serve as a bokeh data source
     # for the plot
-    mf_df = pd.DataFrame(dict(
+    sp_df = pd.DataFrame(dict(
       count=hist, proportion=hist / np.sum(hist),
       left=edges[:-1], right=edges[1:],
     ))
-    mf_df['legend'] = mfv
+    sp_df['legend'] = str(spv)
 
     from bokeh.colors import RGB
-    mf_df['color'] = RGB(*hash_to_rbg(mfv))
+    sp_df['color'] = RGB(*hash_to_rbg(spv))
     
-    util.log.info("... display-ifying examples for %s ..." % mfv)
+    util.log.info("... display-ifying examples for %s ..." % spv)
     def get_display():
+      # First, we need to re-bucket each row using the buckets collected
+      # via the `df_histogram()` call above.  We'll use a Spark
+      # `when`-`otherwise` function to make this bucket mapping efficient
+      # (i.e. optimized into native code at runtime).
       from pyspark.sql import functions as F
       col_def = None
       buckets = list(zip(edges[:-1], edges[1:]))
@@ -126,7 +130,7 @@ class HistogramWithExamplesPlotter(object):
         if bucket_id == len(buckets) - 1:
           hi += 1e-9
         args = (
-          (mf_src_df[col] >= float(lo)) & (mf_src_df[col] < float(hi)),
+          (sp_src_df[col] >= float(lo)) & (sp_src_df[col] < float(hi)),
           bucket_id
         )
         if col_def is None:
@@ -134,18 +138,24 @@ class HistogramWithExamplesPlotter(object):
         else:
           col_def = col_def.when(*args)
       col_def = col_def.otherwise(-1)
-      df_bucketed = mf_src_df.withColumn('au_plot_bucket', col_def)
+      df_bucketed = sp_src_df.withColumn('au_plot_bucket', col_def)
+      
+      # Second, we collect chunks of rows partitioned by bucket ID so that we
+      # can run our display function in parallel over buckets.
       bucketed_chunks = df_bucketed.rdd.groupBy(lambda r: r.au_plot_bucket)
       bucket_disp = bucketed_chunks.map(
                       lambda b_irows: 
-                        self.display_bucket(mfv, b_irows[0], b_irows[1]))
+                        self.display_bucket(spv, b_irows[0], b_irows[1]))
       bucket_to_disp = dict(bucket_disp.collect())
+      
+      # Finally, return a column of display strings ordered by buckets so that
+      # we can add this column to the output histogram DataFrame.
       return [
         bucket_to_disp.get(b, '')
         for b in range(len(buckets))
       ]
-    mf_df['display'] = get_display()
-    return mf_df
+    sp_df['display'] = get_display()
+    return sp_df
 
   def run(self, df, col):
     import pyspark.sql
@@ -154,19 +164,18 @@ class HistogramWithExamplesPlotter(object):
     
     util.log.info("Plotting histogram for %s of %s ..." % (col, df))
     
-    micro_facet_values = ['ALL']
-    if self.MICRO_FACET_COL:
-      distinct_rows = df.select(self.MICRO_FACET_COL).distinct()
+    sub_pivot_values = ['ALL']
+    if self.SUB_PIVOT_COL:
+      distinct_rows = df.select(self.SUB_PIVOT_COL).distinct()
 
-      micro_facet_values.extend(
-        distinct_rows.rdd.map(unpack_pyspark_row).collect()
-      )
+      sub_pivot_values.extend(
+        sorted(
+          distinct_rows.rdd.map(unpack_pyspark_row).collect()))
     
     ## Compute a data source Pandas Dataframe for every micro-facet
-    mfv_to_panel_df = {}
-    for mfv in micro_facet_values:
-      mfv_to_panel_df[mfv] = \
-        self._build_data_source_for_micro_facet(mfv, df, col)
+    spv_to_panel_df = dict(
+      (spv, self._build_data_source_for_sub_pivot(spv, df, col))
+      for spv in sub_pivot_values)
     
     ## Make the plot
     from bokeh import plotting
@@ -176,7 +185,8 @@ class HistogramWithExamplesPlotter(object):
             width=1000,
             x_axis_label=col,
             y_axis_label='Count')
-    for _, plot_src in mfv_to_panel_df.items():
+    for spv in sub_pivot_values:
+      plot_src = spv_to_panel_df[spv]
       from bokeh.models import ColumnDataSource
       plot_src = ColumnDataSource(plot_src)
       r = fig.quad(
@@ -187,20 +197,24 @@ class HistogramWithExamplesPlotter(object):
       from bokeh.models import HoverTool
       fig.add_tools(
         HoverTool(
-          # renderers=[r], FIXME ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+          renderers=[r],
+            # For whatever reason, adding a hover tool for each quad
+            # makes the interface dramatically faster in the browser
           mode='vline',
           tooltips=[
-            ('Facet', '@legend'),
+            ('Sub-pivot', '@legend'),
             ('Count', '@count'),
             ('Proportion', '@proportion'),
-            ('Value', '@left'),
+            ('Value of %s' % col, '@left'),
           ]))
 
       fig.legend.click_policy = 'hide'
 
     ## Add the 'show examples' tool and div
     from bokeh.models.widgets import Div
-    ctxbox = Div(text="Click on a histogram bar to show examples")
+    ctxbox = Div(text=
+        "Click on a histogram bar to show examples.  "
+        "Click on the legend to show/hide a series.")
 
     from bokeh.models import TapTool
     taptool = fig.select(type=TapTool)

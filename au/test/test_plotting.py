@@ -12,7 +12,8 @@ def test_hash_to_rgb():
 
 def test_spark_histogram():
   with testutils.LocalSpark.sess() as spark:
-    df = spark.createDataFrame([{'a': a, 'b': a * a} for a in range(101)])
+    from pyspark.sql import Row
+    df = spark.createDataFrame([Row(a=a, b=a * a) for a in range(101)])
 
     def check(ahist, ehist, aedges, eedges):
       np.testing.assert_array_equal(ahist, ehist)
@@ -36,9 +37,36 @@ def test_spark_histogram():
 
 def test_histogram_with_examples_basic():
   with testutils.LocalSpark.sess() as spark:
-    df = spark.createDataFrame([{'a': a, 'b': a * a} for a in range(101)])
+    from pyspark.sql import Row
+    df = spark.createDataFrame([
+      Row(x=x, mod_11=int(x % 11), square=x*x)
+      for x in range(101)
+    ])
 
     pl = aupl.HistogramWithExamplesPlotter()
-    fig = pl.run(df, 'b')
+    fig = pl.run(df, 'x')
     aupl.save_bokeh_fig(fig, '/opt/au/tasttast.html')
+
+    class PlotterWithMicroFacet(aupl.HistogramWithExamplesPlotter):
+      SUB_PIVOT_COL = 'mod_11'
+      NUM_BINS = 25
+
+      def display_bucket(self, sub_pivot, bucket_id, irows):
+        rows_str = "<br />".join(
+            "x: {x} square: {square} mod_11: {mod_11}".format(**row.asDict())
+            for row in sorted(irows, key=lambda r: r.x))
+        TEMPLATE = """
+          <b>Pivot: {spv} Bucket: {bucket_id} </b> <br/>
+          {rows}
+          <br/> <br/>
+        """
+        disp = TEMPLATE.format(
+                  spv=sub_pivot,
+                  bucket_id=bucket_id,
+                  rows=rows_str)
+        return bucket_id, disp
+    
+    pl = PlotterWithMicroFacet()
+    fig = pl.run(df, 'square')
+    aupl.save_bokeh_fig(fig, '/opt/au/tasttast2.html')
 
