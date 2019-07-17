@@ -1,4 +1,4 @@
-from au import util
+from au.plotting import hash_to_rbg
 
 class BBox(object):
   """An object in an image; in particular, an (ideally amodal) bounding box
@@ -33,7 +33,7 @@ class BBox(object):
     assert self.im_width == img.shape[1]
 
     if not color:
-      color = util.hash_to_rbg(self.category_name)
+      color = hash_to_rbg(self.category_name)
 
     # Use Tensorflow Models
     from object_detection.utils.visualization_utils import \

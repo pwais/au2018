@@ -848,21 +848,28 @@ class HistogramWithExamples(object):
         #   return mf + '<br/><br/>' + '<br/>'.join(links)
         print('displaying')
 
-        def bucket_to_display(bucket_irows):
+        def bucket_to_display(bucket_irows, n_examples=10):
           bucket, irows = bucket_irows
-          from six.moves.urllib import parse
-          TEMPLATE = """<a href="{href}">{title}</a><img src="{href}" width=300 /> """
-          BASE = "http://au5:5000/test?"
           import itertools
-          uris = [r.uri for r in itertools.islice(irows, 10)]
-          links = [
-            TEMPLATE.format(
-                        title="Example " + str(i + 1),
-                        href=BASE + parse.urlencode({'uri': uri}))
+          uris = [r.uri for r in itertools.islice(irows, n_examples)]
+
+          def disp_uri(title, uri):
+            from six.moves.urllib import parse
+            TEMPLATE = """<a href="{href}">{title} {img_tag}</a>"""
+            BASE = "http://au5:5000/test?"
+            href = BASE + parse.urlencode({'uri': uri})
+
+            frame = av.AVFrame(uri=uri)
+            debug_img = frame.get_debug_image()
+            img_tag = util.img_to_img_tag(debug_img, display_scale=0.2)
+
+            return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
+
+          disp_htmls = [
+            disp_uri('Example %s' % i, uri)
             for i, uri in enumerate(uris)
           ]
-          print(bucket)
-          return bucket, mf + '<br/><br/>' + '<br/>'.join(links)
+          return bucket, mf + '<br/><br/>' + '<br/>'.join(disp_htmls)
 
         # for lo, hi in zip(edges[:-1], edges[1:]):
         #   # idx = np.where(

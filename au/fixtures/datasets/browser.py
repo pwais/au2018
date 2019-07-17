@@ -41,7 +41,7 @@ def stream():
       data = b64encode(out.getvalue()).decode('ascii')
       from urllib.parse import quote
       data_url = 'data:image/png;base64,{}'.format(quote(data))
-      yield '<img src="%s"/ width="1200">' % data_url
+      yield '<img src="%s" width="1200">' % data_url
 
     for r in range(1000):
       # df.registerTempTable('d')
