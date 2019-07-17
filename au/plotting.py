@@ -1,5 +1,7 @@
 from au import util
 
+import os
+
 import numpy as np
 
 def hash_to_rbg(x, s=0.8, v=0.8):
@@ -46,28 +48,23 @@ def unpack_pyspark_row(r):
   return r[0]
     # NB: pyspark.sql.Row is indexable
 
-def histogram(spark_df, col, bins):
+def df_histogram(spark_df, col, num_bins):
   """Compute and return a histogram of `bins` of the values in the column
   named `col` in spark Dataframe `spark_df`.  Return type is designed
   to match `numpy.histogram()`.
   """
-  col_val_rdd = spark_df.select(col).map(unpack_pyspark_row)
+  assert num_bins >= 1
   
-  hist = np.zeros(len(bins))
-  edges = np.zeros(len(bins) + 1)
-  for i, interval in enumerate(col_val_rdd.histogram(bins)):
-    if len(interval) == 3:
-      lo, hi, count = interval
-    elif len(interval) == 2:
-      lo, count = interval
-    hist[i] = count
-    edges[i] = lo
-  edges[-1] = col_val_rdd.max()
-  return hist, edges
+  col_val_rdd = spark_df.select(col).rdd.map(unpack_pyspark_row)
+  
+  buckets, counts = col_val_rdd.histogram(num_bins)
+  return np.array(counts), np.array(buckets)
 
-def save_bokeh_fig(fig, dest):
+def save_bokeh_fig(fig, dest, title=None):
   from bokeh import plotting
-  plotting.output_file(dest, title=fig.title, mode='inline')
+  if not title:
+    title = os.path.split(dest)[-1]
+  plotting.output_file(dest, title=title, mode='inline')
   plotting.save(fig)
   util.log.info("Wrote to %s" % dest)
 
@@ -78,7 +75,7 @@ class HistogramWithExamplesPlotter(object):
   second column (e.g. a category column).
   """
 
-  NUM_BINS = 100
+  NUM_BINS = 50
 
   MICRO_FACET_COL = None
 
@@ -93,9 +90,11 @@ class HistogramWithExamplesPlotter(object):
       {rows}
       <br/> <br/>
     """
-    return TEMPLATE.format(mf=micro_facet, bucket_id=bucket_id, rows=rows_str)
+    disp = TEMPLATE.format(mf=micro_facet, bucket_id=bucket_id, rows=rows_str)
+    return bucket_id, disp
 
-  def _build_data_source_for_micro_facet(self, mfv, df):
+  def _build_data_source_for_micro_facet(self, mfv, df, col):
+    import pandas as pd
     util.log.info("... building data source for %s ..." % mfv)
 
     if mfv == 'ALL':
@@ -104,7 +103,7 @@ class HistogramWithExamplesPlotter(object):
       mf_src_df = df.filter(df[self.MICRO_FACET_COL] == mfv)
       
     util.log.info("... histogramming %s ..." % mfv)
-    hist, edges = histogram(df, col, self.NUM_BINS)
+    hist, edges = df_histogram(df, col, self.NUM_BINS)
 
     # Use this Pandas Dataframe to serve as a bokeh data source
     # for the plot
@@ -115,7 +114,7 @@ class HistogramWithExamplesPlotter(object):
     mf_df['legend'] = mfv
 
     from bokeh.colors import RGB
-    mf_df['color'] = RGB(*hash_to_rbg(mf))
+    mf_df['color'] = RGB(*hash_to_rbg(mfv))
     
     util.log.info("... display-ifying examples for %s ..." % mfv)
     def get_display():
@@ -123,19 +122,24 @@ class HistogramWithExamplesPlotter(object):
       col_def = None
       buckets = list(zip(edges[:-1], edges[1:]))
       for bucket_id, (lo, hi) in enumerate(buckets):
+        # The last spark histogram bucket is closed, but we want open
+        if bucket_id == len(buckets) - 1:
+          hi += 1e-9
         args = (
-              (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi),
-              bucket_id
+          (mf_src_df[col] >= float(lo)) & (mf_src_df[col] < float(hi)),
+          bucket_id
         )
         if col_def is None:
           col_def = F.when(*args)
         else:
           col_def = col_def.when(*args)
       col_def = col_def.otherwise(-1)
-      df_bucketed = mf_src_df.withColumn('ag_plot_bucket', col_def)
-      bucketed_chunks = df_bucketed.rdd.groupBy(lambda r: r.ag_plot_bucket)
-      bucket_to_disp = dict(
-        bucketed_chunks.map(self.display_bucket).collect())
+      df_bucketed = mf_src_df.withColumn('au_plot_bucket', col_def)
+      bucketed_chunks = df_bucketed.rdd.groupBy(lambda r: r.au_plot_bucket)
+      bucket_disp = bucketed_chunks.map(
+                      lambda b_irows: 
+                        self.display_bucket(mfv, b_irows[0], b_irows[1]))
+      bucket_to_disp = dict(bucket_disp.collect())
       return [
         bucket_to_disp.get(b, '')
         for b in range(len(buckets))
@@ -161,16 +165,19 @@ class HistogramWithExamplesPlotter(object):
     ## Compute a data source Pandas Dataframe for every micro-facet
     mfv_to_panel_df = {}
     for mfv in micro_facet_values:
-      mfv_to_panel_df[mfv] = self._build_data_source_for_micro_facet(mfv, df)
+      mfv_to_panel_df[mfv] = \
+        self._build_data_source_for_micro_facet(mfv, df, col)
     
     ## Make the plot
+    from bokeh import plotting
     fig = plotting.figure(
             title=self.TITLE or col,
             tools='tap,pan,wheel_zoom,box_zoom,reset',
-            sizing_mode='scale_width',
+            width=1000,
             x_axis_label=col,
             y_axis_label='Count')
-    for _, plot_src in legend_to_panel_df.items():
+    for _, plot_src in mfv_to_panel_df.items():
+      from bokeh.models import ColumnDataSource
       plot_src = ColumnDataSource(plot_src)
       r = fig.quad(
         source=plot_src, bottom=0, top='count', left='left', right='right',
