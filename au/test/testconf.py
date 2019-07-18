@@ -1,3 +1,6 @@
+"""An au-specific config / constants module; not to be confused with
+conftest.py"""
+
 import os
 
 from au import conf
