@@ -628,14 +628,14 @@ class ImageAnnoTable(object):
 
   @classmethod
   def setup(cls, spark=None):
-    if os.path.exists(cls.table_root()):
-      return
+    if not os.path.exists(cls.table_root()):
+      with Spark.sess(spark) as spark:
+        df = cls.build_anno_df(spark)
+        df.write.parquet(
+          cls.table_root(),
+          compression='gzip')
     
-    with Spark.sess(spark) as spark:
-      df = cls.build_anno_df(spark)
-      df.write.parquet(
-        cls.table_root(),
-        compression='gzip')
+    cls.save_anno_reports(spark)
 
   @classmethod
   def as_df(cls, spark):
@@ -819,6 +819,9 @@ class ImageAnnoTable(object):
     for metric in METRICS:
       for sub_pivot in SUB_PIVOTS:
 
+        # FIXME !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        df = anno_df.filter(anno_df.split == 'sample')
+
         if sub_pivot == 'invisible':
           df = anno_df.filter(anno_df.is_visible == False)
             # For this plot, we only want to report on invisible things.
@@ -827,7 +830,7 @@ class ImageAnnoTable(object):
             # For most plots, we want to ignore things that are entirely
             # off-screen or entirely occluded.
         
-        if metric == best_rider_distance:
+        if metric == 'best_rider_distance':
           # We need to filter out Infinity for histograms to work
           df = df.filter(df.best_rider_distance != float('inf'))
 
@@ -860,9 +863,9 @@ class ImageAnnoTable(object):
               BASE = "http://au5:5000/test?" # FIXMEEEE ~~~~~~~~~~~~~~~~~~~~~~~~~~~
               href = BASE + parse.urlencode({'uri': uri})
 
-              frame = av.AVFrame(uri=uri)
+              frame = AVFrame(uri=uri)
               debug_img = frame.get_debug_image()
-              img_tag = util.img_to_img_tag(debug_img, display_scale=0.2)
+              img_tag = aupl.img_to_img_tag(debug_img, display_scale=0.2)
 
               return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
 
@@ -902,271 +905,271 @@ class ImageAnnoTable(object):
 
       
 
-###
-### Mining
-###
+# ###
+# ### Mining
+# ###
 
-class HistogramWithExamples(object):
+# class HistogramWithExamples(object):
   
-  def run(self, spark, df):
-    import pyspark.sql
-    if not isinstance(df, pyspark.sql.DataFrame):
-      df = spark.createDataFrame(df)
+#   def run(self, spark, df):
+#     import pyspark.sql
+#     if not isinstance(df, pyspark.sql.DataFrame):
+#       df = spark.createDataFrame(df)
 
-    df = df.filter(df.is_visible == True)
-    # df = df[df.is_visible == True]
+#     df = df.filter(df.is_visible == True)
+#     # df = df[df.is_visible == True]
 
-    MACRO_FACETS = (
-      'camera',
-      'city',
-      'split',
-    )
+#     MACRO_FACETS = (
+#       'camera',
+#       'city',
+#       'split',
+#     )
 
-    METRICS = (
-      'distance_meters',
-      # 'height_meters',
-      # 'width_meters',
-      # 'length_meters',
-      # 'height',
-      # 'width',
-      # 'relative_yaw_radians',
-      # 'occlusion',
-    )
+#     METRICS = (
+#       'distance_meters',
+#       # 'height_meters',
+#       # 'width_meters',
+#       # 'length_meters',
+#       # 'height',
+#       # 'width',
+#       # 'relative_yaw_radians',
+#       # 'occlusion',
+#     )
 
-    MICRO_FACETS = (
-      'category_name',
-      # 'coarse_category',
-    )
-    # class + any occlusion
-    # class + edge of image
+#     MICRO_FACETS = (
+#       'category_name',
+#       # 'coarse_category',
+#     )
+#     # class + any occlusion
+#     # class + edge of image
 
-    # centroid distance between bike and rider?
+#     # centroid distance between bike and rider?
 
-    def make_panel(df, metric, micro_facet, bins=100):
-      from bokeh import plotting
-      from bokeh.models import ColumnDataSource
-      import pandas as pd
+#     def make_panel(df, metric, micro_facet, bins=100):
+#       from bokeh import plotting
+#       from bokeh.models import ColumnDataSource
+#       import pandas as pd
 
-      ## Organize Data
-      # micro_facets_values = list(df[micro_facet].unique().to_numpy()) # FIXME ~~~~~~~~~~
-      micro_facets_values = [
-        getattr(row, micro_facet)
-        for row in df.select(micro_facet).distinct().collect()
-      ]
-      micro_facets_values.append('all')
-      legend_to_panel_df = {}
-      for mf in micro_facets_values:
-        util.log.info("Building plots for %s - %s" % (metric, mf))
-        if mf == 'all':
-          # mf_src_df = pd.DataFrame(df)
-          mf_src_df = df
-        else:
-          # mf_src_df = df[df[micro_facet] == mf]
-          mf_src_df = df.filter(df[micro_facet] == mf)
-        print("begin p subq")
-        mf_metric_data = [
-          getattr(r, metric)
-          for r in mf_src_df.select(metric).collect()
-        ]
-        mf_metric_data = np.array([v for v in mf_metric_data if v is not None])
-        hist, edges = np.histogram(mf_metric_data, bins=bins) 
-        mf_df = pd.DataFrame(dict(
-          count=hist, proportion=hist / np.sum(hist),
-          left=edges[:-1], right=edges[1:],
-        ))
-        mf_df['legend'] = mf
-        from bokeh.colors import RGB
-        mf_df['color'] = RGB(*util.hash_to_rbg(mf))
+#       ## Organize Data
+#       # micro_facets_values = list(df[micro_facet].unique().to_numpy()) # FIXME ~~~~~~~~~~
+#       micro_facets_values = [
+#         getattr(row, micro_facet)
+#         for row in df.select(micro_facet).distinct().collect()
+#       ]
+#       micro_facets_values.append('all')
+#       legend_to_panel_df = {}
+#       for mf in micro_facets_values:
+#         util.log.info("Building plots for %s - %s" % (metric, mf))
+#         if mf == 'all':
+#           # mf_src_df = pd.DataFrame(df)
+#           mf_src_df = df
+#         else:
+#           # mf_src_df = df[df[micro_facet] == mf]
+#           mf_src_df = df.filter(df[micro_facet] == mf)
+#         print("begin p subq")
+#         mf_metric_data = [
+#           getattr(r, metric)
+#           for r in mf_src_df.select(metric).collect()
+#         ]
+#         mf_metric_data = np.array([v for v in mf_metric_data if v is not None])
+#         hist, edges = np.histogram(mf_metric_data, bins=bins) 
+#         mf_df = pd.DataFrame(dict(
+#           count=hist, proportion=hist / np.sum(hist),
+#           left=edges[:-1], right=edges[1:],
+#         ))
+#         mf_df['legend'] = mf
+#         from bokeh.colors import RGB
+#         mf_df['color'] = RGB(*util.hash_to_rbg(mf))
 
-        # NB: we'd want to use np.digitize() here, but it's not always the
-        # inverse of np.histogram() https://github.com/numpy/numpy/issues/4217
-        # def to_display(df_subset):
-        #   from six.moves.urllib import parse
-        #   TEMPLATE = """<a href="{href}">{title}</a><img src="{href}" width=300 /> """
-        #   BASE = "http://au5:5000/test?"
-        #   uris = [r.uri for r in df_subset.select('uri').limit(10).collect()]
-        #   links = [
-        #     TEMPLATE.format(
-        #                 title="Example " + str(i + 1),
-        #                 href=BASE + parse.urlencode({'uri': uri}))
-        #     for i, uri in enumerate(uris)
-        #   ]
-        #   print(df_subset)
-        #   return mf + '<br/><br/>' + '<br/>'.join(links)
-        print('displaying')
+#         # NB: we'd want to use np.digitize() here, but it's not always the
+#         # inverse of np.histogram() https://github.com/numpy/numpy/issues/4217
+#         # def to_display(df_subset):
+#         #   from six.moves.urllib import parse
+#         #   TEMPLATE = """<a href="{href}">{title}</a><img src="{href}" width=300 /> """
+#         #   BASE = "http://au5:5000/test?"
+#         #   uris = [r.uri for r in df_subset.select('uri').limit(10).collect()]
+#         #   links = [
+#         #     TEMPLATE.format(
+#         #                 title="Example " + str(i + 1),
+#         #                 href=BASE + parse.urlencode({'uri': uri}))
+#         #     for i, uri in enumerate(uris)
+#         #   ]
+#         #   print(df_subset)
+#         #   return mf + '<br/><br/>' + '<br/>'.join(links)
+#         print('displaying')
 
-        def bucket_to_display(bucket_irows, n_examples=10):
-          bucket, irows = bucket_irows
-          import itertools
-          uris = [r.uri for r in itertools.islice(irows, n_examples)]
+#         def bucket_to_display(bucket_irows, n_examples=10):
+#           bucket, irows = bucket_irows
+#           import itertools
+#           uris = [r.uri for r in itertools.islice(irows, n_examples)]
 
-          def disp_uri(title, uri):
-            from six.moves.urllib import parse
-            TEMPLATE = """<a href="{href}">{title} {img_tag}</a>"""
-            BASE = "http://au5:5000/test?"
-            href = BASE + parse.urlencode({'uri': uri})
+#           def disp_uri(title, uri):
+#             from six.moves.urllib import parse
+#             TEMPLATE = """<a href="{href}">{title} {img_tag}</a>"""
+#             BASE = "http://au5:5000/test?"
+#             href = BASE + parse.urlencode({'uri': uri})
 
-            frame = av.AVFrame(uri=uri)
-            debug_img = frame.get_debug_image()
-            img_tag = util.img_to_img_tag(debug_img, display_scale=0.2)
+#             frame = AVFrame(uri=uri)
+#             debug_img = frame.get_debug_image()
+#             img_tag = util.img_to_img_tag(debug_img, display_scale=0.2)
 
-            return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
+#             return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
 
-          disp_htmls = [
-            disp_uri('Example %s' % i, uri)
-            for i, uri in enumerate(uris)
-          ]
-          return bucket, mf + '<br/><br/>' + '<br/>'.join(disp_htmls)
+#           disp_htmls = [
+#             disp_uri('Example %s' % i, uri)
+#             for i, uri in enumerate(uris)
+#           ]
+#           return bucket, mf + '<br/><br/>' + '<br/>'.join(disp_htmls)
 
-        # for lo, hi in zip(edges[:-1], edges[1:]):
-        #   # idx = np.where(
-        #   #   (lo <= mf_metric_data) & (mf_metric_data < hi))[0]
-        #   # disps.append(to_display(mf_src_df.iloc[idx]))
+#         # for lo, hi in zip(edges[:-1], edges[1:]):
+#         #   # idx = np.where(
+#         #   #   (lo <= mf_metric_data) & (mf_metric_data < hi))[0]
+#         #   # disps.append(to_display(mf_src_df.iloc[idx]))
 
-        #   df_subset = mf_src_df.filter(
-        #     (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi))
-        #   disps.append(to_display(df_subset))
-        #   print(metric, lo, hi)
-        # mf_df['display'] = disps
+#         #   df_subset = mf_src_df.filter(
+#         #     (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi))
+#         #   disps.append(to_display(df_subset))
+#         #   print(metric, lo, hi)
+#         # mf_df['display'] = disps
         
-        from pyspark.sql import functions as F
-        col_def = None
-        buckets = list(zip(edges[:-1], edges[1:]))
-        for bucket_id, (lo, hi) in enumerate(buckets):
-          args = (
-                (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi),
-                bucket_id
-          )
-          if col_def is None:
-            col_def = F.when(*args)
-          else:
-            col_def = col_def.when(*args)
-        col_def = col_def.otherwise(-1)
-        df_bucketed = mf_src_df.withColumn('ag_plot_bucket', col_def)
-        bucketed_chunks = df_bucketed.rdd.groupBy(lambda r: r.ag_plot_bucket)
-        bucket_to_disp = dict(bucketed_chunks.map(bucket_to_display).collect())
-        mf_df['display'] = [
-          bucket_to_disp.get(b, '')
-          for b in range(len(buckets))
-        ]
-        print('end displaying')
+#         from pyspark.sql import functions as F
+#         col_def = None
+#         buckets = list(zip(edges[:-1], edges[1:]))
+#         for bucket_id, (lo, hi) in enumerate(buckets):
+#           args = (
+#                 (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi),
+#                 bucket_id
+#           )
+#           if col_def is None:
+#             col_def = F.when(*args)
+#           else:
+#             col_def = col_def.when(*args)
+#         col_def = col_def.otherwise(-1)
+#         df_bucketed = mf_src_df.withColumn('ag_plot_bucket', col_def)
+#         bucketed_chunks = df_bucketed.rdd.groupBy(lambda r: r.ag_plot_bucket)
+#         bucket_to_disp = dict(bucketed_chunks.map(bucket_to_display).collect())
+#         mf_df['display'] = [
+#           bucket_to_disp.get(b, '')
+#           for b in range(len(buckets))
+#         ]
+#         print('end displaying')
         
-        # pd.Series([
-        #   df.loc[h_inds == i]['uri']
-        #   for i in range(0, bins)
-        # ])
-        # def to_display(i):
-        #   rows = df.loc[h_inds == i]
-        #   uris = rows['uri'][:10]
-        #   disp = mf + '<br/>' + '<br/>'.join(str(i) for i, uri in enumerate(uris))
-        #   return disp
+#         # pd.Series([
+#         #   df.loc[h_inds == i]['uri']
+#         #   for i in range(0, bins)
+#         # ])
+#         # def to_display(i):
+#         #   rows = df.loc[h_inds == i]
+#         #   uris = rows['uri'][:10]
+#         #   disp = mf + '<br/>' + '<br/>'.join(str(i) for i, uri in enumerate(uris))
+#         #   return disp
 
-        # mf_df['context_display'] = [to_display(i) for i in range(0, bins)]
-        # import pdb; pdb.set_trace()
-        legend_to_panel_df[mf] = mf_df
+#         # mf_df['context_display'] = [to_display(i) for i in range(0, bins)]
+#         # import pdb; pdb.set_trace()
+#         legend_to_panel_df[mf] = mf_df
       
-      # # Make checkbox group that can filter data
-      # plot_src = ColumnDataSource(pd.DataFrame({}))
-      # def update_plot_data(legends_to_plot): # type: str
-      #   plot_df = pd.concat(
-      #                 df
-      #                 for legend, df in legend_to_panel_df.items()
-      #                 if legend in legends_to_plot)
-      #   plot_df.sort_values(['legend', 'left'])
-      #   plot_src.data.update(ColumnDataSource(plot_df).data)
+#       # # Make checkbox group that can filter data
+#       # plot_src = ColumnDataSource(pd.DataFrame({}))
+#       # def update_plot_data(legends_to_plot): # type: str
+#       #   plot_df = pd.concat(
+#       #                 df
+#       #                 for legend, df in legend_to_panel_df.items()
+#       #                 if legend in legends_to_plot)
+#       #   plot_df.sort_values(['legend', 'left'])
+#       #   plot_src.data.update(ColumnDataSource(plot_df).data)
       
-      # # Initially only plot the 'all' series
-      # update_plot_data(micro_facets_values)
+#       # # Initially only plot the 'all' series
+#       # update_plot_data(micro_facets_values)
       
-      # def update(attr, old, new):
-      #     to_plot = [checkbox_group.labels[i] for i in checkbox_group.active]
-      #     update_plot_data(to_plot)
+#       # def update(attr, old, new):
+#       #     to_plot = [checkbox_group.labels[i] for i in checkbox_group.active]
+#       #     update_plot_data(to_plot)
 
-      # from bokeh.models.widgets import CheckboxGroup
-      # checkbox_group = CheckboxGroup(
-      #                   labels=sorted(micro_facets_values),
-      #                   active=[1] * len(micro_facets_values))
-      # checkbox_group.on_change('active', update)
+#       # from bokeh.models.widgets import CheckboxGroup
+#       # checkbox_group = CheckboxGroup(
+#       #                   labels=sorted(micro_facets_values),
+#       #                   active=[1] * len(micro_facets_values))
+#       # checkbox_group.on_change('active', update)
 
-      ## Make the plot
-      title = metric + ' vs ' + micro_facet
-      fig = plotting.figure(
-              title=title,
-              tools='tap,pan,wheel_zoom,box_zoom,reset',
-              plot_width=1200,
-              x_axis_label=metric,
-              y_axis_label='Count')
-      for _, plot_src in legend_to_panel_df.items():
-        plot_src = ColumnDataSource(plot_src)
-        r = fig.quad(
-          source=plot_src, bottom=0, top='count', left='left', right='right',
-          color='color', fill_alpha=0.5,
-          hover_fill_color='color', hover_fill_alpha=1.0,
-          legend='legend')
-      from bokeh.models import HoverTool
-      fig.add_tools(
-        HoverTool(
-          # renderers=[r],
-          mode='vline',
-          tooltips=[
-            ('Facet', '@legend'),
-            ('Count', '@count'),
-            ('Proportion', '@proportion'),
-            ('Value', '@left'),
-          ]))
+#       ## Make the plot
+#       title = metric + ' vs ' + micro_facet
+#       fig = plotting.figure(
+#               title=title,
+#               tools='tap,pan,wheel_zoom,box_zoom,reset',
+#               plot_width=1200,
+#               x_axis_label=metric,
+#               y_axis_label='Count')
+#       for _, plot_src in legend_to_panel_df.items():
+#         plot_src = ColumnDataSource(plot_src)
+#         r = fig.quad(
+#           source=plot_src, bottom=0, top='count', left='left', right='right',
+#           color='color', fill_alpha=0.5,
+#           hover_fill_color='color', hover_fill_alpha=1.0,
+#           legend='legend')
+#       from bokeh.models import HoverTool
+#       fig.add_tools(
+#         HoverTool(
+#           # renderers=[r],
+#           mode='vline',
+#           tooltips=[
+#             ('Facet', '@legend'),
+#             ('Count', '@count'),
+#             ('Proportion', '@proportion'),
+#             ('Value', '@left'),
+#           ]))
 
-      fig.legend.click_policy = 'hide'
+#       fig.legend.click_policy = 'hide'
 
       
       
-      # fig.add_tools(
-      #   HoverTool(tooltips=,
-      #     mode='vline'))
-      # fig.legend.click_policy = 'hide'
+#       # fig.add_tools(
+#       #   HoverTool(tooltips=,
+#       #     mode='vline'))
+#       # fig.legend.click_policy = 'hide'
 
-      # from bokeh.layouts import WidgetBox
-      # controls = WidgetBox(checkbox_group)
-      from bokeh.models.widgets import Div
-      ctxbox = Div(text="Placeholder")
+#       # from bokeh.layouts import WidgetBox
+#       # controls = WidgetBox(checkbox_group)
+#       from bokeh.models.widgets import Div
+#       ctxbox = Div(text="Placeholder")
 
-      from bokeh.models import TapTool
-      taptool = fig.select(type=TapTool)
+#       from bokeh.models import TapTool
+#       taptool = fig.select(type=TapTool)
 
-      from bokeh.models import CustomJS
-      taptool.callback = CustomJS(
-        args=dict(ctxbox=ctxbox),
-        code="""
-          var idx = cb_data.source.selected['1d'].indices[0];
-          ctxbox.text='' + cb_data.source.data.display[idx];
-        """)
+#       from bokeh.models import CustomJS
+#       taptool.callback = CustomJS(
+#         args=dict(ctxbox=ctxbox),
+#         code="""
+#           var idx = cb_data.source.selected['1d'].indices[0];
+#           ctxbox.text='' + cb_data.source.data.display[idx];
+#         """)
 
 
 
-      from bokeh.layouts import column
-      layout = column(fig, ctxbox)
+#       from bokeh.layouts import column
+#       layout = column(fig, ctxbox)
 
-      from bokeh.models.widgets import Panel
-      panel = Panel(child=layout, title=title)
-      return panel
+#       from bokeh.models.widgets import Panel
+#       panel = Panel(child=layout, title=title)
+#       return panel
     
-    panels = []
-    for mf in MICRO_FACETS:
-      panels.extend(
-        make_panel(df, metric, mf)
-        for metric in METRICS)
+#     panels = []
+#     for mf in MICRO_FACETS:
+#       panels.extend(
+#         make_panel(df, metric, mf)
+#         for metric in METRICS)
     
-    from bokeh.models.widgets import Tabs
-    t = Tabs(tabs=panels)
-    def save_plot(tabs):
-      from bokeh import plotting
-      if tabs is None:
-        return
+#     from bokeh.models.widgets import Tabs
+#     t = Tabs(tabs=panels)
+#     def save_plot(tabs):
+#       from bokeh import plotting
+#       if tabs is None:
+#         return
       
-      dest = '/opt/au/yay_plot.html'
-      plotting.output_file(dest, title='my title', mode='inline')
-      plotting.save(tabs)
-      util.log.info("Wrote to %s" % dest)
-    save_plot(t)
+#       dest = '/opt/au/yay_plot.html'
+#       plotting.output_file(dest, title='my title', mode='inline')
+#       plotting.save(tabs)
+#       util.log.info("Wrote to %s" % dest)
+#     save_plot(t)
 
     
 

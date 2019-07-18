@@ -61,7 +61,7 @@ class TestArgoverseImageTable(unittest.TestCase):
     if True:
 
       with testutils.LocalSpark.sess() as spark:
-        av.AnnoTable.setup(spark)
+        av.ImageAnnoTable.setup(spark)
         # df = av.Fixtures.label_df(spark, splits=('sample','train','test', 'val'))
         # df.write.parquet(
         #   '/tmp/av_yay_df',
@@ -78,9 +78,9 @@ class TestArgoverseImageTable(unittest.TestCase):
     # df = pd.read_pickle('/tmp/av_yay_pdf')
 
     
-        df = spark.read.parquet(av.AnnoTable.table_root())
-        h = av.HistogramWithExamples()
-        h.run(spark, df)
+        # df = spark.read.parquet(av.AnnoTable.table_root())
+        # h = av.HistogramWithExamples()
+        # h.run(spark, df)
 
 
 
