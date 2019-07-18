@@ -154,7 +154,7 @@ class ThruputObserver(object):
       self.ts.append(end - self._start)
     self._start = None
   
-  def maybe_log_progress(self, n=-1):
+  def maybe_log_progress(self, every_n=-1):
     if n >= 0:
       self.__log_freq = n
     if (self.n % self.__log_freq) == 0:

@@ -501,6 +501,17 @@ class Fixtures(object):
     return [t for t in cls.all_tarballs() if 'tracking' in t]
 
 
+  ## Derived Data
+  
+  @classmethod
+  def index_root(cls):
+    return os.path.join(cls.ROOT, 'index')
+
+  @classmethod
+  def image_annos_reports_root(cls):
+    return os.path.join(cls.index_root(), 'image_annos')
+
+
   ## Argoverse-specific Utils
 
   @classmethod
@@ -606,13 +617,32 @@ class Fixtures(object):
 
 
 
-class AnnoTable(object):
+class ImageAnnoTable(object):
+  """A table of argoverse annotations projected into image space."""
 
   FIXTURES = Fixtures()
 
   @classmethod
   def table_root(cls):
-    return os.path.join(conf.AU_TABLE_CACHE, 'argoverse_annos')
+    return os.path.join(conf.AU_TABLE_CACHE, 'argoverse_image_annos')
+
+  @classmethod
+  def setup(cls, spark=None):
+    if os.path.exists(cls.table_root()):
+      return
+    
+    with Spark.sess(spark) as spark:
+      df = cls.build_anno_df(spark)
+      df.write.parquet(
+        cls.table_root(),
+        compression='gzip')
+
+  @classmethod
+  def as_df(cls, spark):
+    df = spark.read.parquet(cls.table_root())
+    return df
+
+  ## Utils
 
   @classmethod
   def _impute_rider_for_bikes(cls, spark, df):
@@ -744,15 +774,132 @@ class AnnoTable(object):
     return df
 
   @classmethod
-  def setup(cls, spark=None):
-    if os.path.exists(cls.table_root()):
+  def save_anno_reports(cls, spark, dest_dir=None):
+    dest_dir = dest_dir or cls.FIXTURES.image_annos_reports_root()
+    if not util.missing_or_empty(dest_dir):
       return
+
+    util.mkdir(dest_dir)
+    util.log.info("Creating image annotation reports in %s ..." % dest_dir)
+
+    # Generate plots for each of these metrics in ImageAnnoTable
+    METRICS = (
+      'distance_meters',
+      'height_meters',
+      'width_meters',
+      'length_meters',
+      'height',
+      'width',
+      'relative_yaw_radians',
+      'occlusion',
+
+      # Special handling! See below
+      'best_rider_distance',
+    )
+
+    # For each metric above, we'll produce pivoted plots using each of the
+    # below columns as a sub-pivot
+    SUB_PIVOTS = (
+      'category_name',
+      'coarse_category',
+      'split',
+      'city',
+      'camera',
+
+      # Special handling! See below
+      'invisible',
+    )
+
+    num_plots = len(METRICS) * len(SUB_PIVOTS)
+    util.log.info("Going to generate %s plots ..." % num_plots)
+    t = util.ThruputObserver(name='plotting', n_total=num_plots)
     
-    with Spark.sess(spark) as spark:
-      df = cls.build_anno_df(spark)
-      df.write.parquet(
-        cls.table_root(),
-        compression='gzip')
+    # Generate plots!
+    anno_df = cls.as_df(spark)
+    for metric in METRICS:
+      for sub_pivot in SUB_PIVOTS:
+
+        if sub_pivot == 'invisible':
+          df = anno_df.filter(anno_df.is_visible == False)
+            # For this plot, we only want to report on invisible things.
+        else:
+          df = anno_df.filter(anno_df.is_visible == True)
+            # For most plots, we want to ignore things that are entirely
+            # off-screen or entirely occluded.
+        
+        if metric == best_rider_distance:
+          # We need to filter out Infinity for histograms to work
+          df = df.filter(df.best_rider_distance != float('inf'))
+
+        plot_name = metric + ' by ' + sub_pivot
+        util.log.info("... plotting %s ..." % plot_name)
+        
+        from au import plotting as aupl
+        class AVHistogramPlotter(aupl.HistogramWithExamplesPlotter):
+          NUM_BINS = 50
+          SUB_PIVOT_COL = (
+            sub_pivot if sub_pivot != 'invisible' else None)
+              # For 'invisible', just compute and show the ALL series
+          WIDTH = 1400
+          TITLE = plot_name
+
+          # Show only this many examples for each bucket.  More
+          # examples -> more images -> larger plot files.
+          EXAMPLES_PER_BUCKET = 5
+
+          def display_bucket(self, sub_pivot, bucket_id, irows):
+            import itertools
+            uris = [
+              r.uri
+              for r in itertools.islice(irows, self.EXAMPLES_PER_BUCKET)
+            ]
+
+            def disp_uri(title, uri):
+              from six.moves.urllib import parse
+              TEMPLATE = """<a href="{href}">{title} {img_tag}</a>"""
+              BASE = "http://au5:5000/test?" # FIXMEEEE ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              href = BASE + parse.urlencode({'uri': uri})
+
+              frame = av.AVFrame(uri=uri)
+              debug_img = frame.get_debug_image()
+              img_tag = util.img_to_img_tag(debug_img, display_scale=0.2)
+
+              return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
+
+            disp_htmls = [
+              disp_uri('Example %s' % i, uri)
+              for i, uri in enumerate(uris)
+            ]
+            disp_str = sub_pivot + '<br/><br/>' + '<br/>'.join(disp_htmls)
+            return bucket_id, disp_str
+
+
+
+
+
+
+
+
+
+            import itertools
+            rows_str = "<br />".join(str(r) for r in itertools.islice(irows, 5))
+            TEMPLATE = """
+              <b>Facet: {spv} Bucket: {bucket_id} </b> <br/>
+              {rows}
+              <br/> <br/>
+            """
+            disp = TEMPLATE.format(spv=sub_pivot, bucket_id=bucket_id, rows=rows_str)
+            return bucket_id, disp
+          
+        plotter = AVHistogramPlotter()
+        fig = plotter.run(df, metric)
+        plot_fname = plot_name.replace(' ', '_')
+        aupl.save_bokeh_fig(fig, os.path.join(dest_dir, plot_fname))
+
+        # Show ETA
+        t.update_tallies(n=1)
+        t.maybe_log_progress(every_n=1)
+
       
 
 ###

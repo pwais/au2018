@@ -72,14 +72,24 @@ class HistogramWithExamplesPlotter(object):
   """Create and return a Bokeh plot depicting a histogram of a single column in
   a Spark DataFrame.  Clicking on a bar in the histogram will interactively
   show examples from that bucket.  Optionally facet the histogram using a
-  second column (e.g. a category column) by setting `SUB_PIVOT_COL`.
+  second column (e.g. a category column).
+  
+  The user can override how examples are displayed; subclasses can override
+  `HistogramWithExamplesPlotter::display_bucket()`
+
+  See `HistogramWithExamplesPlotter::run()`.
   """
 
+  ## Core Params
   NUM_BINS = 50
 
   SUB_PIVOT_COL = None
 
-  # Plotting params
+  WIDTH = 1000
+    # Bokeh's plots (especially in single-column two-row layout we use) work
+    # best with a fixed width
+
+  ## Plotting params
   TITLE = None  # By default use DataFrame Column name
 
   def display_bucket(self, sub_pivot, bucket_id, irows):
@@ -158,6 +168,19 @@ class HistogramWithExamplesPlotter(object):
     return sp_df
 
   def run(self, df, col):
+    """Compute histograms and return the final plot.
+
+    Args:
+      df (pyspark.sql.DataFrame): Read from this DataFrame.  The caller may
+        want to `cache()` the DataFrame as this routine will do a variety of
+        random reads and aggregations on the data.
+      col (str): The x-axis for the computed histogram shall this this column
+        in `df` as the chosen metric.  Spark automatically ignores nulls and
+        nans.
+
+    Returns:
+      bokeh layout object with a plot.
+    """
     import pyspark.sql
     assert isinstance(df, pyspark.sql.DataFrame)
     assert col in df.columns
@@ -182,7 +205,7 @@ class HistogramWithExamplesPlotter(object):
     fig = plotting.figure(
             title=self.TITLE or col,
             tools='tap,pan,wheel_zoom,box_zoom,reset',
-            width=1000,
+            width=self.WIDTH,
             x_axis_label=col,
             y_axis_label='Count')
     for spv in sub_pivot_values:

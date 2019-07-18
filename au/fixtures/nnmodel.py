@@ -378,9 +378,9 @@ class FillActivationsTFDataset(FillActivationsBase):
             yield row
     
             self.tf_thruput.update_tallies(n=1)
-            self.tf_thruput.maybe_log_progress(n=1000)
+            self.tf_thruput.maybe_log_progress(every_n=1000)
             self.overall_thruput.update_tallies(n=1)
-            self.overall_thruput.maybe_log_progress(n=1000)
+            self.overall_thruput.maybe_log_progress(every_n=1000)
     
     tf.compat.v1.reset_default_graph()
     self.overall_thruput.stop_block()
