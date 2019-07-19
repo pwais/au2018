@@ -437,7 +437,10 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
 class Fixtures(object):
 
   # All Argoverse tarballs served from here
-  BASE_TARBALL_URL = "https://s3.amazonaws.com/argoai-argoverse"
+  # BASE_TARBALL_URL = "https://s3.amazonaws.com/argoai-argoverse"
+
+  # If you happen to have a local copy of the tarballs, use this:
+  BASE_TARBALL_URL = "file:///outer_root/tmp/argotars"
 
   TRACKING_SAMPLE = "tracking_sample.tar.gz"
 
@@ -613,7 +616,7 @@ class Fixtures(object):
   @classmethod
   def run_import(cls, spark=None):
     cls.download_all(spark=spark)
-    AnnoTable.setup(spark=spark)
+    ImageAnnoTable.setup(spark=spark)
 
 
 
@@ -875,24 +878,6 @@ class ImageAnnoTable(object):
             ]
             disp_str = sub_pivot + '<br/><br/>' + '<br/>'.join(disp_htmls)
             return bucket_id, disp_str
-
-
-
-
-
-
-
-
-
-            import itertools
-            rows_str = "<br />".join(str(r) for r in itertools.islice(irows, 5))
-            TEMPLATE = """
-              <b>Facet: {spv} Bucket: {bucket_id} </b> <br/>
-              {rows}
-              <br/> <br/>
-            """
-            disp = TEMPLATE.format(spv=sub_pivot, bucket_id=bucket_id, rows=rows_str)
-            return bucket_id, disp
           
         plotter = AVHistogramPlotter()
         fig = plotter.run(df, metric)
@@ -1171,11 +1156,3 @@ class ImageAnnoTable(object):
 #       util.log.info("Wrote to %s" % dest)
 #     save_plot(t)
 
-    
-
-
-
-
-if __name__ == '__main__':
-  with Spark.sess() as spark:
-    Fixtures.run_import(spark=spark)

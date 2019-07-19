@@ -61,7 +61,10 @@ class TestArgoverseImageTable(unittest.TestCase):
     if True:
 
       with testutils.LocalSpark.sess() as spark:
-        av.ImageAnnoTable.setup(spark)
+        av.Fixtures.run_import(spark=spark)
+        # av.ImageAnnoTable.setup(spark)
+        
+        
         # df = av.Fixtures.label_df(spark, splits=('sample','train','test', 'val'))
         # df.write.parquet(
         #   '/tmp/av_yay_df',

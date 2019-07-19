@@ -139,6 +139,15 @@ def test_thruput_observer():
   u = util.ThruputObserver.union((t1, t2))
   assert str(u) == str(t2)
 
+  t3 = util.ThruputObserver(name='test_thruput_observer', n_total=10)
+  for _ in range(10):
+    t3.update_tallies(n=1, new_block=True)
+    t3.maybe_log_progress()
+  t3.stop_block()
+  import re
+  assert re.search('N thru.*10', str(t3))
+  assert re.search('N chunks.*10', str(t3))
+
 def test_sys_info():
   info = util.get_sys_info()
   assert 'au' in info['filepath']
