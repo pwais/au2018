@@ -782,8 +782,6 @@ class ImageAnnoTable(object):
   @classmethod
   def save_anno_reports(cls, spark, dest_dir=None):
     dest_dir = dest_dir or cls.FIXTURES.image_annos_reports_root()
-    if not util.missing_or_empty(dest_dir):
-      return
 
     util.mkdir(dest_dir)
     util.log.info("Creating image annotation reports in %s ..." % dest_dir)
@@ -841,6 +839,11 @@ class ImageAnnoTable(object):
           df = df.filter(df.best_rider_distance != float('inf'))
 
         plot_name = metric + ' by ' + sub_pivot
+        plot_fname = plot_name.replace(' ', '_') + '.html'
+        plot_dest = os.path.join(dest_dir, plot_fname)
+        if os.path.exists(plot_dest):
+          util.log.info("... skipping %s ..." % plot_dest)
+          continue
         util.log.info("... plotting %s ..." % plot_name)
         
         from au import plotting as aupl
@@ -873,7 +876,7 @@ class ImageAnnoTable(object):
               debug_img = frame.get_debug_image()
               import cv2
               debug_img = cv2.resize(
-                debug_img, (int(0.5 * debug_img.shape[0]), int(0.5 * debug_img.shape[1])))
+                debug_img, (int(0.5 * debug_img.shape[1]), int(0.5 * debug_img.shape[0])))
               img_tag = aupl.img_to_img_tag(debug_img, display_scale=0.2)
 
               return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
@@ -884,14 +887,14 @@ class ImageAnnoTable(object):
             ]
             disp_str = sub_pivot + '<br/><br/>' + '<br/>'.join(disp_htmls)
             return bucket_id, disp_str
-          
+        
+        t.start_block()
         plotter = AVHistogramPlotter()
         fig = plotter.run(df, metric)
-        plot_fname = plot_name.replace(' ', '_')
-        aupl.save_bokeh_fig(fig, os.path.join(dest_dir, plot_fname))
+        aupl.save_bokeh_fig(fig, plot_dest)
 
         # Show ETA
-        t.update_tallies(n=1)
+        t.stop_block(n=1)
         t.maybe_log_progress(every_n=1)
 
       
