@@ -439,6 +439,9 @@ class Fixtures(object):
   # All Argoverse tarballs served from here
   BASE_TARBALL_URL = "https://s3.amazonaws.com/argoai-argoverse"
 
+  # # If you happen to have a local copy of the tarballs, use this:
+  # BASE_TARBALL_URL = "file:///tmp/argotars"
+
   TRACKING_SAMPLE = "tracking_sample.tar.gz"
 
   SAMPLE_TARBALLS = (
@@ -865,6 +868,9 @@ class ImageAnnoTable(object):
 
               frame = AVFrame(uri=uri)
               debug_img = frame.get_debug_image()
+              import cv2
+              debug_img = cv2.resize(
+                debug_img, (int(0.5 * debug_img.shape[0]), int(0.5 * debug_img.shape[1])))
               img_tag = aupl.img_to_img_tag(debug_img, display_scale=0.2)
 
               return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
@@ -875,24 +881,6 @@ class ImageAnnoTable(object):
             ]
             disp_str = sub_pivot + '<br/><br/>' + '<br/>'.join(disp_htmls)
             return bucket_id, disp_str
-
-
-
-
-
-
-
-
-
-            import itertools
-            rows_str = "<br />".join(str(r) for r in itertools.islice(irows, 5))
-            TEMPLATE = """
-              <b>Facet: {spv} Bucket: {bucket_id} </b> <br/>
-              {rows}
-              <br/> <br/>
-            """
-            disp = TEMPLATE.format(spv=sub_pivot, bucket_id=bucket_id, rows=rows_str)
-            return bucket_id, disp
           
         plotter = AVHistogramPlotter()
         fig = plotter.run(df, metric)
