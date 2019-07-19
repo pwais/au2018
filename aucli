@@ -96,6 +96,10 @@ class DockerEnv(object):
     IVY2_PERSISTED_DIR = '/tmp/au_ivy2'
     run_cmd('mkdir -p %s' % IVY2_PERSISTED_DIR)
     
+    # Mount /tmp to working dir for easier debugging and (on cloud machines)
+    # potentially faster I/O (when cloning au to NVME disks)
+    run_cmd('mkdir -p au_tmp')
+
     docker = 'nvidia-docker' if have_nvidia_docker else 'docker'
     CMD = """
       {docker} run
@@ -103,6 +107,7 @@ class DockerEnv(object):
         -d -it -P
         --net=host
         -v `pwd`:/opt/au:z
+        -v `pwd`/au_tmp:/tmp:z
         -v {ivy2_persisted_cache}:/root/.ivy2:z
         -v /:/outer_root:z
         -w /opt/au

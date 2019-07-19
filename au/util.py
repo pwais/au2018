@@ -131,20 +131,19 @@ class ThruputObserver(object):
     FMI https://stackoverflow.com/questions/34872535/why-contextmanager-is-slow
     """
 
-    start = time.time()
+    self.start_block()
     yield
-    end = time.time()
-    
-    self.n += n
-    self.num_bytes += num_bytes
-    self.ts.append(end - start)
+    self.stop_block(n=n, num_bytes=num_bytes)
   
   def start_block(self):
     self._start = time.time()
   
-  def update_tallies(self, n=0, num_bytes=0):
+  def update_tallies(self, n=0, num_bytes=0, new_block=False):
     self.n += n
     self.num_bytes += num_bytes
+    if new_block:
+      self.stop_block()
+      self.start_block()
   
   def stop_block(self, n=0, num_bytes=0):
     end = time.time()
@@ -155,15 +154,13 @@ class ThruputObserver(object):
     self._start = None
   
   def maybe_log_progress(self, every_n=-1):
-    if n >= 0:
-      self.__log_freq = n
+    if every_n >= 0:
+      self.__log_freq = every_n
     if (self.n % self.__log_freq) == 0:
-      self.stop_block()
       log.info("Progress for \n" + str(self))
-      self.start_block()
 
-      if n == -1 and (n >= 1.7 * self.__log_freq):
-        self.__log_freq *= 1.7
+      if every_n == -1 and (self.n >= (1.7 * self.__log_freq)):
+        self.__log_freq = int(1.7 * self.__log_freq)
 
   @staticmethod
   def union(thruputs):
@@ -195,7 +192,9 @@ class ThruputObserver(object):
     ]
     if self.n_total is not None:
       percent_complete = 100. * float(self.n) / self.n_total
-      eta_sec = (100. - percent_complete) * (total_time / percent_complete)
+      eta_sec = (
+        (100. - percent_complete) * 
+        (total_time / (percent_complete + 1e-10)))
       stats.extend([
         ('Progress', ''),
         ('Percent complete', percent_complete),
