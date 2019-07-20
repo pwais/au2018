@@ -821,7 +821,7 @@ class ImageAnnoTable(object):
         # Obj
         # TODO make spark accept numpy and numpy float64 things
         row = box.to_dict()
-        IGNORE = ('cuboid_pts', 'ego_to_obj')
+        IGNORE = ('cuboid_pts', 'cuboid_pts_image', 'ego_to_obj')
         for attr in IGNORE:
           v = row.pop(attr)
           if hasattr(v, 'shape'):
@@ -887,10 +887,6 @@ class ImageAnnoTable(object):
     for metric, sub_pivots in METRIC_AND_SUB_PIVOTS:
       for sub_pivot in sub_pivots:
         df = anno_df
-        # # FIXME !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        # df = df.filter(anno_df.split == 'sample')
-        # df = df.cache()
-
         if metric == 'best_rider_distance':
           # We need to filter out Infinity for histograms to work
           df = df.filter(df.best_rider_distance != float('inf')).cache()
