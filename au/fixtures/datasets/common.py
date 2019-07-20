@@ -35,6 +35,9 @@ class BBox(object):
     if not color:
       color = hash_to_rbg(self.category_name)
 
+    # Tensorflow takes BGR
+    color = tuple(reversed(color))
+
     # Use Tensorflow Models
     from object_detection.utils.visualization_utils import \
       draw_bounding_box_on_image_array

@@ -1,3 +1,21 @@
+"""
+NB: every track is visible for at least a few frames:
+  (where data is `ImageAnnoTable`)
+spark.sql('''
+  select track_id, sum(if(is_visible, 1, 0)) num_invisible, count(*) total
+  from data
+  group by track_id having total - num_invisible < 10
+''').show()
++--------+-------------+-----+                                                  
+|track_id|num_invisible|total|
++--------+-------------+-----+
++--------+-------------+-----+
+
+Having total - num_invisible < 100: 232 tracks.
+
+Total tracks: 8894
+"""
+
 from __future__ import absolute_import
 
 import itertools
@@ -113,10 +131,60 @@ class BBox(common.BBox):
 
       # Has the ObjectLabelRecord been motion-corrected?
       'motion_corrected',
-      'cuboid_pts',       # In robot ego frame
-      'ego_to_obj',       # Translation vector in ego frame
+      'cuboid_pts',         # In robot ego frame
+      'cuboid_pts_image',   # In image space
+      'ego_to_obj',         # Translation vector in ego frame
     ]
   )
+
+  def draw_cuboid_in_image(self, img, base_color=None, alpha=0.3, thickness=2):
+    """Draw `cuboid_pts_image` in `img`.  Similar to argoverse
+    render_clip_frustum_cv2(), but much simpler; in particular,
+    the code below does not confound camera calibration.
+    """
+    
+    if not hasattr(self.cuboid_pts, 'shape'):
+      return
+
+    ## Pick colors to draw
+    if not base_color:
+      from au import plotting as aupl
+      base_color = aupl.hash_to_rbg(self.category_name)
+    base_color = np.array(base_color)
+
+    def color_to_opencv(color):
+      r, g, b = np.clip(color, 0, 255).astype(int).tolist()
+      return b, g, r
+    
+    front_color = color_to_opencv(base_color + 0.3 * 255)
+    back_color = color_to_opencv(base_color - 0.3 * 255)
+    center_color = color_to_opencv(base_color)
+
+    import cv2
+    # OpenCV can't draw transparent colors, so we use the 'overlay image' trick
+    overlay = img.copy()
+
+    front = self.cuboid_pts_image[:4].astype(int)
+    cv2.polylines(
+      overlay,
+      [front],
+      True, # is_closed
+      front_color,
+      thickness)
+
+    back = self.cuboid_pts_image[4:].astype(int)
+    cv2.polylines(
+      overlay,
+      [back],
+      True, # is_closed
+      back_color,
+      thickness)
+    
+    for start, end in zip(front.tolist(), back.tolist()):
+      cv2.line(overlay, tuple(start), tuple(end), center_color, thickness)
+
+    # Now blend!
+    img[:] = cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
 
   @staticmethod
   def from_argoverse_label(
@@ -175,10 +243,12 @@ class BBox(common.BBox):
 
       bbox.im_width, bbox.im_height = get_image_width_height(uri.camera)
       uv = calib.project_ego_to_image(bbox.cuboid_pts)
+      
+      bbox.cuboid_pts_image = np.array([uv[:, 0] , uv[:, 1]]).T
 
       x1, x2 = np.min(uv[:, 0]), np.max(uv[:, 0])
       y1, y2 = np.min(uv[:, 1]), np.max(uv[:, 1])
-      z = float(np.max(uv[:,2]))
+      z = float(np.max(uv[:, 2]))
 
       num_onscreen = sum(
         1
@@ -196,9 +266,6 @@ class BBox(common.BBox):
       x2 = np.clip(round(x2), 0, bbox.im_width - 1)
       y1 = np.clip(round(y1), 0, bbox.im_height - 1)
       y2 = np.clip(round(y2), 0, bbox.im_height - 1)
-
-      # x1, x2 = uv[0, 0], uv[1, 0]
-      # y1, y2 = uv[0, 1], uv[1, 1]
 
       bbox.x = int(x1)
       bbox.y = int(y1)
@@ -293,6 +360,7 @@ class AVFrame(object):
 
     for bbox in self.image_bboxes:
       if bbox.is_visible:
+        bbox.draw_cuboid_in_image(img)
         bbox.draw_in_image(img)
     
     return img
@@ -340,6 +408,8 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     except FileExistsError:
       pass
 
+    util.log.info(
+      "Creating loader for log %s with root dir %s" % (log_name, root_dir))
     super(AUTrackingLoader, self).__init__(virtual_root)
   
   def get_nearest_image_path(self, camera, timestamp):
@@ -526,7 +596,7 @@ class Fixtures(object):
     # See e.g. https://github.com/argoai/argoverse-api/blob/16dec1ba51479a24b14d935e7873b26bfd1a7464/argoverse/data_loading/argoverse_tracking_loader.py#L121
     calib_paths = util.all_files_recursive(
                       base_path,
-                      pattern="**/vehicle_calibration_info.json")
+                      pattern="**/vehicle_calibration_info.json")                 
     return [os.path.dirname(cpath) for cpath in calib_paths]
 
   @classmethod
@@ -786,57 +856,47 @@ class ImageAnnoTable(object):
     util.mkdir(dest_dir)
     util.log.info("Creating image annotation reports in %s ..." % dest_dir)
 
-    # Generate plots for each of these metrics in ImageAnnoTable
-    METRICS = (
-      'distance_meters',
-      'height_meters',
-      'width_meters',
-      'length_meters',
-      'height',
-      'width',
-      'relative_yaw_radians',
-      'occlusion',
+    # For each of these metrics in ImageAnnoTable, generate a distinct plot
+    # for each sub-pivot column
+    SPLIT_AND_CITY = ['split', 'city']
+    CATEGORY_AND_CAMERA = ['category_name', 'coarse_category', 'camera']
+    ALL_SUB_PIVOTS = SPLIT_AND_CITY + CATEGORY_AND_CAMERA
+    METRIC_AND_SUB_PIVOTS = (
+      ('distance_meters',       ALL_SUB_PIVOTS),
+      ('height_meters',         ALL_SUB_PIVOTS),
+      ('width_meters',          SPLIT_AND_CITY),
+      ('length_meters',         SPLIT_AND_CITY),
+      ('height',                SPLIT_AND_CITY),
+      ('width',                 SPLIT_AND_CITY),
+      ('relative_yaw_radians',  ALL_SUB_PIVOTS),
+      ('occlusion',             SPLIT_AND_CITY),
 
       # Special handling! See below
-      'best_rider_distance',
+      ('best_rider_distance',   ALL_SUB_PIVOTS),
     )
 
-    # For each metric above, we'll produce pivoted plots using each of the
-    # below columns as a sub-pivot
-    SUB_PIVOTS = (
-      'category_name',
-      'coarse_category',
-      'split',
-      'city',
-      'camera',
-
-      # Special handling! See below
-      'invisible',
-    )
-
-    num_plots = len(METRICS) * len(SUB_PIVOTS)
+    num_plots = sum(len(spvs) for metric, spvs in METRIC_AND_SUB_PIVOTS)
     util.log.info("Going to generate %s plots ..." % num_plots)
     t = util.ThruputObserver(name='plotting', n_total=num_plots)
     
     # Generate plots!
     anno_df = cls.as_df(spark)
-    for metric in METRICS:
-      for sub_pivot in SUB_PIVOTS:
+    anno_df = anno_df.filter(anno_df.is_visible == True).cache()
+      # For all plots, we want to ignore labels that are entirely
+      # off-screen or entirely occluded.
+    for metric, sub_pivots in METRIC_AND_SUB_PIVOTS:
+      for sub_pivot in sub_pivots:
+        df = anno_df
+        # # FIXME !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        # df = df.filter(anno_df.split == 'sample')
+        # df = df.cache()
 
-        # FIXME !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        df = anno_df.filter(anno_df.split == 'sample')
-
-        if sub_pivot == 'invisible':
-          df = anno_df.filter(anno_df.is_visible == False)
-            # For this plot, we only want to report on invisible things.
-        else:
-          df = anno_df.filter(anno_df.is_visible == True)
-            # For most plots, we want to ignore things that are entirely
-            # off-screen or entirely occluded.
-        
         if metric == 'best_rider_distance':
           # We need to filter out Infinity for histograms to work
-          df = df.filter(df.best_rider_distance != float('inf'))
+          df = df.filter(df.best_rider_distance != float('inf')).cache()
+          if df.count() == 0:
+            util.log.warn("... skipping %s, no data! ..." % plot_dest) 
+            continue 
 
         plot_name = metric + ' by ' + sub_pivot
         plot_fname = plot_name.replace(' ', '_') + '.html'
@@ -848,10 +908,8 @@ class ImageAnnoTable(object):
         
         from au import plotting as aupl
         class AVHistogramPlotter(aupl.HistogramWithExamplesPlotter):
-          NUM_BINS = 50
-          SUB_PIVOT_COL = (
-            sub_pivot if sub_pivot != 'invisible' else None)
-              # For 'invisible', just compute and show the ALL series
+          NUM_BINS = 25
+          SUB_PIVOT_COL = sub_pivot
           WIDTH = 1400
           TITLE = plot_name
 
@@ -868,24 +926,28 @@ class ImageAnnoTable(object):
 
             def disp_uri(title, uri):
               from six.moves.urllib import parse
-              TEMPLATE = """<a href="{href}">{title} {img_tag}</a>"""
-              BASE = "http://au5:5000/test?" # FIXMEEEE ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              TEMPLATE = """<a href="{href}">{title} {img_tag} {uri}</a>"""
+              BASE = "/view?"
               href = BASE + parse.urlencode({'uri': uri})
 
               frame = AVFrame(uri=uri)
               debug_img = frame.get_debug_image()
-              import cv2
-              debug_img = cv2.resize(
-                debug_img, (int(0.5 * debug_img.shape[1]), int(0.5 * debug_img.shape[0])))
-              img_tag = aupl.img_to_img_tag(debug_img, display_scale=0.2)
-
-              return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
+              img_tag = aupl.img_to_img_tag(
+                          debug_img,
+                          jpeg_quality=50,
+                          display_viewport_hw=(300, 300))
+              s = TEMPLATE.format(
+                              href=href,
+                              title=title,
+                              img_tag=img_tag,
+                              uri=str(uri))
+              return s
 
             disp_htmls = [
               disp_uri('Example %s' % i, uri)
               for i, uri in enumerate(uris)
             ]
-            disp_str = sub_pivot + '<br/><br/>' + '<br/>'.join(disp_htmls)
+            disp_str = sub_pivot + '<br/><br/>' + '<br/><br/>'.join(disp_htmls)
             return bucket_id, disp_str
         
         t.start_block()

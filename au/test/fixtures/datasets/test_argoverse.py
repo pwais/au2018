@@ -3,6 +3,7 @@ from au.fixtures.datasets import auargoverse as av
 from au.test import testconf
 from au.test import testutils
 
+import itertools
 import os
 import unittest
 
@@ -37,7 +38,7 @@ class TestArgoverseImageTable(unittest.TestCase):
     #   return
 
 
-    if False: # Returnme
+    if True: # Returnme
       test_uri = av.FrameURI(
                     tarball_name=av.Fixtures.TRACKING_SAMPLE,
                     log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
@@ -46,20 +47,21 @@ class TestArgoverseImageTable(unittest.TestCase):
       print('Loaded', loader)
       assert loader.image_count == 3441
 
-      all_uris = list(av.Fixtures.iter_image_uris('sample'))
+      all_uris = list(itertools.chain.from_iterable(
+        av.Fixtures.get_frame_uris(log_uri)
+        for log_uri in av.Fixtures.get_log_uris('sample')))
       assert len(all_uris) == 3441
       
-      EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978406365860408'
+      EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978419252956672'
       assert EXPECTED_URI in set(str(uri) for uri in all_uris)
 
       frame = av.AVFrame(uri=EXPECTED_URI)
       import imageio
       # TODO create fixture
-      imageio.imwrite('/opt/au/tasttt.png', frame.get_debug_image(),format='png')
+      imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
 
 
-    if True:
-
+    if False:
       with testutils.LocalSpark.sess() as spark:
         # av.Fixtures.run_import(spark=spark)
         av.ImageAnnoTable.setup(spark)

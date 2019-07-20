@@ -13,11 +13,11 @@ def hash_to_rbg(x, s=0.8, v=0.8):
   import hashlib
   h_i = int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
   h = (hash(h_i) % 2654435769) / 2654435769.
-  r, g, b = colorsys.hsv_to_rgb(h, s, v)
+  rgb = 255 * np.array(colorsys.hsv_to_rgb(h, s, v))
   
-  return int(255. * r), int(255. * g), int(255. * b)
+  return rgb.astype(int).tolist()
 
-def img_to_data_uri(img, format='jpg'):
+def img_to_data_uri(img, format='jpg', jpeg_quality=75):
   """Given a numpy array `img`, return a `data:` URI suitable for use in 
   an HTML image tag."""
 
@@ -25,7 +25,10 @@ def img_to_data_uri(img, format='jpg'):
   out = BytesIO()
 
   import imageio
-  imageio.imwrite(out, img, format=format)
+  kwargs = dict(format=format)
+  if format == 'jpg':
+    kwargs.update(quality=jpeg_quality)
+  imageio.imwrite(out, img, **kwargs)
 
   from base64 import b64encode
   data = b64encode(out.getvalue()).decode('ascii')
@@ -35,13 +38,38 @@ def img_to_data_uri(img, format='jpg'):
   
   return data_url
 
-def img_to_img_tag(img, display_scale=1, format='jpg'):
-  h, w = img.shape[:2]
-  h *= display_scale
-  w *= display_scale
-  src = img_to_data_uri(img, format=format)
-  TEMPLATE = """<img src="{src}" height="{h}" width="{h}" />"""
-  return TEMPLATE.format(src=src, h=h, w=w)
+def get_size_in_viewport(img_hw, viewport_hw):
+  vh, vw = viewport_hw
+  h, w = img_hw
+  if h > vh:
+    rescale = float(vh) / h
+    h = rescale * h
+    w = rescale * w
+  if w > vw:
+    rescale = float(vw) / w
+    h = rescale * h
+    w = rescale * w
+  return int(h), int(w)
+
+def img_to_img_tag(
+    img,
+    display_viewport_hw=None, # E.g. (1000, 1000)
+    image_viewport_hw=None,   # E.g. (1000, 1000)
+    format='jpg',
+    jpeg_quality=75):
+
+  if image_viewport_hw is not None:
+    th, tw = get_size_in_viewport(img.shape[:2], image_viewport_hw)
+    import cv2
+    img = cv2.resize(img, (tw, th), interpolation=cv2.INTER_NEAREST)
+  
+  dh, dw = img.shape[:2]
+  if display_viewport_hw is not None:
+    dh, dw = get_size_in_viewport((dh, dw), display_viewport_hw)
+
+  src = img_to_data_uri(img, format=format, jpeg_quality=jpeg_quality)
+  TEMPLATE = """<img src="{src}" height="{dh}" width="{dh}" />"""
+  return TEMPLATE.format(src=src, dh=dh, dw=dw)
 
 def unpack_pyspark_row(r):
   """Unpack a `pyspark.sql.Row` that contains a single value."""
@@ -235,9 +263,10 @@ class HistogramWithExamplesPlotter(object):
 
     ## Add the 'show examples' tool and div
     from bokeh.models.widgets import Div
-    ctxbox = Div(text=
+    ctxbox = Div(width=self.WIDTH, text=
         "Click on a histogram bar to show examples.  "
         "Click on the legend to show/hide a series.")
+
 
     from bokeh.models import TapTool
     taptool = fig.select(type=TapTool)

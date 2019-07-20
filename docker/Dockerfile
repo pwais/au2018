@@ -186,6 +186,7 @@ ENV PATH $PATH:/opt/au/kubespray/inventory/default/artifacts/
 RUN \
   curl https://sdk.cloud.google.com | bash && \
   pip3 install -U crcmod 
+ENV PATH $PATH:/root/google-cloud-sdk/bin/
 
 # gcsfuse does NOT support read cache :P
 # and s3fs is broken too it seems
