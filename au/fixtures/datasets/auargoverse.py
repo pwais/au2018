@@ -823,9 +823,9 @@ class ImageAnnoTable(object):
         row = box.to_dict()
         IGNORE = ('cuboid_pts', 'cuboid_pts_image', 'ego_to_obj')
         for attr in IGNORE:
+          v = row.pop(attr)
           if attr == 'cuboid_pts_image':
             continue
-          v = row.pop(attr)
           if hasattr(v, 'shape'):
             if len(v.shape) == 1:
               row[attr] = pt(*v.tolist())
