@@ -635,7 +635,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     
     return objs
 
-  # @klepto.lru_cache(maxsize=100)
+  # @klepto.lru_cache(maxsize=100) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~FIXME
   def get_maybe_motion_corrected_cloud(self, timestamp):
     """Similar to `get_lidar()` but motion-corrects the entire cloud
     to (likely camera-time) `timestamp`.  Return also True if
@@ -903,9 +903,7 @@ class ImageAnnoTable(object):
     if not os.path.exists(cls.table_root()):
       with Spark.sess(spark) as spark:
         df = cls.build_anno_df(spark)
-        df.write.parquet(
-          cls.table_root(),
-          compression='gzip')
+        df.write.parquet(cls.table_root(), compression='gzip')
     
     cls.save_anno_reports(spark)
 
@@ -994,8 +992,7 @@ class ImageAnnoTable(object):
                     for split in splits))
     util.log.info("... reading from %s logs ..." % len(luris))
     luri_rdd = spark.sparkContext.parallelize(luris, numSlices=len(luris))
-    uri_rdd = luri_rdd.flatMap(cls.FIXTURES.get_frame_uris)
-    uri_rdd = uri_rdd.repartition(1000).cache()
+    uri_rdd = luri_rdd.flatMap(cls.FIXTURES.get_frame_uris).cache()
     util.log.info("... read %s URIs ..." % uri_rdd.count())
     
     def iter_anno_rows(uri):
@@ -1034,7 +1031,7 @@ class ImageAnnoTable(object):
         from pyspark.sql import Row
         yield Row(**row)
     
-    df = spark.createDataFrame(uri_rdd.flatMap(iter_anno_rows)).cache()
+    df = spark.createDataFrame(uri_rdd.flatMap(iter_anno_rows).cache())
     df = cls._impute_rider_for_bikes(spark, df)
     return df
 
@@ -1048,18 +1045,20 @@ class ImageAnnoTable(object):
     # For each of these metrics in ImageAnnoTable, generate a distinct plot
     # for each sub-pivot column
     SPLIT_AND_CITY = ['split', 'city']
+    SPLIT_CITY_CATEGORY = SPLIT_AND_CITY + ['category_name']
+    SPLIT_CITY_CAMERA = SPLIT_AND_CITY + ['camera']
     CATEGORY_AND_CAMERA = ['category_name', 'coarse_category', 'camera']
     ALL_SUB_PIVOTS = SPLIT_AND_CITY + CATEGORY_AND_CAMERA
     METRIC_AND_SUB_PIVOTS = (
-      # ('distance_meters',       ALL_SUB_PIVOTS),
-      # ('height_meters',         ALL_SUB_PIVOTS),
-      # ('width_meters',          SPLIT_AND_CITY),
-      # ('length_meters',         SPLIT_AND_CITY),
-      # ('height',                ['split', 'city', 'camera']),
-      # ('width',                 ['split', 'city', 'camera']),
-      # ('relative_yaw_radians',  SPLIT_AND_CITY),
-      # ('relative_yaw_to_camera_radians',  ALL_SUB_PIVOTS),
-      # ('occlusion',             SPLIT_AND_CITY),
+      ('distance_meters',       ALL_SUB_PIVOTS),
+      ('height_meters',         SPLIT_CITY_CATEGORY),
+      ('width_meters',          SPLIT_CITY_CATEGORY),
+      ('length_meters',         SPLIT_AND_CITY),
+      ('height',                SPLIT_CITY_CAMERA),
+      ('width',                 SPLIT_CITY_CAMERA),
+      ('relative_yaw_radians',  SPLIT_AND_CITY),
+      ('relative_yaw_to_camera_radians',  ALL_SUB_PIVOTS),
+      ('occlusion',             SPLIT_AND_CITY),
 
       # Special handling! See below
       ('ridden_bike_distance',   ALL_SUB_PIVOTS),

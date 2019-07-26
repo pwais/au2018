@@ -76,8 +76,8 @@ class TestArgoverseImageTable(unittest.TestCase):
         # av.CroppedObjectImageTable.setup(spark=spark)
 
         # av.Fixtures.run_import(spark=spark)
-        # av.ImageAnnoTable.setup(spark)
-        av.CroppedObjectImageTable.setup(spark=spark)
+        av.ImageAnnoTable.setup(spark)
+        # av.CroppedObjectImageTable.setup(spark=spark)
         
         
         # df = av.Fixtures.label_df(spark, splits=('sample','train','test', 'val'))
