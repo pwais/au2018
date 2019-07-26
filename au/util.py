@@ -55,6 +55,11 @@ log = create_log()
 
 ### Pythonisms
 
+# DeprecationWarnings sent to the user, and not the maintainer,
+# DO NOT HELP ANYBODY besides pedants.
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 def ichunked(seq, n):
   """Generate chunks of `seq` of size (at most) `n`.  More efficient
   and less junk than itertools recipes version using izip_longest...

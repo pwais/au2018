@@ -1,3 +1,4 @@
+
 from au import util
 from au.fixtures.datasets import auargoverse as av
 from au.test import testconf
@@ -38,30 +39,39 @@ class TestArgoverseImageTable(unittest.TestCase):
     #   return
 
 
-    if False: # Returnme
-      test_uri = av.FrameURI(
-                    tarball_name=av.Fixtures.TRACKING_SAMPLE,
-                    log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
+    if True: # Returnme
+      # test_uri = av.FrameURI(
+      #               tarball_name=av.Fixtures.TRACKING_SAMPLE,
+      #               log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
 
-      loader = av.Fixtures.get_loader(test_uri)
-      print('Loaded', loader)
-      assert loader.image_count == 3441
+      # loader = av.Fixtures.get_loader(test_uri)
+      # print('Loaded', loader)
+      # assert loader.image_count == 3441
 
-      all_uris = list(itertools.chain.from_iterable(
-        av.Fixtures.get_frame_uris(log_uri)
-        for log_uri in av.Fixtures.get_log_uris('sample')))
-      assert len(all_uris) == 3441
+      # all_uris = list(itertools.chain.from_iterable(
+      #   av.Fixtures.get_frame_uris(log_uri)
+      #   for log_uri in av.Fixtures.get_log_uris('sample')))
+      # assert len(all_uris) == 3441
       
-      EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978419252956672'
-      assert EXPECTED_URI in set(str(uri) for uri in all_uris)
+      # EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978419252956672'
+      # assert EXPECTED_URI in set(str(uri) for uri in all_uris)
 
       frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad')#EXPECTED_URI)
       import imageio
       # TODO create fixture
       imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
 
+      hnm = av.HardNegativeMiner(frame)
+      for i in range(10):
+        bbox = hnm.next_sample()
+        imageio.imwrite(
+          '/opt/au/tastttt_%s.png' % i,
+          frame.get_cropped(bbox).get_debug_image(),
+          format='png')
+        print('/opt/au/tastttt_%s.png' % i)
 
-    if True:
+
+    if False:
       with testutils.LocalSpark.sess() as spark:
         # av.CroppedObjectImageTable.setup(spark=spark)
 

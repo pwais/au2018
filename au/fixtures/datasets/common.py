@@ -35,6 +35,17 @@ class BBox(object):
       (k, getattr(self, k, None))
       for k in self.__slots__)
 
+  @staticmethod
+  def of_size(width, height):
+    return BBox(
+            x=0, y=0,
+            width=width, height=height,
+            im_width=width, im_height=height)
+
+  @staticmethod
+  def from_x1_y1_x2_y2(x1, y1, x2, y2):
+    return BBox(x=x1, y=y1, width=x2 - x1 + 1, height=y2 - y1 + 1)
+
   def is_full_image(self):
     return (
       self.x == 0 and
@@ -45,8 +56,8 @@ class BBox(object):
   def get_intersection_with(self, other):
     ix1 = max(self.x, other.x)
     ix2 = min(self.x + self.width, other.x + other.width)
-    ix1 = max(self.y, other.y)
-    ix2 = min(self.y + self.height, other.y + other.height)
+    iy1 = max(self.y, other.y)
+    iy2 = min(self.y + self.height, other.y + other.height)
     
     intersection = copy.deepcopy(self)
     intersection.update(
@@ -56,20 +67,24 @@ class BBox(object):
   def get_union_with(self, other):
     ux1 = min(self.x, other.x)
     ux2 = max(self.x + self.width, other.x + other.width)
-    ux1 = min(self.y, other.y)
-    ux2 = max(self.y + self.height, other.y + other.height)
+    uy1 = min(self.y, other.y)
+    uy2 = max(self.y + self.height, other.y + other.height)
     
     union = copy.deepcopy(self)
     union.update(
       x=ux1, y=uy1, width=ux2-ux1, height=uy2-uy1)
     return union
 
+  def overlaps_with(self, other):
+    # TODO: faster
+    return self.get_intersection_with(other).get_area() > 0
+
   def get_area(self):
     return self.width * self.height
 
   def draw_in_image(self, img, color=None, thickness=2):
-    assert self.im_height == img.shape[0]
-    assert self.im_width == img.shape[1]
+    assert self.im_height == img.shape[0], (self.im_height, img.shape)
+    assert self.im_width == img.shape[1], (self.im_width, img.shape)
 
     if not color:
       color = hash_to_rbg(self.category_name)

@@ -16,8 +16,7 @@ Having total - num_invisible < 100: 232 tracks.
 Total tracks: 8894
 """
 
-from __future__ import absolute_import
-
+import copy
 import itertools
 import os
 
@@ -91,8 +90,9 @@ class FrameURI(object):
     'crop_x', 'crop_y',
     'crop_w', 'crop_h',
                     # A specific viewport / crop of the frame
+  )
   
-  OPTIONAL = ('track_id',)
+  OPTIONAL = ('track_id', 'crop_x', 'crop_y', 'crop_w', 'crop_h',)
 
   PREFIX = 'argoverse://'
 
@@ -119,7 +119,7 @@ class FrameURI(object):
   def update(self, **kwargs):
     for k in self.__slots__:
       if k in kwargs:
-        setattr(self, kwargs[k])
+        setattr(self, k, kwargs[k])
 
   def has_crop(self):
     return all(
@@ -345,8 +345,11 @@ class AVFrame(object):
     if not self.FIXTURES:
       self.FIXTURES = Fixtures
   
-    if not self.viewport and self.uri.has_crop():
-      self.viewport = self.uri.get_crop_bbox()
+    if not self.viewport:
+      if self.uri.has_crop():
+        self.viewport = self.uri.get_crop_bbox()
+      else:
+        self.viewport = BBox.of_size(*get_image_width_height(self.uri.camera))
     
   @property
   def loader(self):
@@ -365,11 +368,11 @@ class AVFrame(object):
       path = self.loader.get_nearest_image_path(
                       self.uri.camera, self.uri.timestamp)
       self._image = AVFrame.__load_image(path)
-      if not self.viewport.is_full_image():
-        c, r, w, h = (
-          self.viewport.x, self.viewport.y,
-          self.viewport.width, self.viewport.height)
-        self._image = self._image[r:r+h, c:c+w, :]
+      # if not self.viewport.is_full_image():
+      #   c, r, w, h = (
+      #     self.viewport.x, self.viewport.y,
+      #     self.viewport.width, self.viewport.height)
+      #   self._image = self._image[r:r+h, c:c+w, :]
     return self._image
   
   @property
@@ -424,9 +427,7 @@ class AVFrame(object):
       # Ingore invisible things
       self._image_bboxes = [
         bbox for bbox in bboxes
-        if (
-          bbox.is_visible and 
-          self.viewport.get_intersection_with(bbox).get_area() > 0))
+        if bbox.is_visible and self.viewport.overlaps_with(bbox)
       ]
 
     return self._image_bboxes
@@ -449,7 +450,12 @@ class AVFrame(object):
     for bbox in self.image_bboxes:
       bbox.draw_cuboid_in_image(img)
       bbox.draw_in_image(img)
-        
+    
+    if not self.viewport.is_full_image():
+      c, r, w, h = (
+        self.viewport.x, self.viewport.y,
+        self.viewport.width, self.viewport.height)
+      img = img[r:r+h, c:c+w, :]
     return img
 
   def get_cropped(self, bbox):
@@ -468,44 +474,66 @@ class AVFrame(object):
 
 class HardNegativeMiner(object):
   SEED = 1337
-  MAX_FRACTION_ANNOTATED = 0.3
-  WIDTH_PIXELS_MU_STD = (121, 121)
-  HEIGHT_PIXELS_MU_STD = (121, 121)
-
-  class IntegralImage(object):
-    def __init__(self, img):
-      self.ii = img.cumsum(axis=0).cumsum(axis=1)
-    
-    def get_sum(self, r1, c1, r2, c2):
-      return (
-        self.ii[r2, c2]
-        - self.ii[r1, c2] - self.ii[r2, c1]
-        + self.ii[r1, c1])
+  MAX_FRACTION_ANNOTATED = 0.2
+  WIDTH_PIXELS_MU_STD = (121, 50)
+  HEIGHT_PIXELS_MU_STD = (121, 50)
 
   def __init__(self, frame):
     self._frame = frame
     
     # Build a binary mask where a pixel has an indicator value of 1 only if
     # one or more annotation bboxes covers that pixel
-    mask = np.zeros((frame.viewport.height, frame.viewport.width))
+    mask = np.zeros((self._frame.viewport.height, self._frame.viewport.width))
     for bbox in frame.image_bboxes:
-      mask[bbox.y:bbox:y+bbox.width, bbox.x:bbox.x+bbox.width] = 1
-    self._ii = IntegralImage(mask)
+      mask[bbox.y:bbox.y+bbox.height, bbox.x:bbox.x+bbox.width] = 1
 
+    import imageio
+    imageio.imwrite('/opt/au/mask.png', mask, format='png')
+
+    # We'll use the integral image trick to make rejection sampling efficient
+    class IntegralImage(object):
+      def __init__(self, img):
+        self.ii = img.cumsum(axis=0).cumsum(axis=1)
+      
+      def get_sum(self, r1, c1, r2, c2):
+        return (
+          self.ii[r2, c2]
+          - self.ii[r1, c2] - self.ii[r2, c1]
+          + self.ii[r1, c1])
+
+    self._ii = IntegralImage(mask)
     import random
     self._random = random.Random(self.SEED)
 
   def next_sample(self, max_attempts=1000):
+    rand = self._random
     for _ in range(max_attempts):
-      s = copy.deepcopy(self._frame.viewport)
-      s.x = self._random.randint(s.x, s.x + s.width)
-      s.y = self._random.randint(s.y, s.y + s.height)
-      s.width = self._random.normalvariate(*self.WIDTH_PIXELS_MU_STD)
-      s.height = self._random.normalvariate(*self.HEIGHT_PIXELS_MU_STD)
+      v = self._frame.viewport
+      
+      # Pick a center
+      c_x = rand.randint(v.x, v.x + v.width)
+      c_y = rand.randint(v.y, v.y + v.height)
 
-      r1, c1, r2, c2 = s.y, s.x, s.y + s.height, s.x + s.width
-      if self._ii.get_sum(r1, c1, r2, c2) <= self.MAX_FRACTION_ANNOTATED:
-        return s
+      # Pick a size
+      c_w = rand.normalvariate(*self.WIDTH_PIXELS_MU_STD)
+      c_h = rand.normalvariate(*self.HEIGHT_PIXELS_MU_STD)
+      if c_w <= 0 or c_h <= 0:
+        # Immediately reject boxen that have area 0 or are invalid
+        continue
+
+      # Snap to a valid box
+      x1 = np.clip(c_x - .5 * c_w, v.x, v.x + v.width - 1).round().astype(int)
+      y1 = np.clip(c_y - .5 * c_h, v.y, v.y + v.height - 1).round().astype(int)
+      x2 = np.clip(c_x + .5 * c_w, v.x, v.x + v.width - 1).round().astype(int)
+      y2 = np.clip(c_y + .5 * c_h, v.y, v.y + v.height - 1).round().astype(int)
+
+      num_anno_pixels = self._ii.get_sum(y1, x1, y2, x2)
+      sample = BBox.from_x1_y1_x2_y2(x1, y1, x2, y2)
+      
+      # Do we have enough non-annotated pixels to accept?
+      if num_anno_pixels / sample.get_area() <= self.MAX_FRACTION_ANNOTATED:
+        print(num_anno_pixels / sample.get_area())
+        return sample
     util.log.warn(
       "Tried %s times and could not sample an unannotated box" % max_attempts)
     return None
@@ -607,7 +635,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     
     return objs
 
-  @klepto.lru_cache(maxsize=100)
+  # @klepto.lru_cache(maxsize=100)
   def get_maybe_motion_corrected_cloud(self, timestamp):
     """Similar to `get_lidar()` but motion-corrects the entire cloud
     to (likely camera-time) `timestamp`.  Return also True if
@@ -993,7 +1021,6 @@ class ImageAnnoTable(object):
               row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
         
         # Anno Context
-        import copy
         obj_uri = copy.deepcopy(uri)
         obj_uri.track_id = box.track_id
         row.update(
@@ -1028,8 +1055,8 @@ class ImageAnnoTable(object):
       # ('height_meters',         ALL_SUB_PIVOTS),
       # ('width_meters',          SPLIT_AND_CITY),
       # ('length_meters',         SPLIT_AND_CITY),
-      # ('height',                SPLIT_AND_CITY),
-      # ('width',                 SPLIT_AND_CITY),
+      # ('height',                ['split', 'city', 'camera']),
+      # ('width',                 ['split', 'city', 'camera']),
       # ('relative_yaw_radians',  SPLIT_AND_CITY),
       # ('relative_yaw_to_camera_radians',  ALL_SUB_PIVOTS),
       # ('occlusion',             SPLIT_AND_CITY),
