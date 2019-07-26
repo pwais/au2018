@@ -31,7 +31,7 @@ import math
 import numpy as np
 import six
 
-import klepto # For a LRU cache of imageio Readers / Argoverse Loaders
+import klepto # For a cache of imageio Readers / Argoverse Loaders
 
 from argoverse.data_loading.argoverse_tracking_loader import \
   ArgoverseTrackingLoader
@@ -112,7 +112,7 @@ class FrameURI(object):
   
   def __str__(self):
     return self.to_str()
-  
+
   def to_dict(self):
     return dict((k, getattr(self, k, '')) for k in self.__slots__)
 
@@ -608,7 +608,8 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     diff, idx = min(
               (abs(timestamp - t), idx)
               for idx, t in enumerate(self.lidar_timestamp_list))
-    assert diff < 1e9, "Could not find a cloud within 1 sec of %s" % timestamp
+    assert diff < 1e9, \
+      "Could not find a cloud within 1 sec of %s, diff %s" % (timestamp, diff)
     return idx, self.lidar_timestamp_list[idx]
 
   def get_nearest_label_object(self, timestamp):
@@ -795,31 +796,56 @@ class Fixtures(object):
     return [os.path.dirname(cpath) for cpath in calib_paths]
 
   @classmethod
-  @klepto.lru_cache(maxsize=100)
   def get_loader(cls, uri):
     """Return a (maybe cached) `AUTrackingLoader` for the given `uri`"""
     if isinstance(uri, six.string_types):
       uri = FrameURI.from_str(uri)
+    return cls._get_loader(uri.tarball_name, uri.log_id)
+  
+  @classmethod
+  @klepto.inf_cache(ignore=(0,))
+  def _get_loader(cls, tarball_name, log_id):
+    # Need to find the dir corresponding to log_id
+    base_path = cls.tarball_dir(tarball_name)
+    for log_dir in cls.get_log_dirs(base_path):
+      cur_log_id = os.path.split(log_dir)[-1]
+      if cur_log_id == log_id:
+        return AUTrackingLoader(os.path.dirname(log_dir), log_id)
     
+    raise ValueError("Could not find log %s" % log_id)
+
+  # @classmethod
+  # def _get_loader(cls, tarball_name, log_id):
+  #   # NB: We tried to use @klepto.inf_cache(ignore=(0,)) here, but there
+  #   # appeared to be GIL contention somehow ...
+    
+  #   if not hasattr(cls, '_key_to_loader'):
+  #     cls._key_to_loader = {}
+    
+  #   if (tarball_name, log_id) not in cls._key_to_loader:
+  #     loader = None # Build this
+
+  #     # Need to find the dir corresponding to log_id
+  #     base_path = cls.tarball_dir(tarball_name)
+  #     for log_dir in cls.get_log_dirs(base_path):
+  #       cur_log_id = os.path.split(log_dir)[-1]
+  #       if cur_log_id == log_id:
+  #         loader = AUTrackingLoader(os.path.dirname(log_dir), log_id)
+    
+  #     assert loader, "Could not find log %s" % log_id
+  #     cls._key_to_loader[(tarball_name, log_id)] = loader
+  #   return cls._key_to_loader[(tarball_name, log_id)]
+
     # if not hasattr(cls, '_tarball_log_id_to_loader'):
     #   cls._tarball_log_id_to_loader = {}
     
     # key = (uri.tarball_name, uri.log_id)
     # if key not in cls._tarball_log_id_to_loader:
-
-    loader = None # Build this
-    # Need to find the dir corresponding to log_id
-    base_path = cls.tarball_dir(uri.tarball_name)
-    for log_dir in cls.get_log_dirs(base_path):
-      log_id = os.path.split(log_dir)[-1]
-      if log_id == uri.log_id:
-        loader = AUTrackingLoader(os.path.dirname(log_dir), log_id)
-    assert loader, "Could not find log %s" % uri.log_id
-    return loader
+      
       
     #   cls._tarball_log_id_to_loader[key] = loader
-    # else:
-    #   print('using cached loader') # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # # else:
+    # #   print('using cached loader') # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # return cls._tarball_log_id_to_loader[key]
 
   # @classmethod
@@ -992,7 +1018,8 @@ class ImageAnnoTable(object):
                     for split in splits))
     util.log.info("... reading from %s logs ..." % len(luris))
     luri_rdd = spark.sparkContext.parallelize(luris, numSlices=len(luris))
-    uri_rdd = luri_rdd.flatMap(cls.FIXTURES.get_frame_uris).cache()
+    uri_rdd = luri_rdd.flatMap(cls.FIXTURES.get_frame_uris)
+    # uri_rdd = uri_rdd.repartition(1000)
     util.log.info("... read %s URIs ..." % uri_rdd.count())
     
     def iter_anno_rows(uri):
@@ -1031,7 +1058,8 @@ class ImageAnnoTable(object):
         from pyspark.sql import Row
         yield Row(**row)
     
-    df = spark.createDataFrame(uri_rdd.flatMap(iter_anno_rows).cache())
+    row_rdd = uri_rdd.flatMap(iter_anno_rows)
+    df = spark.createDataFrame(row_rdd)
     df = cls._impute_rider_for_bikes(spark, df)
     return df
 

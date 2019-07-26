@@ -71,7 +71,7 @@ class TestArgoverseImageTable(unittest.TestCase):
         print('/opt/au/tastttt_%s.png' % i)
 
 
-    if False:
+    if True:
       with testutils.LocalSpark.sess() as spark:
         # av.CroppedObjectImageTable.setup(spark=spark)
 
