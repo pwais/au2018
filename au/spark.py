@@ -182,8 +182,9 @@ class Spark(object):
     if cls.CONF_KV is not None:
       for k, v in cls.CONF_KV.items():
         builder = builder.config(k, v)
-    builder = builder.config('spark.port.maxRetries', '96')
     builder = builder.config('spark.task.maxFailures', '10')
+    builder = builder.config('spark.port.maxRetries', '96')
+      # For local instances with many CPUs, let Spark use tons of ports
 
     # # FIXME parquet sizes need this for laptop activation tables to work
     builder = builder.config('spark.sql.files.maxPartitionBytes', int(8 * 1e6))

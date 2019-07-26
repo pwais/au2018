@@ -432,7 +432,7 @@ class ImageTable(object):
   def setup(cls, **kwargs):
     """Subclasses should override to create a dataset from scratch
     (e.g. download images, create a table, etc).  The base class
-    is just a bunch of images from ImageNet.
+    is just a few images from ImageNet.
     """
     if os.path.exists(cls.table_root()):
       util.log.info(

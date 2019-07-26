@@ -17,6 +17,35 @@ def hash_to_rbg(x, s=0.8, v=0.8):
   
   return rgb.astype(int).tolist()
 
+def draw_xy_depth_in_image(
+          img,
+          pts,
+          max_depth_meters=100,
+          dot_size=2,
+          color_rgb=(0, 255, 255),
+          alpha=0.15):
+  """Given an image `img` and a point cloud `pts` [in form
+  (pixel x, pixel y, ego depth meters)], draw the points.  Scale coloring
+  of points such that points at or beyond `max_depth_meters` are black and
+  the nearest points have full color.
+  """
+
+  import cv2
+
+  # OpenCV can't draw transparent colors, so we use the 'overlay image' trick
+  overlay = img.copy()
+
+  color_rgb = np.array(color_rgb)
+  for x, y, d_meters in pts.tolist():
+    color = np.clip(1 - (d_meters / max_depth_meters), 0, 1) * color_rgb
+    color = color.astype(int).tolist()
+    x = int(round(x))
+    y = int(round(y))
+    cv2.circle(overlay, (x, y), dot_size, color, thickness=2)
+  
+  # Now blend!
+  img[:] = cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
+
 def img_to_data_uri(img, format='jpg', jpeg_quality=75):
   """Given a numpy array `img`, return a `data:` URI suitable for use in 
   an HTML image tag."""

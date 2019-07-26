@@ -38,7 +38,7 @@ class TestArgoverseImageTable(unittest.TestCase):
     #   return
 
 
-    if True: # Returnme
+    if False: # Returnme
       test_uri = av.FrameURI(
                     tarball_name=av.Fixtures.TRACKING_SAMPLE,
                     log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
@@ -55,16 +55,19 @@ class TestArgoverseImageTable(unittest.TestCase):
       EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978419252956672'
       assert EXPECTED_URI in set(str(uri) for uri in all_uris)
 
-      frame = av.AVFrame(uri=EXPECTED_URI)
+      frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad')#EXPECTED_URI)
       import imageio
       # TODO create fixture
       imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
 
 
-    if False:
+    if True:
       with testutils.LocalSpark.sess() as spark:
+        # av.CroppedObjectImageTable.setup(spark=spark)
+
         # av.Fixtures.run_import(spark=spark)
-        av.ImageAnnoTable.setup(spark)
+        # av.ImageAnnoTable.setup(spark)
+        av.CroppedObjectImageTable.setup(spark=spark)
         
         
         # df = av.Fixtures.label_df(spark, splits=('sample','train','test', 'val'))

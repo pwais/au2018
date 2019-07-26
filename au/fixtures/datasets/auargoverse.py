@@ -23,6 +23,7 @@ import os
 
 from au import conf
 from au import util
+from au.fixtures import dataset
 from au.fixtures.datasets import common
 from au.spark import Spark
 
@@ -30,6 +31,8 @@ import imageio
 import math
 import numpy as np
 import six
+
+import klepto # For a LRU cache of imageio Readers / Argoverse Loaders
 
 from argoverse.data_loading.argoverse_tracking_loader import \
   ArgoverseTrackingLoader
@@ -59,6 +62,9 @@ AV_OBJ_CLASS_TO_COARSE = {
   "SCHOOL_BUS":         'car',
 }
 
+BIKE = ["BICYCLE", "MOPED", "MOTORCYCLE"]
+RIDER = ["BICYCLIST", "MOTORCYCLIST"]
+
 class MissingPose(ValueError):
   pass
 
@@ -78,7 +84,13 @@ class FrameURI(object):
     'split',        # Official Argoverse split (see Fixtures.SPLITS)
     'camera',       # E.g. ring_front_center
     'timestamp',    # E.g. 315975652303331336, yes this is GPS time :P :P
-    'track_id')     # Optional; a UUID of a specific track / annotation
+
+    ## Optional
+    'track_id',     # A UUID of a specific track / annotation in the frame
+    
+    'crop_x', 'crop_y',
+    'crop_w', 'crop_h',
+                    # A specific viewport / crop of the frame
   
   OPTIONAL = ('track_id',)
 
@@ -104,6 +116,21 @@ class FrameURI(object):
   def to_dict(self):
     return dict((k, getattr(self, k, '')) for k in self.__slots__)
 
+  def update(self, **kwargs):
+    for k in self.__slots__:
+      if k in kwargs:
+        setattr(self, kwargs[k])
+
+  def has_crop(self):
+    return all(
+      getattr(self, 'crop_%s' % a) is not ''
+      for a in ('x', 'y', 'w', 'h'))
+
+  def get_crop_bbox(self):
+    return BBox(
+            x=self.crop_x, y=self.crop_y,
+            width=self.crop_w, height=self.crop_h)
+
   @staticmethod
   def from_str(s):
     assert s.startswith(FrameURI.PREFIX)
@@ -124,10 +151,12 @@ class BBox(common.BBox):
       'height_meters',
 
       # Inferred from object pose relative to robot
-      'distance_meters',  # Dist to closest cuboid point
-      'relative_yaw_radians',
+      'distance_meters',      # Dist to closest cuboid point
+      'relative_yaw_radians', # Yaw vs ego pose
+      'relative_yaw_to_camera_radians',
       'has_offscreen',
       'is_visible',
+      'z',
 
       # Has the ObjectLabelRecord been motion-corrected?
       'motion_corrected',
@@ -236,6 +265,11 @@ class BBox(common.BBox):
         # NB: must use quat2rotmat due to Argo-specific quaternions
       rotmat = quat2rotmat(object_label_record.quaternion)
       bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
+
+      camera_yaw = math.atan2(calib.R[2, 1], calib.R[1, 1])
+      bbox.relative_yaw_to_camera_radians = (
+        bbox.relative_yaw_radians + camera_yaw) % (2. * math.pi)
+
       bbox.ego_to_obj = object_label_record.translation
 
     def fill_bbox_core(bbox):
@@ -256,10 +290,10 @@ class BBox(common.BBox):
         if (0 <= x < bbox.im_width) and (0 <= y < bbox.im_height))
 
       bbox.has_offscreen = ((z <= 0) or (num_onscreen < 2))
-      bbox.is_visible = all((
-        z > 0,
-        num_onscreen > 0,
-        object_label_record.occlusion < 100))
+      bbox.is_visible = (
+        z > 0 and
+        num_onscreen > 0 and
+        object_label_record.occlusion < 100)
 
       # Clamp to screen
       x1 = np.clip(round(x1), 0, bbox.im_width - 1)
@@ -271,6 +305,7 @@ class BBox(common.BBox):
       bbox.y = int(y1)
       bbox.width = int(x2 - x1)
       bbox.height = int(y2 - y1)
+      bbox.z = float(z)
 
     bbox = BBox()
     fill_cuboid_pts(bbox)
@@ -284,21 +319,19 @@ class AVFrame(object):
 
   __slots__ = (
     # Meta
-    'uri',      # type: FrameURI
-    'FIXTURES', # type: au.datasets.argoverse.Fixtures
-    '_loader',  # type: AUTrackingLoader
+    'uri',            # type: FrameURI
+    'FIXTURES',       # type: au.datasets.argoverse.Fixtures
+    '_loader',        # type: AUTrackingLoader
 
     # Labels
-    '_image_bboxes',
+    '_image_bboxes',  # type: List[BBox]
 
     # Vision
-    '_image',
-    'image_width',
-    'image_height',
+    '_image',         # type: np.ndarray
+    'viewport',       # type: BBox (used to express a crop)
     
-    # # Lidar
-    # '_cloud',
-    # 'cloud_interpolated',
+    # Lidar
+    '_cloud',         # type: np.ndarray
   )
 
   def __init__(self, **kwargs):
@@ -311,10 +344,9 @@ class AVFrame(object):
     # Fill context if needed
     if not self.FIXTURES:
       self.FIXTURES = Fixtures
-
-    if not (self.image_width and self.image_height):
-      self.image_width, self.image_height = \
-        get_image_width_height(self.uri.camera)
+  
+    if not self.viewport and self.uri.has_crop():
+      self.viewport = self.uri.get_crop_bbox()
     
   @property
   def loader(self):
@@ -322,48 +354,165 @@ class AVFrame(object):
       self._loader = self.FIXTURES.get_loader(self.uri)
     return self._loader # type: AUTrackingLoader
   
+  @staticmethod
+  @klepto.lru_cache(maxsize=100)
+  def __load_image(path):
+    return imageio.imread(path)
+
   @property
   def image(self):
     if not self._image:
       path = self.loader.get_nearest_image_path(
                       self.uri.camera, self.uri.timestamp)
-      self._image = imageio.imread(path)
+      self._image = AVFrame.__load_image(path)
+      if not self.viewport.is_full_image():
+        c, r, w, h = (
+          self.viewport.x, self.viewport.y,
+          self.viewport.width, self.viewport.height)
+        self._image = self._image[r:r+h, c:c+w, :]
     return self._image
   
   @property
+  def cloud(self):
+    if not self._cloud:
+      self._cloud, motion_corrected = \
+        self.loader.get_maybe_motion_corrected_cloud(self.uri.timestamp)
+        # We can ignore motion_corrected failures since the Frame will already
+        # have this info embedded in `image_bboxes`.
+    return self._cloud
+  
+  def get_cloud_in_image(self):
+    cloud = self.cloud
+    calib = self.loader.get_calibration(self.uri.camera)
+
+    # Per the argoverse recommendation, this should be safe:
+    # https://github.com/argoai/argoverse-api/blob/master/demo_usage/argoverse_tracking_tutorial.ipynb
+    x, y, w, h = (
+      self.viewport.x, self.viewport.y,
+      self.viewport.width, self.viewport.height)
+    uv = calib.project_ego_to_image(cloud).T
+    idx_ = np.where(
+            np.logical_and.reduce((
+              # Filter offscreen points
+              x <= uv[0, :], uv[0, :] < x + w - 1.0,
+              y <= uv[1, :], uv[1, :] < y + h - 1.0,
+              # Filter behind-screen points
+              uv[2, :] > 0)))
+    idx_ = idx_[0]
+    uv = uv[:, idx_]
+    return uv.T
+
+  @property
   def image_bboxes(self):
     if not self._image_bboxes:
+      
       t = self.uri.timestamp
       av_label_objects = self.loader.get_nearest_label_object(t)
-      def has_valid_labels(olr):
-        return not (
-          # Some of the labels are complete junk
+
+      # Some of the labels are complete junk
+      av_label_objects = [
+        olr for olr in av_label_objects
+        if not (
           np.isnan(olr.quaternion).any() or 
           np.isnan(olr.translation).any())
-      self._image_bboxes = [
-        BBox.from_argoverse_label(self.uri, object_label_record)
-        for object_label_record in av_label_objects
-        if has_valid_labels(object_label_record)
       ]
+
+      bboxes = [
+        BBox.from_argoverse_label(self.uri, olr) for olr in av_label_objects
+      ]
+
+      # Ingore invisible things
+      self._image_bboxes = [
+        bbox for bbox in bboxes
+        if (
+          bbox.is_visible and 
+          self.viewport.get_intersection_with(bbox).get_area() > 0))
+      ]
+
     return self._image_bboxes
 
   def get_debug_image(self):
     img = np.copy(self.image)
     
+    from au import plotting as aupl
+    xyd = self.get_cloud_in_image()
+    aupl.draw_xy_depth_in_image(img, xyd)
+
     if self.uri.track_id:
       # Draw a gold box first; then the draw() calls below will draw over
       # the box.
       WHITE = (225, 225, 255)
       for bbox in self.image_bboxes:
         if bbox.track_id == self.uri.track_id:
-          bbox.draw_in_image(img, color=WHITE, thickness=8)
+          bbox.draw_in_image(img, color=WHITE, thickness=20)
 
     for bbox in self.image_bboxes:
-      if bbox.is_visible:
-        bbox.draw_cuboid_in_image(img)
-        bbox.draw_in_image(img)
-    
+      bbox.draw_cuboid_in_image(img)
+      bbox.draw_in_image(img)
+        
     return img
+
+  def get_cropped(self, bbox):
+    """Create and return a new AVFrame instance that contains the data in this
+    frame cropped down to the viewport of just `bbox`."""
+
+    uri = copy.deepcopy(self.uri)
+    uri.update(
+      crop_x=bbox.x,
+      crop_y=bbox.y,
+      crop_w=bbox.width,
+      crop_h=bbox.height)
+
+    frame = AVFrame(uri=uri)
+    return frame
+
+class HardNegativeMiner(object):
+  SEED = 1337
+  MAX_FRACTION_ANNOTATED = 0.3
+  WIDTH_PIXELS_MU_STD = (121, 121)
+  HEIGHT_PIXELS_MU_STD = (121, 121)
+
+  class IntegralImage(object):
+    def __init__(self, img):
+      self.ii = img.cumsum(axis=0).cumsum(axis=1)
+    
+    def get_sum(self, r1, c1, r2, c2):
+      return (
+        self.ii[r2, c2]
+        - self.ii[r1, c2] - self.ii[r2, c1]
+        + self.ii[r1, c1])
+
+  def __init__(self, frame):
+    self._frame = frame
+    
+    # Build a binary mask where a pixel has an indicator value of 1 only if
+    # one or more annotation bboxes covers that pixel
+    mask = np.zeros((frame.viewport.height, frame.viewport.width))
+    for bbox in frame.image_bboxes:
+      mask[bbox.y:bbox:y+bbox.width, bbox.x:bbox.x+bbox.width] = 1
+    self._ii = IntegralImage(mask)
+
+    import random
+    self._random = random.Random(self.SEED)
+
+  def next_sample(self, max_attempts=1000):
+    for _ in range(max_attempts):
+      s = copy.deepcopy(self._frame.viewport)
+      s.x = self._random.randint(s.x, s.x + s.width)
+      s.y = self._random.randint(s.y, s.y + s.height)
+      s.width = self._random.normalvariate(*self.WIDTH_PIXELS_MU_STD)
+      s.height = self._random.normalvariate(*self.HEIGHT_PIXELS_MU_STD)
+
+      r1, c1, r2, c2 = s.y, s.x, s.y + s.height, s.x + s.width
+      if self._ii.get_sum(r1, c1, r2, c2) <= self.MAX_FRACTION_ANNOTATED:
+        return s
+    util.log.warn(
+      "Tried %s times and could not sample an unannotated box" % max_attempts)
+    return None
+
+
+    
+
 
 
 
@@ -425,20 +574,20 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     path = ts_to_path[timestamp]
     return path
   
-  def get_nearest_lidar_sweep(self, timestamp):
-    """Return the index of the lidar sweep in this log that either
-    matches exactly or is closest to `timestamp`."""
+  def get_nearest_lidar_sweep_id(self, timestamp):
+    """Return the index of the lidar sweep and its timestamp in this log that
+    either matches exactly or is closest to `timestamp`."""
     diff, idx = min(
               (abs(timestamp - t), idx)
               for idx, t in enumerate(self.lidar_timestamp_list))
     assert diff < 1e9, "Could not find a cloud within 1 sec of %s" % timestamp
-    return idx
+    return idx, self.lidar_timestamp_list[idx]
 
   def get_nearest_label_object(self, timestamp):
     """Load and return the `ObjectLabelRecord`s nearest to `timestamp`;
     provide either an exact match or choose the closest available."""
 
-    idx = self.get_nearest_lidar_sweep(timestamp)
+    idx, _ = self.get_nearest_lidar_sweep_id(timestamp)
     if idx >= len(self.label_list):
       util.log.error(
         "Log %s has %s labels but %s lidar sweeps; idx %s out of range" % (
@@ -458,14 +607,26 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     
     return objs
 
+  @klepto.lru_cache(maxsize=100)
+  def get_maybe_motion_corrected_cloud(self, timestamp):
+    """Similar to `get_lidar()` but motion-corrects the entire cloud
+    to (likely camera-time) `timestamp`.  Return also True if
+    motion corrected."""
+    idx, lidar_t = self.get_nearest_lidar_sweep_id(timestamp)
+    cloud = self.get_lidar(idx)
+    try:
+      return self.get_motion_corrected_pts(cloud, lidar_t, timestamp), True
+    except MissingPose:
+      return cloud, False
+
   def get_motion_corrected_pts(self, pts, pts_timestamp, dest_timestamp):
-    
-    # Similar to project_lidar_to_img_motion_compensated, but:
-    #  * do not project to image
-    #  * do not fail silently
-    #  * do not have an extremely poor interface
-    # We transform the points through the city / world frame:
-    #  pt_ego_dest_t = ego_dest_t_SE3_city * city_SE3_ego_pts_t * pt_ego_pts_t
+    """Similar to project_lidar_to_img_motion_compensated(), but:
+      * do not project to image
+      * do not fail silently
+      * do not have an extremely poor interface
+    We transform the points through the city / world frame:
+      pt_ego_dest_t = ego_dest_t_SE3_city * city_SE3_ego_pts_t * pt_ego_pts_t
+    """
 
     from argoverse.data_loading.pose_loader import \
       get_city_SE3_egovehicle_at_sensor_t
@@ -515,11 +676,16 @@ class Fixtures(object):
   # # If you happen to have a local copy of the tarballs, use this:
   # BASE_TARBALL_URL = "file:///tmp/argotars"
 
+  ###
+  ### NB: we omit the forecasting tarballs because they appear to exclude
+  ### sensor data (and are therefore not useful for research).
+  ###
+
   TRACKING_SAMPLE = "tracking_sample.tar.gz"
 
   SAMPLE_TARBALLS = (
     TRACKING_SAMPLE,
-    "forecasting_sample.tar.gz",
+    # "forecasting_sample.tar.gz",
   )
 
   TRACKING_TARBALLS = (
@@ -531,11 +697,12 @@ class Fixtures(object):
     "tracking_test.tar.gz",
   )
 
-  PREDICTION_TARBALLS = (
-    "forecasting_train.tar.gz",
-    "forecasting_val.tar.gz",
-    "forecasting_test.tar.gz",
-  )
+  PREDICTION_TARBALLS = tuple()
+  # (
+  #   "forecasting_train.tar.gz",
+  #   "forecasting_val.tar.gz",
+  #   "forecasting_test.tar.gz",
+  # )
 
   MAP_TARBALLS = (
     "hd_maps.tar.gz",
@@ -600,31 +767,32 @@ class Fixtures(object):
     return [os.path.dirname(cpath) for cpath in calib_paths]
 
   @classmethod
+  @klepto.lru_cache(maxsize=100)
   def get_loader(cls, uri):
     """Return a (maybe cached) `AUTrackingLoader` for the given `uri`"""
     if isinstance(uri, six.string_types):
       uri = FrameURI.from_str(uri)
     
-    if not hasattr(cls, '_tarball_to_log_id_to_loader'):
-      cls._tarball_to_log_id_to_loader = {}
+    # if not hasattr(cls, '_tarball_log_id_to_loader'):
+    #   cls._tarball_log_id_to_loader = {}
     
-    if not uri.tarball_name in cls._tarball_to_log_id_to_loader:
-      cls._tarball_to_log_id_to_loader[uri.tarball_name] = {}
-    
-    log_id_to_loader = cls._tarball_to_log_id_to_loader[uri.tarball_name]
-    
-    loader = None
-    if not uri.log_id in log_id_to_loader:
-      base_path = cls.tarball_dir(uri.tarball_name)
-      for log_dir in cls.get_log_dirs(base_path):
-        log_id = os.path.split(log_dir)[-1]
-        if log_id == uri.log_id:
-          log_id_to_loader[log_id] = AUTrackingLoader(
-                                        os.path.dirname(log_dir),
-                                        log_id)
+    # key = (uri.tarball_name, uri.log_id)
+    # if key not in cls._tarball_log_id_to_loader:
 
-    assert uri.log_id in log_id_to_loader, "Could not find log %s" % uri.log_id
-    return log_id_to_loader[uri.log_id]
+    loader = None # Build this
+    # Need to find the dir corresponding to log_id
+    base_path = cls.tarball_dir(uri.tarball_name)
+    for log_dir in cls.get_log_dirs(base_path):
+      log_id = os.path.split(log_dir)[-1]
+      if log_id == uri.log_id:
+        loader = AUTrackingLoader(os.path.dirname(log_dir), log_id)
+    assert loader, "Could not find log %s" % uri.log_id
+    return loader
+      
+    #   cls._tarball_log_id_to_loader[key] = loader
+    # else:
+    #   print('using cached loader') # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # return cls._tarball_log_id_to_loader[key]
 
   # @classmethod
   # def iter_frame_uris(cls, split):
@@ -722,16 +890,10 @@ class ImageAnnoTable(object):
 
   @classmethod
   def _impute_rider_for_bikes(cls, spark, df):
-    BIKE = ["BICYCLE", "MOPED", "MOTORCYCLE"]
-    RIDER = ["BICYCLIST", "MOTORCYCLIST"]
-    BIKE_AND_RIDER = BIKE + RIDER
-
     util.log.info("Imputing rider <-> bike matchings ...")
 
     # Sub-select just bike and rider rows from `df` to improve performance
-    bikes_df = df.filter(
-      df.category_name.isin(BIKE_AND_RIDER) &
-      df.is_visible)
+    bikes_df = df.filter(df.category_name.isin(BIKE + RIDER))
     bikes_df = bikes_df.select(
                   'uri',
                   'frame_uri',
@@ -739,7 +901,7 @@ class ImageAnnoTable(object):
                   'category_name',
                   'ego_to_obj')
 
-    def iter_nearest_rider(uri_rows):
+    def iter_nearest_bike(uri_rows):
       uri, rows = uri_rows
       rows = list(rows) # Spark gives us a generator
       bike_rows = [r for r in rows if r.category_name in BIKE]
@@ -751,21 +913,22 @@ class ImageAnnoTable(object):
         a2 = np.array([r2.ego_to_obj.x, r2.ego_to_obj.y, r2.ego_to_obj.z])
         return float(np.linalg.norm(a2 - a1))
 
-      # Bikes may not have riders, so loop over bikes looking for riders
-      for bike in bike_rows:
-        if rider_rows:
-          best_rider, distance = min(
-                          (rider, l2_dist(bike, rider))
-                          for rider in rider_rows)
-          nearest_rider = dict(
-            uri=bike.uri,
-            track_id=bike.track_id,
-            best_rider_track_id=best_rider.track_id,
-            best_rider_distance=distance,
+      # Each rider gets assigned the nearest bike.  Note that bikes may not
+      # have riders.
+      for rider in rider_rows:
+        if bike_rows:
+          distance, best_bike = min(
+                          (l2_dist(rider, bike), bike)
+                          for bike in bike_rows)
+          nearest_bike = dict(
+            uri=rider.uri,
+            track_id=rider.track_id,
+            ridden_bike_track_id=best_bike.track_id,
+            ridden_bike_distance=distance,
           )
 
           from pyspark.sql import Row
-          yield Row(**nearest_rider)
+          yield Row(**nearest_bike)
     
     # We'll group all rows in our DF by URI, then do bike<->rider
     # for each URI (i.e. all the rows for a single URI).  The matching
@@ -773,22 +936,19 @@ class ImageAnnoTable(object):
     # original `df` in order to "add" the columns encoding the
     # bike<->rider matchings.
     uri_chunks_rdd = bikes_df.rdd.groupBy(lambda r: r.frame_uri)
-    nearest_rider = uri_chunks_rdd.flatMap(iter_nearest_rider)
-    if nearest_rider.isEmpty():
+    nearest_bike = uri_chunks_rdd.flatMap(iter_nearest_bike)
+    if nearest_bike.isEmpty():
       util.log.info("... no matchings!")
       return df
-    nearest_rider_df = spark.createDataFrame(nearest_rider)
-
-    matched = nearest_rider_df.filter(
-                          nearest_rider_df.best_rider_distance < float('inf'))
+    matched = spark.createDataFrame(nearest_bike)
     util.log.info("... matched %s bikes ." % matched.count())
     
-    joined = df.join(nearest_rider_df, ['uri', 'track_id'], 'outer')
+    joined = df.join(matched, ['uri', 'track_id'], 'outer')
 
     # Don't allow nulls; those can't be compared and/or written to Parquet
     joined = joined.na.fill({
-                  'best_rider_distance': float('inf'),
-                  'best_rider_track_id': ''
+                  'ridden_bike_distance': float('inf'),
+                  'ridden_bike_track_id': ''
     })
     return joined
 
@@ -796,7 +956,7 @@ class ImageAnnoTable(object):
   def build_anno_df(cls, spark, splits=None):
     if not splits:
       splits = cls.FIXTURES.SPLITS
-    
+
     util.log.info("Building anno df for splits %s" % (splits,))
 
     # Be careful to hint to Spark how to parallelize reads
@@ -847,7 +1007,7 @@ class ImageAnnoTable(object):
         from pyspark.sql import Row
         yield Row(**row)
     
-    df = spark.createDataFrame(uri_rdd.flatMap(iter_anno_rows))
+    df = spark.createDataFrame(uri_rdd.flatMap(iter_anno_rows)).cache()
     df = cls._impute_rider_for_bikes(spark, df)
     return df
 
@@ -864,17 +1024,18 @@ class ImageAnnoTable(object):
     CATEGORY_AND_CAMERA = ['category_name', 'coarse_category', 'camera']
     ALL_SUB_PIVOTS = SPLIT_AND_CITY + CATEGORY_AND_CAMERA
     METRIC_AND_SUB_PIVOTS = (
-      ('distance_meters',       ALL_SUB_PIVOTS),
-      ('height_meters',         ALL_SUB_PIVOTS),
-      ('width_meters',          SPLIT_AND_CITY),
-      ('length_meters',         SPLIT_AND_CITY),
-      ('height',                SPLIT_AND_CITY),
-      ('width',                 SPLIT_AND_CITY),
-      ('relative_yaw_radians',  ALL_SUB_PIVOTS),
-      ('occlusion',             SPLIT_AND_CITY),
+      # ('distance_meters',       ALL_SUB_PIVOTS),
+      # ('height_meters',         ALL_SUB_PIVOTS),
+      # ('width_meters',          SPLIT_AND_CITY),
+      # ('length_meters',         SPLIT_AND_CITY),
+      # ('height',                SPLIT_AND_CITY),
+      # ('width',                 SPLIT_AND_CITY),
+      # ('relative_yaw_radians',  SPLIT_AND_CITY),
+      # ('relative_yaw_to_camera_radians',  ALL_SUB_PIVOTS),
+      # ('occlusion',             SPLIT_AND_CITY),
 
       # Special handling! See below
-      ('best_rider_distance',   ALL_SUB_PIVOTS),
+      ('ridden_bike_distance',   ALL_SUB_PIVOTS),
     )
 
     num_plots = sum(len(spvs) for metric, spvs in METRIC_AND_SUB_PIVOTS)
@@ -883,18 +1044,15 @@ class ImageAnnoTable(object):
     
     # Generate plots!
     anno_df = cls.as_df(spark)
-    anno_df = anno_df.filter(anno_df.is_visible == True).cache()
-      # For all plots, we want to ignore labels that are entirely
-      # off-screen or entirely occluded.
     for metric, sub_pivots in METRIC_AND_SUB_PIVOTS:
       for sub_pivot in sub_pivots:
         df = anno_df
-        if metric == 'best_rider_distance':
+        if metric == 'ridden_bike_distance':
           # We need to filter out Infinity for histograms to work
-          df = df.filter(df.best_rider_distance != float('inf')).cache()
+          df = df.filter(df.ridden_bike_distance < float('inf')).cache()
           if df.count() == 0:
             util.log.warn("... skipping %s, no data! ..." % plot_dest) 
-            continue 
+            continue
 
         plot_name = metric + ' by ' + sub_pivot
         plot_fname = plot_name.replace(' ', '_') + '.html'
@@ -906,30 +1064,56 @@ class ImageAnnoTable(object):
         
         from au import plotting as aupl
         class AVHistogramPlotter(aupl.HistogramWithExamplesPlotter):
-          NUM_BINS = 25
+          NUM_BINS = 20
           SUB_PIVOT_COL = sub_pivot
           WIDTH = 1400
           TITLE = plot_name
 
           # Show only this many examples for each bucket.  More
           # examples -> more images -> larger plot files.
-          EXAMPLES_PER_BUCKET = 5
+          EXAMPLES_PER_BUCKET = 10
 
           def display_bucket(self, sub_pivot, bucket_id, irows):
-            import itertools
-            uris = [
-              r.uri
-              for r in itertools.islice(irows, self.EXAMPLES_PER_BUCKET)
-            ]
+            util.log.info("Displaying bucket %s %s" % (sub_pivot, bucket_id))
 
-            def disp_uri(title, uri):
+            # Try to sample examples from distinct logs for higher
+            # variance in examples.
+            def sample_rows(n):
+              from collections import defaultdict
+              log_id_to_rows = defaultdict(list)
+              for r in irows:
+                log_id_to_rows[r.log_id].append(r)
+
+                if len(log_id_to_rows.keys()) >= n:
+                  # We'll have at least one log per sample, so it's safe to
+                  # bail early (and thus stop consuming rows from Spark)
+                  break
+              
+              # Now we can sample from log_ids round-robin
+              round_robin_uris = util.roundrobin(*log_id_to_rows.values())
+              rows = list(itertools.islice(round_robin_uris, n))
+              return rows
+            
+            def disp_row(title, row):
               from six.moves.urllib import parse
               TEMPLATE = """<a href="{href}">{title} {img_tag} {uri}</a>"""
               BASE = "/view?"
-              href = BASE + parse.urlencode({'uri': uri})
+              href = BASE + parse.urlencode({'uri': row.uri})
 
-              frame = AVFrame(uri=uri)
+              frame = AVFrame(uri=row.uri)
               debug_img = frame.get_debug_image()
+              
+              if row.ridden_bike_track_id:
+                # Highlight the rider's bike if possible. Rather than draw a
+                # new box in the image, it's easiest to just fetch a debug
+                # image for the rider and blend using OpenCV
+                best_bike_uri = FrameURI.from_str(row.uri)
+                best_bike_uri.track_id = row.ridden_bike_track_id
+                debug_img_bike = AVFrame(uri=best_bike_uri).get_debug_image()
+                import cv2
+                debug_img[:] = cv2.addWeighted(
+                  debug_img, 0.5, debug_img_bike, 0.5, 0)
+
               img_tag = aupl.img_to_img_tag(
                           debug_img,
                           jpeg_quality=50,
@@ -938,290 +1122,90 @@ class ImageAnnoTable(object):
                               href=href,
                               title=title,
                               img_tag=img_tag,
-                              uri=str(uri))
+                              uri=str(row.uri))
               return s
 
+            rows = sample_rows(self.EXAMPLES_PER_BUCKET)
             disp_htmls = [
-              disp_uri('Example %s' % i, uri)
-              for i, uri in enumerate(uris)
+              disp_row('Example %s' % i, row)
+              for i, row in enumerate(rows)
             ]
             disp_str = sub_pivot + '<br/><br/>' + '<br/><br/>'.join(disp_htmls)
             return bucket_id, disp_str
         
         t.start_block()
         plotter = AVHistogramPlotter()
-        fig = plotter.run(df, metric)
+        fig = plotter.run(df.cache(), metric)
         aupl.save_bokeh_fig(fig, plot_dest)
 
         # Show ETA
         t.stop_block(n=1)
         t.maybe_log_progress(every_n=1)
 
-      
 
-# ###
-# ### Mining
-# ###
+###
+### Image Tables
+###
 
-# class HistogramWithExamples(object):
-  
-#   def run(self, spark, df):
-#     import pyspark.sql
-#     if not isinstance(df, pyspark.sql.DataFrame):
-#       df = spark.createDataFrame(df)
+from au.fixtures.dataset import ImageTable
+class CroppedObjectImageTable(ImageTable):
 
-#     df = df.filter(df.is_visible == True)
-#     # df = df[df.is_visible == True]
+  VIEWPORT_HW = (150, 150)
+    # TODO: talk about pedestrian at 200 meters ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-#     MACRO_FACETS = (
-#       'camera',
-#       'city',
-#       'split',
-#     )
+  ANNOS = ImageAnnoTable
 
-#     METRICS = (
-#       'distance_meters',
-#       # 'height_meters',
-#       # 'width_meters',
-#       # 'length_meters',
-#       # 'height',
-#       # 'width',
-#       # 'relative_yaw_radians',
-#       # 'occlusion',
-#     )
+  TABLE_NAME = (
+    'argoverse_cropped_object_%s_%s' % (VIEWPORT_HW[0], VIEWPORT_HW[1]))
 
-#     MICRO_FACETS = (
-#       'category_name',
-#       # 'coarse_category',
-#     )
-#     # class + any occlusion
-#     # class + edge of image
-
-#     # centroid distance between bike and rider?
-
-#     def make_panel(df, metric, micro_facet, bins=100):
-#       from bokeh import plotting
-#       from bokeh.models import ColumnDataSource
-#       import pandas as pd
-
-#       ## Organize Data
-#       # micro_facets_values = list(df[micro_facet].unique().to_numpy()) # FIXME ~~~~~~~~~~
-#       micro_facets_values = [
-#         getattr(row, micro_facet)
-#         for row in df.select(micro_facet).distinct().collect()
-#       ]
-#       micro_facets_values.append('all')
-#       legend_to_panel_df = {}
-#       for mf in micro_facets_values:
-#         util.log.info("Building plots for %s - %s" % (metric, mf))
-#         if mf == 'all':
-#           # mf_src_df = pd.DataFrame(df)
-#           mf_src_df = df
-#         else:
-#           # mf_src_df = df[df[micro_facet] == mf]
-#           mf_src_df = df.filter(df[micro_facet] == mf)
-#         print("begin p subq")
-#         mf_metric_data = [
-#           getattr(r, metric)
-#           for r in mf_src_df.select(metric).collect()
-#         ]
-#         mf_metric_data = np.array([v for v in mf_metric_data if v is not None])
-#         hist, edges = np.histogram(mf_metric_data, bins=bins) 
-#         mf_df = pd.DataFrame(dict(
-#           count=hist, proportion=hist / np.sum(hist),
-#           left=edges[:-1], right=edges[1:],
-#         ))
-#         mf_df['legend'] = mf
-#         from bokeh.colors import RGB
-#         mf_df['color'] = RGB(*util.hash_to_rbg(mf))
-
-#         # NB: we'd want to use np.digitize() here, but it's not always the
-#         # inverse of np.histogram() https://github.com/numpy/numpy/issues/4217
-#         # def to_display(df_subset):
-#         #   from six.moves.urllib import parse
-#         #   TEMPLATE = """<a href="{href}">{title}</a><img src="{href}" width=300 /> """
-#         #   BASE = "http://au5:5000/test?"
-#         #   uris = [r.uri for r in df_subset.select('uri').limit(10).collect()]
-#         #   links = [
-#         #     TEMPLATE.format(
-#         #                 title="Example " + str(i + 1),
-#         #                 href=BASE + parse.urlencode({'uri': uri}))
-#         #     for i, uri in enumerate(uris)
-#         #   ]
-#         #   print(df_subset)
-#         #   return mf + '<br/><br/>' + '<br/>'.join(links)
-#         print('displaying')
-
-#         def bucket_to_display(bucket_irows, n_examples=10):
-#           bucket, irows = bucket_irows
-#           import itertools
-#           uris = [r.uri for r in itertools.islice(irows, n_examples)]
-
-#           def disp_uri(title, uri):
-#             from six.moves.urllib import parse
-#             TEMPLATE = """<a href="{href}">{title} {img_tag}</a>"""
-#             BASE = "http://au5:5000/test?"
-#             href = BASE + parse.urlencode({'uri': uri})
-
-#             frame = AVFrame(uri=uri)
-#             debug_img = frame.get_debug_image()
-#             img_tag = util.img_to_img_tag(debug_img, display_scale=0.2)
-
-#             return TEMPLATE.format(href=href, title=title, img_tag=img_tag)
-
-#           disp_htmls = [
-#             disp_uri('Example %s' % i, uri)
-#             for i, uri in enumerate(uris)
-#           ]
-#           return bucket, mf + '<br/><br/>' + '<br/>'.join(disp_htmls)
-
-#         # for lo, hi in zip(edges[:-1], edges[1:]):
-#         #   # idx = np.where(
-#         #   #   (lo <= mf_metric_data) & (mf_metric_data < hi))[0]
-#         #   # disps.append(to_display(mf_src_df.iloc[idx]))
-
-#         #   df_subset = mf_src_df.filter(
-#         #     (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi))
-#         #   disps.append(to_display(df_subset))
-#         #   print(metric, lo, hi)
-#         # mf_df['display'] = disps
-        
-#         from pyspark.sql import functions as F
-#         col_def = None
-#         buckets = list(zip(edges[:-1], edges[1:]))
-#         for bucket_id, (lo, hi) in enumerate(buckets):
-#           args = (
-#                 (mf_src_df[metric] >= lo) & (mf_src_df[metric] < hi),
-#                 bucket_id
-#           )
-#           if col_def is None:
-#             col_def = F.when(*args)
-#           else:
-#             col_def = col_def.when(*args)
-#         col_def = col_def.otherwise(-1)
-#         df_bucketed = mf_src_df.withColumn('ag_plot_bucket', col_def)
-#         bucketed_chunks = df_bucketed.rdd.groupBy(lambda r: r.ag_plot_bucket)
-#         bucket_to_disp = dict(bucketed_chunks.map(bucket_to_display).collect())
-#         mf_df['display'] = [
-#           bucket_to_disp.get(b, '')
-#           for b in range(len(buckets))
-#         ]
-#         print('end displaying')
-        
-#         # pd.Series([
-#         #   df.loc[h_inds == i]['uri']
-#         #   for i in range(0, bins)
-#         # ])
-#         # def to_display(i):
-#         #   rows = df.loc[h_inds == i]
-#         #   uris = rows['uri'][:10]
-#         #   disp = mf + '<br/>' + '<br/>'.join(str(i) for i, uri in enumerate(uris))
-#         #   return disp
-
-#         # mf_df['context_display'] = [to_display(i) for i in range(0, bins)]
-#         # import pdb; pdb.set_trace()
-#         legend_to_panel_df[mf] = mf_df
-      
-#       # # Make checkbox group that can filter data
-#       # plot_src = ColumnDataSource(pd.DataFrame({}))
-#       # def update_plot_data(legends_to_plot): # type: str
-#       #   plot_df = pd.concat(
-#       #                 df
-#       #                 for legend, df in legend_to_panel_df.items()
-#       #                 if legend in legends_to_plot)
-#       #   plot_df.sort_values(['legend', 'left'])
-#       #   plot_src.data.update(ColumnDataSource(plot_df).data)
-      
-#       # # Initially only plot the 'all' series
-#       # update_plot_data(micro_facets_values)
-      
-#       # def update(attr, old, new):
-#       #     to_plot = [checkbox_group.labels[i] for i in checkbox_group.active]
-#       #     update_plot_data(to_plot)
-
-#       # from bokeh.models.widgets import CheckboxGroup
-#       # checkbox_group = CheckboxGroup(
-#       #                   labels=sorted(micro_facets_values),
-#       #                   active=[1] * len(micro_facets_values))
-#       # checkbox_group.on_change('active', update)
-
-#       ## Make the plot
-#       title = metric + ' vs ' + micro_facet
-#       fig = plotting.figure(
-#               title=title,
-#               tools='tap,pan,wheel_zoom,box_zoom,reset',
-#               plot_width=1200,
-#               x_axis_label=metric,
-#               y_axis_label='Count')
-#       for _, plot_src in legend_to_panel_df.items():
-#         plot_src = ColumnDataSource(plot_src)
-#         r = fig.quad(
-#           source=plot_src, bottom=0, top='count', left='left', right='right',
-#           color='color', fill_alpha=0.5,
-#           hover_fill_color='color', hover_fill_alpha=1.0,
-#           legend='legend')
-#       from bokeh.models import HoverTool
-#       fig.add_tools(
-#         HoverTool(
-#           # renderers=[r],
-#           mode='vline',
-#           tooltips=[
-#             ('Facet', '@legend'),
-#             ('Count', '@count'),
-#             ('Proportion', '@proportion'),
-#             ('Value', '@left'),
-#           ]))
-
-#       fig.legend.click_policy = 'hide'
-
-      
-      
-#       # fig.add_tools(
-#       #   HoverTool(tooltips=,
-#       #     mode='vline'))
-#       # fig.legend.click_policy = 'hide'
-
-#       # from bokeh.layouts import WidgetBox
-#       # controls = WidgetBox(checkbox_group)
-#       from bokeh.models.widgets import Div
-#       ctxbox = Div(text="Placeholder")
-
-#       from bokeh.models import TapTool
-#       taptool = fig.select(type=TapTool)
-
-#       from bokeh.models import CustomJS
-#       taptool.callback = CustomJS(
-#         args=dict(ctxbox=ctxbox),
-#         code="""
-#           var idx = cb_data.source.selected['1d'].indices[0];
-#           ctxbox.text='' + cb_data.source.data.display[idx];
-#         """)
-
-
-
-#       from bokeh.layouts import column
-#       layout = column(fig, ctxbox)
-
-#       from bokeh.models.widgets import Panel
-#       panel = Panel(child=layout, title=title)
-#       return panel
+  @classmethod
+  def setup(cls, **kwargs):
+    if os.path.exists(cls.table_root()):
+      util.log.info(
+        "Skipping setup for %s, %s exists." % (
+          cls.TABLE_NAME, cls.table_root()))
+      return
     
-#     panels = []
-#     for mf in MICRO_FACETS:
-#       panels.extend(
-#         make_panel(df, metric, mf)
-#         for metric in METRICS)
+    cls._create_eligable_annos(kwargs.get('spark'))
     
-#     from bokeh.models.widgets import Tabs
-#     t = Tabs(tabs=panels)
-#     def save_plot(tabs):
-#       from bokeh import plotting
-#       if tabs is None:
-#         return
-      
-#       dest = '/opt/au/yay_plot.html'
-#       plotting.output_file(dest, title='my title', mode='inline')
-#       plotting.save(tabs)
-#       util.log.info("Wrote to %s" % dest)
-#     save_plot(t)
+
+  ### Utils
+
+  @classmethod
+  def _create_eligable_annos(cls, spark):
+    anno_df = cls.ANNOS.as_df(spark)
+
+    # Filter
+    CONDS = (      
+      # Motion correction almost always succeeds
+      anno_df.motion_corrected == True,
+
+      # Ignore very small things
+      anno_df.height >= 50, 
+      anno_df.width >= 50,
+
+      # Skip sample set, and the test set has no labels
+      anno_df.split != 'sample',
+      anno_df.split != 'test',
+    )
+    for cond in CONDS:
+      anno_df = anno_df.filter(cond)
+    
+    print(anno_df.count())
+    anno_df.show()
+    import pdb; pdb.set_trace()
+              
+    
+"""
+TODO
+ #* draw bike associations, wtf with very very far motorcycle
+ # file:///Users/pwais/Downloads/imag_annos_new/best_rider_distance_by_category_name.html
+ * report on number of invisible things (e.g. top of file comment)
+    * report on number of motion-corrected frames
+    * report on bikes no riders
+ * do kl divergence or some sort of tests in 'split' plots
+ * log-scale option for? plots
+ * debug draw lider pts
+ * try to measure occlusion / clutter by overlaping cuboids? raytrace / z-buffer
+"""
 

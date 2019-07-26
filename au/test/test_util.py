@@ -25,6 +25,25 @@ def test_ichunked():
   
   assert list_ichunked('abcde', 4) == [('a', 'b', 'c', 'd'), ('e',)]
 
+def test_roundrobin():
+
+  def list_roundrobin(*args):
+    return list(util.roundrobin(*args))
+  
+  assert list_roundrobin() == []
+  assert list_roundrobin('a') == ['a']
+  assert list_roundrobin('ab') == ['a', 'b']
+  assert list_roundrobin('ab', 'c') == ['a', 'c', 'b']
+  assert list_roundrobin('abc', 'd', 'ef') == ['a', 'd', 'e', 'b', 'f', 'c']
+
+  from collections import OrderedDict
+  d = OrderedDict(
+    a=[1, 2, 3],
+    b=[4],
+    c=[5, 6],
+  )
+  assert list_roundrobin(*d.values()) == [1, 4, 5, 2, 6, 3]
+
 def test_row_of_constants():
   as_row = util.as_row_of_constants
 

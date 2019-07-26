@@ -68,6 +68,23 @@ def ichunked(seq, n):
     else:
       break
 
+def roundrobin(*seqs):
+  """Generate a sequence pulling round-robin from each of `seqs`; similar to
+  `itertools.roundrobin()` recipe but 
+    (1) won't hide nested `StopIteration`s
+    (2) uses a queue to reduce dynamic allocations
+  """
+  from collections import deque
+  its = deque((iter(s) for s in seqs), maxlen=len(seqs))
+  while its:
+    it = its.popleft()
+    try:
+      v = it.__next__()
+    except StopIteration:
+      continue
+    yield v
+    its.append(it)
+
 def as_row_of_constants(inst):
   from collections import OrderedDict
   row = OrderedDict()
