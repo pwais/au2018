@@ -16,14 +16,14 @@ try:
   import findspark
   findspark.init()
 
-  # # In python3, we filter:
-  # #  "py4j-0.10.7-src.zip/py4j/java_gateway.py:2020: 
-  # #      DeprecationWarning: invalid escape sequence \*"
-  # if sys.version_info.major >= 3:
-  #   import warnings
-  #   warnings.filterwarnings(
-  #     action='ignore',
-  #     message=r'invalid escape sequence')
+  # In python3, we filter:
+  #  "py4j-0.10.7-src.zip/py4j/java_gateway.py:2020: 
+  #      DeprecationWarning: invalid escape sequence \*"
+  if sys.version_info.major >= 3:
+    import warnings
+    warnings.filterwarnings(
+      action='ignore',
+      message=r'invalid escape sequence')
     
   import pyspark
   from pyspark.sql import types
