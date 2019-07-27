@@ -18,7 +18,7 @@ class BBox(object):
   
   def __setstate__(self, d):
     for k in self.__slots__:
-      setattr(self, k, d.get(k, ''))
+      setattr(self, k, d.get(k, None))
 
   def __str__(self):
     return str(self.to_dict())
@@ -77,18 +77,24 @@ class BBox(object):
       1 for x, y in self.get_corners()
       if (0 <= x < self.im_width) and (0 <= y < self.im_height))
 
+  def quantize(self):
+    def quantize(v):
+      return int(round(v)) if v is not None else v
+    for attr in attrs:
+      setattr(self, attr, quantize(getattr(self, attr)))
+
+
   def clamp_to_screen(self):
     def clip_and_norm(v, max_v):
-      return np.clip(v, 0, max_v).round().astype(int)
+      return int(np.clip(v, 0, max_v).round())
     
     x1, y1, x2, y2 = self.get_x1_y1_x2_y2()
-    x1 = clip_and_norm(x1, bbox.im_width - 1)
-    y1 = clip_and_norm(y1, bbox.im_height - 1)
-    x2 = clip_and_norm(x2, bbox.im_width - 1)
-    y2 = clip_and_norm(y2, bbox.im_height - 1)
+    x1 = clip_and_norm(x1, self.im_width - 1)
+    y1 = clip_and_norm(y1, self.im_height - 1)
+    x2 = clip_and_norm(x2, self.im_width - 1)
+    y2 = clip_and_norm(y2, self.im_height - 1)
     self.set_x1_y1_x2_y2(x1, y1, x2, y2)
     
-
   def get_intersection_with(self, other):
     ix1 = max(self.x, other.x)
     ix2 = min(self.x + self.width, other.x + other.width)

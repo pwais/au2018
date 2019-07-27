@@ -516,17 +516,20 @@ class HardNegativeMiner(object):
         continue
 
       # Snap to a valid box
-      x1 = np.clip(c_x - .5 * c_w, v.x, v.x + v.width - 1).round().astype(int)
-      y1 = np.clip(c_y - .5 * c_h, v.y, v.y + v.height - 1).round().astype(int)
-      x2 = np.clip(c_x + .5 * c_w, v.x, v.x + v.width - 1).round().astype(int)
-      y2 = np.clip(c_y + .5 * c_h, v.y, v.y + v.height - 1).round().astype(int)
+      x1 = c_x - .5 * c_w
+      y1 = c_y - .5 * c_h
+      x2 = c_x + .5 * c_w
+      y2 = c_y + .5 * c_h
+      proposal = BBox.from_x1_y1_x2_y2(x1, y1, x2, y2)
+      proposal.quantize()
+      sample = v.get_intersection_with(proposal)
 
       num_anno_pixels = self._ii.get_sum(y1, x1, y2, x2)
       sample = BBox.from_x1_y1_x2_y2(x1, y1, x2, y2)
       
       # Do we have enough non-annotated pixels to accept?
       if num_anno_pixels / sample.get_area() <= self.MAX_FRACTION_ANNOTATED:
-        print(num_anno_pixels / sample.get_area())
+        print(num_anno_pixels / sample.get_area()) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         return sample
     util.log.warn(
       "Tried %s times and could not sample an unannotated box" % max_attempts)
@@ -810,7 +813,7 @@ class Fixtures(object):
       if cur_log_id == log_id:
         return AUTrackingLoader(os.path.dirname(log_dir), log_id)
     
-    raise ValueError("Could not find log %s" % log_id)
+    raise ValueError("Could not find log %s in %s" % (log_id, base_path))
 
   # @classmethod
   # def _get_loader(cls, tarball_name, log_id):
@@ -910,6 +913,7 @@ class Fixtures(object):
   def run_import(cls, spark=None):
     cls.download_all(spark=spark)
     ImageAnnoTable.setup(spark=spark)
+    ImageAnnoTable.save_anno_reports(spark)
 
 
 
@@ -928,8 +932,6 @@ class ImageAnnoTable(object):
       with Spark.sess(spark) as spark:
         df = cls.build_anno_df(spark)
         df.write.parquet(cls.table_root(), compression='gzip')
-    
-    cls.save_anno_reports(spark)
 
   @classmethod
   def as_df(cls, spark):
@@ -939,7 +941,7 @@ class ImageAnnoTable(object):
   ## Utils
 
   @classmethod
-  def show_stats(cls, spark, df=None):
+  def get_stats_dfs(cls, spark, df=None):
     if not df:
       df = cls.as_df(spark)
     df.createOrReplaceTempView("nms")
@@ -947,24 +949,30 @@ class ImageAnnoTable(object):
       ("Width/Height stats by Split", """
               SELECT
                 split,
-                AVG(width) AS w_mu, STD(width) AS w_std,
-                AVG(height) AS h_mu, STD(height) AS h_std
+                AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                COUNT(*) AS num_annos,
+                COUNT(DISTINCT frame_uri) AS num_frames
               FROM nms
               GROUP BY split"""
       ),
       ("Width/Height stats by City", """
               SELECT
                   city,
-                  AVG(width) AS w_mu, STD(width) AS w_std,
-                  AVG(height) AS h_mu, STD(height) AS h_std
+                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                  COUNT(*) AS num_annos,
+                  COUNT(DISTINCT frame_uri) AS num_frames
                 FROM nms
                 GROUP BY city"""
       ),
       ("Width/Height stats by Category", """
               SELECT
                   category_name,
-                  AVG(width) AS w_mu, STD(width) AS w_std,
-                  AVG(height) AS h_mu, STD(height) AS h_std
+                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                  COUNT(*) AS num_annos,
+                  COUNT(DISTINCT frame_uri) AS num_frames
                 FROM nms
                 GROUP BY category_name"""
       ),
@@ -972,11 +980,14 @@ class ImageAnnoTable(object):
               SELECT
                   camera,
                   AVG(num_annos) AS num_annos_mu,
-                  STD(num_annos) AS num_annos_std
+                  STD(num_annos) AS num_annos_std,
+                  SUM(num_annos) AS num_annos_total,
+                  COUNT(*) AS num_frames_total
                 FROM (
                   SELECT
-                    camera, COUNT(DISTINCT frame_id) AS num_annos
+                    camera, frame_uri, COUNT(*) AS num_annos
                   FROM nms
+                  GROUP BY camera, frame_uri
                 )
                 GROUP BY camera
                 ORDER BY camera"""
@@ -984,23 +995,23 @@ class ImageAnnoTable(object):
       ("Pedestrian stats by Distance", """
               SELECT
                   camera,
-                  10 * MOD(distance_meters, 10) AS distance_bucket,
-                  AVG(width) AS w_mu, STD(width) AS w_std,
-                  AVG(height) AS h_mu, STD(height) AS h_std
+                  10 * MOD(ROUND(distance_meters), 10) AS distance_m_bucket,
+                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                  COUNT(*) AS num_annos,
+                  COUNT(DISTINCT frame_uri) AS num_frames
                 FROM nms
                 WHERE
                   category_name = 'PEDESTRIAN' AND 
                   camera in ('ring_front_center', 'stereo_front_left')
-                GROUP BY camera, distance_bucket
-                ORDER BY camera ASC, distance_bucket ASC"""
+                GROUP BY camera, distance_m_bucket
+                ORDER BY camera ASC, distance_m_bucket ASC"""
       ),
     )
-    for title, query:
-      print(title)
-      spark.sql(query).show(truncate=False, n=100)
-      print()
-      print()
-      print()
+    return [
+      (title, spark.sql(query).toPandas())
+      for title, query in title_queries
+    ]
 
   @classmethod
   def _impute_rider_for_bikes(cls, spark, df):
@@ -1066,23 +1077,29 @@ class ImageAnnoTable(object):
     return joined
 
   @classmethod
-  def build_anno_df(cls, spark, splits=None):
+  def _create_uri_rdd(cls, spark, splits=None):
     if not splits:
       splits = cls.FIXTURES.SPLITS
 
     util.log.info("Building anno df for splits %s" % (splits,))
 
     # Be careful to hint to Spark how to parallelize reads
-    luris = list(
+    log_uris = list(
               itertools.chain.from_iterable(
                     cls.FIXTURES.get_log_uris(split)
                     for split in splits))
-    util.log.info("... reading from %s logs ..." % len(luris))
-    luri_rdd = spark.sparkContext.parallelize(luris, numSlices=len(luris))
-    uri_rdd = luri_rdd.flatMap(cls.FIXTURES.get_frame_uris)
-    # uri_rdd = uri_rdd.repartition(1000)
+    util.log.info("... reading from %s logs ..." % len(log_uris))
+    log_uri_rdd = spark.sparkContext.parallelize(
+                            log_uris, numSlices=len(log_uris))
+    uri_rdd = log_uri_rdd.flatMap(cls.FIXTURES.get_frame_uris)
+    uri_rdd = uri_rdd.repartition(1000)
     util.log.info("... read %s URIs ..." % uri_rdd.count())
-    
+    return uri_rdd
+
+  @classmethod
+  def build_anno_df(cls, spark, splits=None):
+    uri_rdd = cls._create_uri_rdd(spark, splits=splits)
+
     def iter_anno_rows(uri):
       from collections import namedtuple
       pt = namedtuple('pt', 'x y z')
@@ -1106,7 +1123,7 @@ class ImageAnnoTable(object):
               row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
         
         # Anno Context
-        obj_uri = copy.deepcopy(uri)
+        obj_uri = copy.deepcopy(frame.uri)
         obj_uri.track_id = box.track_id
         row.update(
           frame_uri=str(uri),
@@ -1307,11 +1324,12 @@ class CroppedObjectImageTable(dataset.ImageTable):
     box_center = np.array(
       [bbox.x + .5 * bbox.width, bbox.y + .5 * bbox.height])
     
-    x1, y1 = (box_center - radius_xy).round().astype(int).tolist()
-    x2, y2 = (box_center + radius_xy).round().astype(int).tolist()
+    x1, y1 = (box_center - radius_xy).tolist()
+    x2, y2 = (box_center + radius_xy).tolist()
     cropped = copy.deepcopy(bbox)
     cropped.set_x1_y1_x2_y2(x1, y1, x2, y2)
     cropped.update(im_width=bbox.im_width, im_height=bbox.im_height)
+    cropped.quantize()
     return cropped
 
   @classmethod

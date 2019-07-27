@@ -40,7 +40,18 @@ TEST_FIXTURE_URIS = (
   'argoverse://tarball_name=tracking_train1.tar.gz&log_id=53037376_5303_5303_5303_553038557184&split=train&camera=ring_front_center&timestamp=315967813075342440',
 )
 
+class TestImageAnnoTable(av.ImageAnnoTable):
+  @classmethod
+  def table_root(cls):
+    return os.path.join(
+      testconf.TEST_TEMPDIR_ROOT, 'test_argoverse_image_annos')
 
+  @classmethod
+  def _create_uri_rdd(cls, spark, splits=None):
+    uri_rdd = spark.sparkContext.parallelize(
+                            TEST_FIXTURE_URIS,
+                            numSlices=len(TEST_FIXTURE_URIS))
+    return uri_rdd
 
 class TestArgoverseImageTable(unittest.TestCase):
   """Exercise utilties in the Argoverse module.  Allow soft failures
@@ -60,83 +71,104 @@ class TestArgoverseImageTable(unittest.TestCase):
     TEST_TEMPDIR = os.path.join(
                         testconf.TEST_TEMPDIR_ROOT,
                         'test_argoverse')
-    testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+    # testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
 
-  def test_fixture_uris_are_good(self):
-    for uri in TEST_FIXTURE_URIS:
-      uri = av.FrameU
+  def test_fixture_uris(self):
+    for s in TEST_FIXTURE_URIS:
+      assert s
+      uri = av.FrameURI.from_str(s)
+      def check(v):
+        assert v
+        assert str(v) in s
+      check(uri.log_id)
+      check(uri.camera)
+      check(uri.timestamp)
 
-  def test_basic(self):
-    assert av.Fixtures.TRACKING_SAMPLE in av.Fixtures.all_tarballs()
-    assert av.Fixtures.TRACKING_SAMPLE in av.Fixtures.all_tracking_tarballs()
+      # Only require the user to have the sample fixture set up
+      if self.have_fixtures and uri.split == 'sample':
+        loader = av.Fixtures.get_loader(uri)
+        assert loader
 
-  def test_samplexxxxxxx(self):
-    # if not self.have_fixtures:
-    #   return
+  def test_image_anno_table(self):
+    with testutils.LocalSpark.sess() as spark:
+      TestImageAnnoTable.setup(spark)
+
+      df = TestImageAnnoTable.as_df(spark)
+      title_pdf = TestImageAnnoTable.get_stats_dfs(spark)
+      for title, pdf in title_pdf:
+        print(title)
+        print(pdf)
+        print()
+      # import pdb; pdb.set_trace()
+      df.show()
+
+  # def test_samplexxxxxxx(self):
+  #   # if not self.have_fixtures:
+  #   #   return
 
 
-    if True: # Returnme
-      # test_uri = av.FrameURI(
-      #               tarball_name=av.Fixtures.TRACKING_SAMPLE,
-      #               log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
+  #   if True: # Returnme
+  #     # test_uri = av.FrameURI(
+  #     #               tarball_name=av.Fixtures.TRACKING_SAMPLE,
+  #     #               log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
 
-      # loader = av.Fixtures.get_loader(test_uri)
-      # print('Loaded', loader)
-      # assert loader.image_count == 3441
+  #     # loader = av.Fixtures.get_loader(test_uri)
+  #     # print('Loaded', loader)
+  #     # assert loader.image_count == 3441
 
-      # all_uris = list(itertools.chain.from_iterable(
-      #   av.Fixtures.get_frame_uris(log_uri)
-      #   for log_uri in av.Fixtures.get_log_uris('sample')))
-      # assert len(all_uris) == 3441
+  #     # all_uris = list(itertools.chain.from_iterable(
+  #     #   av.Fixtures.get_frame_uris(log_uri)
+  #     #   for log_uri in av.Fixtures.get_log_uris('sample')))
+  #     # assert len(all_uris) == 3441
       
-      # EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978419252956672'
-      # assert EXPECTED_URI in set(str(uri) for uri in all_uris)
+  #     # EXPECTED_URI = 'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_center&timestamp=315978419252956672'
+  #     # assert EXPECTED_URI in set(str(uri) for uri in all_uris)
 
-      frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad')#EXPECTED_URI)
-      import imageio
-      # TODO create fixture
-      imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
+  #     frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad')#EXPECTED_URI)
+  #     import imageio
+  #     # TODO create fixture
+  #     imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
 
-      hnm = av.HardNegativeMiner(frame)
-      for i in range(10):
-        bbox = hnm.next_sample()
-        imageio.imwrite(
-          '/opt/au/tastttt_%s.png' % i,
-          frame.get_cropped(bbox).get_debug_image(),
-          format='png')
-        print('/opt/au/tastttt_%s.png' % i)
+  #     hnm = av.HardNegativeMiner(frame)
+  #     for i in range(10):
+  #       bbox = hnm.next_sample()
+  #       imageio.imwrite(
+  #         '/opt/au/tastttt_%s.png' % i,
+  #         frame.get_cropped(bbox).get_debug_image(),
+  #         format='png')
+  #       print('/opt/au/tastttt_%s.png' % i)
 
 
-    if True:
-      with testutils.LocalSpark.sess() as spark:
-        # av.CroppedObjectImageTable.setup(spark=spark)
+  #   if True:
+  #     with testutils.LocalSpark.sess() as spark:
+  #       # av.CroppedObjectImageTable.setup(spark=spark)
 
-        # av.Fixtures.run_import(spark=spark)
-        av.ImageAnnoTable.setup(spark)
+  #       # av.Fixtures.run_import(spark=spark)
+  #       av.ImageAnnoTable.setup(spark)
 
-        av.ImageAnnoTable.show_stats(spark)
-        # av.CroppedObjectImageTable.setup(spark=spark)
+  #       av.ImageAnnoTable.show_stats(spark)
+  #       # av.CroppedObjectImageTable.setup(spark=spark)
         
         
-        # df = av.Fixtures.label_df(spark, splits=('sample','train','test', 'val'))
-        # df.write.parquet(
-        #   '/tmp/av_yay_df',
-        #   mode='overwrite',
-        #   compression='lz4')
-        # df = spark.read.parquet('/tmp/av_yay_df')
-        # df = df.toPandas()
-        # df.to_pickle('/tmp/av_yay_pdf')
-        # assert False
-        # import pdb; pdb.set_trace()
-        # df.show()
+  #       # df = av.Fixtures.label_df(spark, splits=('sample','train','test', 'val'))
+  #       # df.write.parquet(
+  #       #   '/tmp/av_yay_df',
+  #       #   mode='overwrite',
+  #       #   compression='lz4')
+  #       # df = spark.read.parquet('/tmp/av_yay_df')
+  #       # df = df.toPandas()
+  #       # df.to_pickle('/tmp/av_yay_pdf')
+  #       # assert False
+  #       # import pdb; pdb.set_trace()
+  #       # df.show()
 
-    # import pandas as pd
-    # df = pd.read_pickle('/tmp/av_yay_pdf')
+  #   # import pandas as pd
+  #   # df = pd.read_pickle('/tmp/av_yay_pdf')
 
     
-        # df = spark.read.parquet(av.AnnoTable.table_root())
-        # h = av.HistogramWithExamples()
-        # h.run(spark, df)
+  #       # df = spark.read.parquet(av.AnnoTable.table_root())
+  #       # h = av.HistogramWithExamples()
+  #       # h.run(spark, df)
 
 
 
