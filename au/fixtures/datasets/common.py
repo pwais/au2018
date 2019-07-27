@@ -1,5 +1,7 @@
 import copy
 
+import numpy as np
+
 from au.plotting import hash_to_rbg
 
 class BBox(object):
@@ -42,9 +44,17 @@ class BBox(object):
             width=width, height=height,
             im_width=width, im_height=height)
 
+  def set_x1_y1_x2_y2(self, x1, y1, x2, y2):
+    self.update(x=x1, y=y1, width=x2 - x1 + 1, height=y2 - y1 + 1)
+
+  def get_x1_y1_x2_y2(self):
+    return self.x, self.y, self.x + self.width, self.y + self.width
+
   @staticmethod
   def from_x1_y1_x2_y2(x1, y1, x2, y2):
-    return BBox(x=x1, y=y1, width=x2 - x1 + 1, height=y2 - y1 + 1)
+    b = BBox()
+    b.set_x1_y1_x2_y2(x1, y1, x2, y2)
+    return b
 
   def is_full_image(self):
     return (
@@ -52,6 +62,32 @@ class BBox(object):
       self.y == 0 and
       self.width == self.im_width and
       self.height == self.im_height)
+
+  def get_corners(self):
+    # From origin in CCW order
+    return (
+      (self.x, self.y),
+      (self.x + self.width, self.y),
+      (self.x + self.width, self.y + self.height),
+      (self.x, self.y + self.height),
+    )
+
+  def get_num_onscreen_corners(self):
+    return sum(
+      1 for x, y in self.get_corners()
+      if (0 <= x < self.im_width) and (0 <= y < self.im_height))
+
+  def clamp_to_screen(self):
+    def clip_and_norm(v, max_v):
+      return np.clip(v, 0, max_v).round().astype(int)
+    
+    x1, y1, x2, y2 = self.get_x1_y1_x2_y2()
+    x1 = clip_and_norm(x1, bbox.im_width - 1)
+    y1 = clip_and_norm(y1, bbox.im_height - 1)
+    x2 = clip_and_norm(x2, bbox.im_width - 1)
+    y2 = clip_and_norm(y2, bbox.im_height - 1)
+    self.set_x1_y1_x2_y2(x1, y1, x2, y2)
+    
 
   def get_intersection_with(self, other):
     ix1 = max(self.x, other.x)

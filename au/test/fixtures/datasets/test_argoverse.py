@@ -77,6 +77,8 @@ class TestArgoverseImageTable(unittest.TestCase):
 
         # av.Fixtures.run_import(spark=spark)
         av.ImageAnnoTable.setup(spark)
+
+        av.ImageAnnoTable.show_stats(spark)
         # av.CroppedObjectImageTable.setup(spark=spark)
         
         

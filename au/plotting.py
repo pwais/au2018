@@ -67,7 +67,7 @@ def img_to_data_uri(img, format='jpg', jpeg_quality=75):
   
   return data_url
 
-def get_size_in_viewport(img_hw, viewport_hw):
+def get_hw_in_viewport(img_hw, viewport_hw):
   vh, vw = viewport_hw
   h, w = img_hw
   if h > vh:
@@ -88,13 +88,13 @@ def img_to_img_tag(
     jpeg_quality=75):
 
   if image_viewport_hw is not None:
-    th, tw = get_size_in_viewport(img.shape[:2], image_viewport_hw)
+    th, tw = get_hw_in_viewport(img.shape[:2], image_viewport_hw)
     import cv2
     img = cv2.resize(img, (tw, th), interpolation=cv2.INTER_NEAREST)
   
   dh, dw = img.shape[:2]
   if display_viewport_hw is not None:
-    dh, dw = get_size_in_viewport((dh, dw), display_viewport_hw)
+    dh, dw = get_hw_in_viewport((dh, dw), display_viewport_hw)
 
   src = img_to_data_uri(img, format=format, jpeg_quality=jpeg_quality)
   TEMPLATE = """<img src="{src}" height="{dh}" width="{dh}" />"""

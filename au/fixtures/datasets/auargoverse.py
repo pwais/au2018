@@ -31,6 +31,8 @@ import math
 import numpy as np
 import six
 
+from pyspark.sql import Row
+
 import klepto # For a cache of imageio Readers / Argoverse Loaders
 
 from argoverse.data_loading.argoverse_tracking_loader import \
@@ -120,6 +122,13 @@ class FrameURI(object):
     for k in self.__slots__:
       if k in kwargs:
         setattr(self, k, kwargs[k])
+
+  def set_crop(self, bbox):
+    self.update(
+      crop_x=bbox.x,
+      crop_y=bbox.y,
+      crop_w=bbox.width,
+      crop_h=bbox.height)
 
   def has_crop(self):
     return all(
@@ -284,27 +293,16 @@ class BBox(common.BBox):
       y1, y2 = np.min(uv[:, 1]), np.max(uv[:, 1])
       z = float(np.max(uv[:, 2]))
 
-      num_onscreen = sum(
-        1
-        for x, y in ((x1, y1), (x2, y2))
-        if (0 <= x < bbox.im_width) and (0 <= y < bbox.im_height))
+      bbox.set_x1_y1_x2_y2(x1, y1, x2, y2)
 
-      bbox.has_offscreen = ((z <= 0) or (num_onscreen < 2))
+      num_onscreen = bbox.get_num_onscreen_corners()
+      bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
       bbox.is_visible = (
         z > 0 and
         num_onscreen > 0 and
         object_label_record.occlusion < 100)
 
-      # Clamp to screen
-      x1 = np.clip(round(x1), 0, bbox.im_width - 1)
-      x2 = np.clip(round(x2), 0, bbox.im_width - 1)
-      y1 = np.clip(round(y1), 0, bbox.im_height - 1)
-      y2 = np.clip(round(y2), 0, bbox.im_height - 1)
-
-      bbox.x = int(x1)
-      bbox.y = int(y1)
-      bbox.width = int(x2 - x1)
-      bbox.height = int(y2 - y1)
+      bbox.clamp_to_screen()
       bbox.z = float(z)
 
     bbox = BBox()
@@ -358,7 +356,7 @@ class AVFrame(object):
     return self._loader # type: AUTrackingLoader
   
   @staticmethod
-  @klepto.lru_cache(maxsize=100)
+  @klepto.lru_cache(maxsize=1000)
   def __load_image(path):
     return imageio.imread(path)
 
@@ -463,11 +461,7 @@ class AVFrame(object):
     frame cropped down to the viewport of just `bbox`."""
 
     uri = copy.deepcopy(self.uri)
-    uri.update(
-      crop_x=bbox.x,
-      crop_y=bbox.y,
-      crop_w=bbox.width,
-      crop_h=bbox.height)
+    uri.set_crop(bbox)
 
     frame = AVFrame(uri=uri)
     return frame
@@ -538,9 +532,13 @@ class HardNegativeMiner(object):
       "Tried %s times and could not sample an unannotated box" % max_attempts)
     return None
 
+class RingMiner(HardNegativeMiner):
+  WIDTH_PIXELS_MU_STD = (121, 50)
+  HEIGHT_PIXELS_MU_STD = (121, 50)
 
-    
-
+class StereoMiner(HardNegativeMiner):
+  WIDTH_PIXELS_MU_STD = (121, 50)
+  HEIGHT_PIXELS_MU_STD = (121, 50)
 
 
 
@@ -941,6 +939,70 @@ class ImageAnnoTable(object):
   ## Utils
 
   @classmethod
+  def show_stats(cls, spark, df=None):
+    if not df:
+      df = cls.as_df(spark)
+    df.createOrReplaceTempView("nms")
+    title_queries = (
+      ("Width/Height stats by Split", """
+              SELECT
+                split,
+                AVG(width) AS w_mu, STD(width) AS w_std,
+                AVG(height) AS h_mu, STD(height) AS h_std
+              FROM nms
+              GROUP BY split"""
+      ),
+      ("Width/Height stats by City", """
+              SELECT
+                  city,
+                  AVG(width) AS w_mu, STD(width) AS w_std,
+                  AVG(height) AS h_mu, STD(height) AS h_std
+                FROM nms
+                GROUP BY city"""
+      ),
+      ("Width/Height stats by Category", """
+              SELECT
+                  category_name,
+                  AVG(width) AS w_mu, STD(width) AS w_std,
+                  AVG(height) AS h_mu, STD(height) AS h_std
+                FROM nms
+                GROUP BY category_name"""
+      ),
+      ("Anno Counts by Camera", """
+              SELECT
+                  camera,
+                  AVG(num_annos) AS num_annos_mu,
+                  STD(num_annos) AS num_annos_std
+                FROM (
+                  SELECT
+                    camera, COUNT(DISTINCT frame_id) AS num_annos
+                  FROM nms
+                )
+                GROUP BY camera
+                ORDER BY camera"""
+      ),
+      ("Pedestrian stats by Distance", """
+              SELECT
+                  camera,
+                  10 * MOD(distance_meters, 10) AS distance_bucket,
+                  AVG(width) AS w_mu, STD(width) AS w_std,
+                  AVG(height) AS h_mu, STD(height) AS h_std
+                FROM nms
+                WHERE
+                  category_name = 'PEDESTRIAN' AND 
+                  camera in ('ring_front_center', 'stereo_front_left')
+                GROUP BY camera, distance_bucket
+                ORDER BY camera ASC, distance_bucket ASC"""
+      ),
+    )
+    for title, query:
+      print(title)
+      spark.sql(query).show(truncate=False, n=100)
+      print()
+      print()
+      print()
+
+  @classmethod
   def _impute_rider_for_bikes(cls, spark, df):
     util.log.info("Imputing rider <-> bike matchings ...")
 
@@ -979,7 +1041,6 @@ class ImageAnnoTable(object):
             ridden_bike_distance=distance,
           )
 
-          from pyspark.sql import Row
           yield Row(**nearest_bike)
     
     # We'll group all rows in our DF by URI, then do bike<->rider
@@ -1201,16 +1262,24 @@ class ImageAnnoTable(object):
 ### Image Tables
 ###
 
-from au.fixtures.dataset import ImageTable
-class CroppedObjectImageTable(ImageTable):
+from collections import namedtuple
+cropattrs = namedtuple('cropattrs', 'anno cloud_npz viewport_annos')
 
-  VIEWPORT_HW = (150, 150)
-    # TODO: talk about pedestrian at 200 meters ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+class CroppedObjectImageTable(dataset.ImageTable):
+
+  # Center the object in a viewport of this size (pixels)
+  VIEWPORT_WH = (160, 160)
+  
+  # Pad the object by this many pixels against the viewport edges
+  PADDING_PIXELS = 10
+
+  # TODO mebbe make more rigorous check stats ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  NEGATIVE_SAMPLES_PER_FRAME = 20
 
   ANNOS = ImageAnnoTable
 
   TABLE_NAME = (
-    'argoverse_cropped_object_%s_%s' % (VIEWPORT_HW[0], VIEWPORT_HW[1]))
+    'argoverse_cropped_object_%s_%s' % (VIEWPORT_WH[0], VIEWPORT_WH[1]))
 
   @classmethod
   def setup(cls, **kwargs):
@@ -1226,17 +1295,37 @@ class CroppedObjectImageTable(ImageTable):
   ### Utils
 
   @classmethod
-  def _create_eligable_annos(cls, spark):
+  def get_crop_viewport(cls, bbox):
+    """Compute and return a viewport with the aspect ratio defined in
+    `VIEWPORT_WH` (and respecting `PADDING_PIXELS`) from which we can
+    create a crop of the object annotated in `bbox`.  Note that the
+    returned bbox may extend beyond the image edges."""
+    
+    radius = .5 * max(bbox.width, bbox.height)
+    padding_xy = 2. * cls.PADDING_PIXELS / np.array(cls.VIEWPORT_WH)
+    radius_xy = radius + .5 * padding_xy
+    box_center = np.array(
+      [bbox.x + .5 * bbox.width, bbox.y + .5 * bbox.height])
+    
+    x1, y1 = (box_center - radius_xy).round().astype(int).tolist()
+    x2, y2 = (box_center + radius_xy).round().astype(int).tolist()
+    cropped = copy.deepcopy(bbox)
+    cropped.set_x1_y1_x2_y2(x1, y1, x2, y2)
+    cropped.update(im_width=bbox.im_width, im_height=bbox.im_height)
+    return cropped
+
+  @classmethod
+  def _create_crop_spec_df(cls, spark):
     anno_df = cls.ANNOS.as_df(spark)
 
     # Filter
-    CONDS = (      
+    CONDS = (
       # Motion correction almost always succeeds
       anno_df.motion_corrected == True,
 
       # Ignore very small things
-      anno_df.height >= 50, 
-      anno_df.width >= 50,
+      anno_df.height >= 50, # pixels
+      anno_df.width >= 50,  # pixels
 
       # Skip sample set, and the test set has no labels
       anno_df.split != 'sample',
@@ -1245,9 +1334,102 @@ class CroppedObjectImageTable(ImageTable):
     for cond in CONDS:
       anno_df = anno_df.filter(cond)
     
-    print(anno_df.count())
-    anno_df.show()
+    def anno_row_to_crop_row(anno):
+      bbox = BBox(**anno.asDict())
+      cropbox = cls.get_crop_viewport(bbox)
+      has_offscreen = (cropbox.get_num_onscreen_corners() != 4)
+      # Skip anything that is too near (or off) the edge of the image
+      if has_offscreen:
+        return None
+      
+      return Row(**cropbox.to_dict())
+
+    crop_spec_rdd = anno_df.rdd.map(anno_row_to_crop_row)
+    crop_spec_rdd = crop_spec_rdd.filter(lambda x: x is not None)
+    crop_spec_df = spark.createDataFrame(crop_spec_rdd)
+
+
+    print(crop_spec_df.count())
+    crop_spec_df.show()
     import pdb; pdb.set_trace()
+
+    return crop_spec_df
+  
+  @classmethod
+  def _save_positives(cls, spark):
+    def anno_row_to_imagerow(crop_spec_row):
+      import cv2
+      frame = AVFrame(uri=anno.uri)
+      cropbox = BBox(**crop_spec_row.asDict())
+      cropped = frame.get_crop(cropbox)
+
+      # TODO clean up dataset.ImageRow so we can use it here with jpeg
+      def to_jpg_bytes(arr):
+        import imageio
+        import io
+        buf = io.BytesIO()
+        imageio.imwrite(buf, arr, 'jpeg', quality=100)
+        return bytearray(buf.getvalue())
+
+      def to_npz_bytes(arr):
+        import io
+        buf = io.BytesIO()
+        np.savez_compressed(buf, arr)
+        return bytearray(buf.getvalue())
+
+      crop_img = cv2.resize(cropped.image, cls.VIEWPORT_WH)
+      cloud = cropped.get_cloud_in_image()
+      # TODO: expose other labels as cols, add a shard key ~~~~~~~~~~~~~~~~~~~~~~~~
+      row = Row(
+        uri=cropped.uri,
+        split=cropped.split,
+        dataset='argoverse',
+        img_byte_jpeg=to_jpg_bytes(crop_img),
+        label=cropbox.category_name,
+        attrs=cropattrs(
+          anno=crop_spec_row,
+          cloud_npz=to_npz_bytes(cloud),
+          viewport_annos=''))# TODO ~~~~~~also add other labels~~~~~~~~~~~~~~~~~~~~~~cropped.image_bboxes))
+      return row
+    
+    crop_spec_df = cls._create_crop_spec_df(spark)
+    imagerow_rdd = crop_spec_df.rdd.map(anno_row_to_imagerow)
+    imagerow_df = spark.createDataFrame(imagerow_rdd)
+    imagerow_df.write.parquet(
+      cls.table_root(),
+      mode='append',        # Write positives and negatives in separate steps
+      compression='snappy') # TODO pyarrow / lz4
+  
+  @classmethod
+  def _save_negatives(cls, spark):
+    anno_df = cls.ANNOS.as_df(spark)
+    frame_uris = anno_df.select('frame_uri').distinct()
+    frame_uri_rdd = frame_uris.rdd.flatMap(lambda r: r)
+    
+    def iter_samples(uri):
+      frame = AVFrame(uri=uri)
+
+      # Get a miner
+      from argoverse.utils import camera_stats
+      if frame.uri.camera in camera_stats.RING_CAMERA_LIST:
+        miner = RingMiner(frame)
+      elif frame.uri.camera in camera_stats.STEREO_CAMERA_LIST:
+        miner = StereoMiner(frame)
+      else:
+        raise ValueError("Unknown camera: %s" % frame.uri.camera)
+      
+      for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
+        bbox = miner.next_sample()
+        cropbox = cls.get_crop_viewport(bbox)
+        has_offscreen = (cropbox.get_num_onscreen_corners() != 4)
+        # Skip anything that is too near (or off) the edge of the image
+        if has_offscreen:
+          continue
+        
+        cropbox.category_name = 'background'
+        yield frame.get_crop(cropbbox) # ~~~~ combine with other row encoding above
+
+
               
     
 """
