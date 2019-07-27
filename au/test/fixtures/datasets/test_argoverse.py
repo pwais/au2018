@@ -10,6 +10,38 @@ import unittest
 
 import pytest
 
+# Create a fake argoverse test fixture using only examples listed here
+TEST_FIXTURE_URIS = (
+  # Has bikes
+  'argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936',
+  
+  # Emergency vehicle
+  'argoverse://tarball_name=tracking_train1.tar.gz&log_id=f9fa3960-537f-3151-a1a3-37a9c0d6d7f7&split=train&camera=ring_rear_right&timestamp=315968463537902224',
+  
+  # Pedestrians
+  'argoverse://tarball_name=tracking_train1.tar.gz&log_id=1d676737-4110-3f7e-bec0-0c90f74c248f&split=train&camera=ring_front_left&timestamp=315984810796685856',
+
+  # Night scene
+  'argoverse://tarball_name=tracking_train1.tar.gz&log_id=53037376_5303_5303_5303_553038557184&split=train&camera=ring_front_left&timestamp=315967820634443792',
+
+  # Lens flare
+  'argoverse://tarball_name=tracking_train1.tar.gz&log_id=64c12551-adb9-36e3-a0c1-e43a0e9f3845&split=train&camera=ring_front_center&timestamp=315975339670154704',
+
+  # Complex from val
+  'argoverse://tarball_name=tracking_val.tar.gz&log_id=15c802a9-0f0e-3c87-b516-a3fa02f1ecb0&split=val&camera=ring_front_center&timestamp=315970757222656344',
+  'argoverse://tarball_name=tracking_val.tar.gz&log_id=22160544_2216_2216_2216_722161741824&split=val&camera=ring_front_center&timestamp=315966714291915976',
+
+  # Misc from sample
+  'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=stereo_front_left&timestamp=315978417887655552',
+  'argoverse://tarball_name=tracking_sample.tar.gz&log_id=c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_right&timestamp=315978410894656888',
+
+  # Misc from train
+  'argoverse://tarball_name=tracking_train1.tar.gz&log_id=1d676737-4110-3f7e-bec0-0c90f74c248f&split=train&camera=ring_front_center&timestamp=315984808032785816',
+  'argoverse://tarball_name=tracking_train1.tar.gz&log_id=53037376_5303_5303_5303_553038557184&split=train&camera=ring_front_center&timestamp=315967813075342440',
+)
+
+
+
 class TestArgoverseImageTable(unittest.TestCase):
   """Exercise utilties in the Argoverse module.  Allow soft failures
   if the user has none of the required tarballs.  We assume exclusively
@@ -23,12 +55,16 @@ class TestArgoverseImageTable(unittest.TestCase):
     tracking_sample = av.Fixtures.tarball_dir(av.Fixtures.TRACKING_SAMPLE)
     cls.have_fixtures = os.path.exists(tracking_sample)
     
-    # from _pytest.monkeypatch import MonkeyPatch
-    # monkeypatch = MonkeyPatch()
-    # TEST_TEMPDIR = os.path.join(
-    #                     testconf.TEST_TEMPDIR_ROOT,
-    #                     'test_argoverse')
-    # testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+    from _pytest.monkeypatch import MonkeyPatch
+    monkeypatch = MonkeyPatch()
+    TEST_TEMPDIR = os.path.join(
+                        testconf.TEST_TEMPDIR_ROOT,
+                        'test_argoverse')
+    testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+
+  def test_fixture_uris_are_good(self):
+    for uri in TEST_FIXTURE_URIS:
+      uri = av.FrameU
 
   def test_basic(self):
     assert av.Fixtures.TRACKING_SAMPLE in av.Fixtures.all_tarballs()
