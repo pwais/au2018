@@ -22,7 +22,6 @@ def use_tempdir(monkeypatch, test_tempdir):
     if k.startswith('AU'):
       monkeypatch.setenv(k, getattr(conf, k))
 
-
   util.mkdir(test_tempdir)
   if not os.environ.get('AU_NO_DEL_TEST_TEMPDIR'):
     util.rm_rf(test_tempdir)

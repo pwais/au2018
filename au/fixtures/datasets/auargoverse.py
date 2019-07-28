@@ -463,7 +463,7 @@ class AVFrame(object):
     uri = copy.deepcopy(self.uri)
     uri.set_crop(bbox)
 
-    frame = AVFrame(uri=uri)
+    frame = AVFrame(uri=uri, FIXTURES=self.FIXTURES)
     return frame
 
 class HardNegativeMiner(object):
@@ -575,7 +575,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     # root_dir/log_name -> virtual_root/log_name
     import tempfile
     virtual_root = os.path.join(
-                    tempfile.gettempdir(),
+                    conf.AU_CACHE_TMP,
                     'argoverse_loader',
                     log_name)
     util.mkdir(virtual_root)
@@ -742,7 +742,7 @@ class Fixtures(object):
 
   ROOT = os.path.join(conf.AU_DATA_CACHE, 'argoverse')
 
-  TEST_FIXTURE_DIR = os.path.join(conf.AU_DY_TEST_FIXTURES, 'argoverse')
+  # TEST_FIXTURE_DIR = os.path.join(conf.AU_DY_TEST_FIXTURES, 'argoverse') ~~~~~~~~~~~
 
 
   ## Source Data
@@ -920,7 +920,7 @@ class Fixtures(object):
 class ImageAnnoTable(object):
   """A table of argoverse annotations projected into image space."""
 
-  FIXTURES = Fixtures()
+  FIXTURES = Fixtures
 
   @classmethod
   def table_root(cls):
@@ -1104,7 +1104,7 @@ class ImageAnnoTable(object):
       from collections import namedtuple
       pt = namedtuple('pt', 'x y z')
 
-      frame = AVFrame(uri=uri)
+      frame = AVFrame(uri=uri, FIXTURES=cls.FIXTURES)
       for box in frame.image_bboxes:
         row = {}
 
@@ -1232,7 +1232,7 @@ class ImageAnnoTable(object):
               BASE = "/view?"
               href = BASE + parse.urlencode({'uri': row.uri})
 
-              frame = AVFrame(uri=row.uri)
+              frame = AVFrame(uri=row.uri, FIXTURES=cls.FIXTURES)
               debug_img = frame.get_debug_image()
               
               if row.ridden_bike_track_id:
@@ -1241,7 +1241,8 @@ class ImageAnnoTable(object):
                 # image for the rider and blend using OpenCV
                 best_bike_uri = FrameURI.from_str(row.uri)
                 best_bike_uri.track_id = row.ridden_bike_track_id
-                debug_img_bike = AVFrame(uri=best_bike_uri).get_debug_image()
+                dframe = AVFrame(uri=best_bike_uri, FIXTURES=cls.FIXTURES)
+                debug_img_bike = dframe.get_debug_image()
                 import cv2
                 debug_img[:] = cv2.addWeighted(
                   debug_img, 0.5, debug_img_bike, 0.5, 0)
@@ -1377,7 +1378,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
   def _save_positives(cls, spark):
     def anno_row_to_imagerow(crop_spec_row):
       import cv2
-      frame = AVFrame(uri=anno.uri)
+      frame = AVFrame(uri=anno.uri, FIXTURES=cls.FIXTURES)
       cropbox = BBox(**crop_spec_row.asDict())
       cropped = frame.get_crop(cropbox)
 
@@ -1425,7 +1426,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     frame_uri_rdd = frame_uris.rdd.flatMap(lambda r: r)
     
     def iter_samples(uri):
-      frame = AVFrame(uri=uri)
+      frame = AVFrame(uri=uri, FIXTURES=cls.FIXTURES)
 
       # Get a miner
       from argoverse.utils import camera_stats

@@ -1,4 +1,4 @@
-
+from au import conf
 from au import util
 from au.fixtures.datasets import auargoverse as av
 from au.test import testconf
@@ -40,11 +40,27 @@ TEST_FIXTURE_URIS = (
   'argoverse://tarball_name=tracking_train1.tar.gz&log_id=53037376_5303_5303_5303_553038557184&split=train&camera=ring_front_center&timestamp=315967813075342440',
 )
 
-class TestImageAnnoTable(av.ImageAnnoTable):
-  @classmethod
-  def table_root(cls):
-    return os.path.join(
-      testconf.TEST_TEMPDIR_ROOT, 'test_argoverse_image_annos')
+FIXTURES_BASE_PATH = os.path.join(conf.AU_ROOT, 'au/test/')
+
+TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_argoverse')
+
+# class TestFixturesBase(av.Fixtures):
+#   ROOT = os.path.join(TEST_TEMPDIR, 'argoverse')
+
+#   def setup(cls):
+#     try:
+#       os.symlink(av.Fixtures.ROOT, cls.ROOT)
+#     except FileExistsError:
+#       pass
+
+#   @classmethod
+#   def tarballs_dir(cls):
+#     # Provide read access to real uncompressed tarballs because
+#     # copying them is prohibitive
+#     return REAL_TARBALLS_ROOT
+
+class TestImageAnnoTableBase(av.ImageAnnoTable):
+  # NB: We will override FIXTURES at test time
 
   @classmethod
   def _create_uri_rdd(cls, spark, splits=None):
@@ -61,17 +77,42 @@ class TestArgoverseImageTable(unittest.TestCase):
      2) the user has no fixtures and does not need them
   """
 
+  # We'll set up these classes, if posible, in test setup
+  TestFixtures = None
+  ImageAnnoTable = None
+
   @classmethod
   def setUpClass(cls):
-    tracking_sample = av.Fixtures.tarball_dir(av.Fixtures.TRACKING_SAMPLE)
-    cls.have_fixtures = os.path.exists(tracking_sample)
-    
+    cls.have_fixtures = all(
+          os.path.exists(av.Fixtures.tarball_dir(tarball))
+          for tarball in av.Fixtures.TRACKING_TARBALLS)
+
+    TEST_FIXTURES_ROOT = os.path.join(TEST_TEMPDIR, 'argoverse_data_root')
+
     from _pytest.monkeypatch import MonkeyPatch
     monkeypatch = MonkeyPatch()
-    TEST_TEMPDIR = os.path.join(
-                        testconf.TEST_TEMPDIR_ROOT,
-                        'test_argoverse')
-    # testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+    testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
+    
+    if cls.have_fixtures:
+      util.mkdir(TEST_TEMPDIR)
+      try:
+        os.symlink(av.Fixtures.ROOT, TEST_FIXTURES_ROOT)
+      except FileExistsError:
+        pass
+
+      class TestFixtures(av.Fixtures):
+        # Use patched value
+        ROOT = TEST_FIXTURES_ROOT
+
+      class TestImageAnnoTable(TestImageAnnoTableBase):
+        FIXTURES = TestFixtures
+    
+      cls.TestFixtures = TestFixtures
+      cls.ImageAnnoTable = TestImageAnnoTable
+    
+    if cls.ImageAnnoTable:
+      with testutils.LocalSpark.sess() as spark:
+        cls.ImageAnnoTable.setup(spark)
 
   def test_fixture_uris(self):
     for s in TEST_FIXTURE_URIS:
@@ -89,18 +130,47 @@ class TestArgoverseImageTable(unittest.TestCase):
         loader = av.Fixtures.get_loader(uri)
         assert loader
 
-  def test_image_anno_table(self):
+  @pytest.mark.slow
+  def test_image_anno_table_stats(self):
+    if not self.ImageAnnoTable:
+      return
+    
     with testutils.LocalSpark.sess() as spark:
-      TestImageAnnoTable.setup(spark)
+      anno_df = self.ImageAnnoTable.as_df(spark)
 
-      df = TestImageAnnoTable.as_df(spark)
-      title_pdf = TestImageAnnoTable.get_stats_dfs(spark)
-      for title, pdf in title_pdf:
-        print(title)
-        print(pdf)
-        print()
-      # import pdb; pdb.set_trace()
-      df.show()
+      ### Sanity Checks
+      expected_num_frames = len(TEST_FIXTURE_URIS)
+
+      actual_frames = anno_df.select('frame_uri').distinct()
+      actual_frames = actual_frames.rdd.flatMap(lambda x: x).collect()
+      assert sorted(actual_frames) == sorted(TEST_FIXTURE_URIS)
+
+      num_annos = anno_df.count()
+      assert num_annos >= expected_num_frames
+
+      ### Stats Checks
+      # We'll just do a 'binary' diff of stats for now because it's easy
+      # and sanity-checks of fixture updates (i.e. adding a URI) should
+      # be easy to check / fix.
+      title_pdf = self.ImageAnnoTable.get_stats_dfs(spark)
+      actual_report = '\n\n'.join(
+                        '%s\n%s' % (title, str(pdf))
+                          for title, pdf in title_pdf)
+      util.log.info(
+        'test_image_anno_table_stats actual report: \n\n' + actual_report)
+      
+      # Save the actual report
+      FIXTURE_NAME = 'test_image_anno_table_stats.txt'
+      actual_path = os.path.join(TEST_TEMPDIR, 'actual_' + FIXTURE_NAME)
+      with open(actual_path, 'w') as f:
+        f.write(actual_report)
+      FIXTURE_PATH = os.path.join(FIXTURES_BASE_PATH, FIXTURE_NAME)
+      expected_report = open(FIXTURE_PATH, 'r').read()
+
+      assert expected_report == actual_report, """
+        Report mismatch; to update fixture use:
+        cp %s %s""" % (actual_path, FIXTURE_PATH)
+
 
   # def test_samplexxxxxxx(self):
   #   # if not self.have_fixtures:
