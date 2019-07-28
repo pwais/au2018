@@ -419,7 +419,8 @@ class AVFrame(object):
       ]
 
       bboxes = [
-        BBox.from_argoverse_label(self.uri, olr) for olr in av_label_objects
+        BBox.from_argoverse_label(self.uri, olr, fixures_cls=self.FIXTURES)
+        for olr in av_label_objects
       ]
 
       # Ingore invisible things
@@ -643,7 +644,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     
     return objs
 
-  # @klepto.lru_cache(maxsize=100) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~FIXME
+  # @klepto.lru_cache(maxsize=1000, ignore=(0,)) doesnt seem to work concurrent ... 
   def get_maybe_motion_corrected_cloud(self, timestamp):
     """Similar to `get_lidar()` but motion-corrects the entire cloud
     to (likely camera-time) `timestamp`.  Return also True if
@@ -787,6 +788,10 @@ class Fixtures(object):
     return os.path.join(cls.ROOT, 'index')
 
   @classmethod
+  def loader_cache_file(cls):
+    return os.path.join(cls.index_root(), 'loader_cache')
+
+  @classmethod
   def image_annos_reports_root(cls):
     return os.path.join(cls.index_root(), 'image_annos')
 
@@ -812,14 +817,51 @@ class Fixtures(object):
   @classmethod
   @klepto.inf_cache(ignore=(0,))
   def _get_loader(cls, tarball_name, log_id):
+    loader = None # Build this
     # Need to find the dir corresponding to log_id
     base_path = cls.tarball_dir(tarball_name)
     for log_dir in cls.get_log_dirs(base_path):
       cur_log_id = os.path.split(log_dir)[-1]
       if cur_log_id == log_id:
-        return AUTrackingLoader(os.path.dirname(log_dir), log_id)
+        loader = AUTrackingLoader(os.path.dirname(log_dir), log_id)
+        break
     
-    raise ValueError("Could not find log %s in %s" % (log_id, base_path))
+    assert loader, "Could not find log %s in %s" % (log_id, base_path)
+    return loader
+
+
+    # # These stupid Loader objects are painfully, painfully expensive because
+    # # they do massive filesystem stat()s.  Thus we try to cache using a file
+    # # cache that can be shared *across Spark workers.*  The user may need to
+    # # bust this cache in the event of code change.  TODO: build a spark thing so this can be done once per run ~~~~~~~
+    
+    # # Shelve is not concurrent
+    # lock = util.SystemLock(abspath=cls.loader_cache_file() + '.aulock')
+    # with lock:
+    #   if not hasattr(cls, '_loader_cache_map'):
+    #     import shelve
+    #     import pickle
+    #     util.mkdir(os.path.dirname(cls.loader_cache_file()))  
+    #     cls._loader_cache_map = shelve.open(cls.loader_cache_file())
+    
+    #   key = tarball_name + '.' + log_id
+    #   if key not in cls._loader_cache_map:
+    #     loader = None # Build this
+    #     # Need to find the dir corresponding to log_id
+    #     base_path = cls.tarball_dir(tarball_name)
+    #     for log_dir in cls.get_log_dirs(base_path):
+    #       cur_log_id = os.path.split(log_dir)[-1]
+    #       if cur_log_id == log_id:
+    #         loader = AUTrackingLoader(os.path.dirname(log_dir), log_id)
+    #         break
+        
+    #     assert loader, "Could not find log %s in %s" % (log_id, base_path)
+
+    #     cls._loader_cache_map[key] = loader
+    #     cls._loader_cache_map.sync()
+
+    #   loader = cls._loader_cache_map[key]
+    # return loader
 
   # @classmethod
   # def _get_loader(cls, tarball_name, log_id):
@@ -928,6 +970,8 @@ class ImageAnnoTable(object):
 
   FIXTURES = Fixtures
 
+  ## Public API
+
   @classmethod
   def table_root(cls):
     return os.path.join(conf.AU_TABLE_CACHE, 'argoverse_image_annos')
@@ -944,89 +988,8 @@ class ImageAnnoTable(object):
     df = spark.read.parquet(cls.table_root())
     return df
 
-  ## Utils
 
-  @classmethod
-  def get_stats_dfs(cls, spark, df=None):
-    if not df:
-      df = cls.as_df(spark)
-    df.createOrReplaceTempView("nms")
-    title_queries = (
-      ("Size stats by Split", """
-              SELECT
-                split,
-                AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                COUNT(*) AS num_annos,
-                COUNT(DISTINCT frame_uri) AS num_frames
-              FROM nms
-              GROUP BY split"""
-      ),
-      ("Size stats by City", """
-              SELECT
-                  city,
-                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                  COUNT(*) AS num_annos,
-                  COUNT(DISTINCT frame_uri) AS num_frames
-                FROM nms
-                GROUP BY city"""
-      ),
-      ("Size stats by Category", """
-              SELECT
-                  category_name,
-                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                  COUNT(*) AS num_annos,
-                  COUNT(DISTINCT frame_uri) AS num_frames
-                FROM nms
-                GROUP BY category_name"""
-      ),
-      ("Size stats by Camera", """
-              SELECT
-                  camera,
-                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                  COUNT(*) AS num_annos,
-                  COUNT(DISTINCT frame_uri) AS num_frames
-                FROM nms
-                GROUP BY camera"""
-      ),
-      ("Anno Counts by Camera", """
-              SELECT
-                  camera,
-                  AVG(num_annos) AS num_annos_mu,
-                  STD(num_annos) AS num_annos_std,
-                  SUM(num_annos) AS num_annos_total,
-                  COUNT(*) AS num_frames_total
-                FROM (
-                  SELECT
-                    camera, frame_uri, COUNT(*) AS num_annos
-                  FROM nms
-                  GROUP BY camera, frame_uri
-                )
-                GROUP BY camera
-                ORDER BY camera"""
-      ),
-      ("Pedestrian stats by Distance", """
-              SELECT
-                  camera,
-                  10 * MOD(ROUND(distance_meters), 10) AS distance_m_bucket,
-                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                  COUNT(*) AS num_annos,
-                  COUNT(DISTINCT frame_uri) AS num_frames
-                FROM nms
-                WHERE
-                  category_name = 'PEDESTRIAN' AND 
-                  camera in ('ring_front_center', 'stereo_front_left')
-                GROUP BY camera, distance_m_bucket
-                ORDER BY camera ASC, distance_m_bucket ASC"""
-      ),
-    )
-    for title, query in title_queries:
-      util.log.info("Running %s ..." % title)
-      yield title, spark.sql(query).toPandas()
+  ## Utils
 
   @classmethod
   def _impute_rider_for_bikes(cls, spark, df):
@@ -1156,42 +1119,130 @@ class ImageAnnoTable(object):
     df = cls._impute_rider_for_bikes(spark, df)
     return df
 
+
+
+class AnnoReports(object):
+  """HTML reports mined from the argoverse dataset"""
+
+  ANNO_TABLE = ImageAnnoTable
+
   @classmethod
-  def save_anno_reports(cls, spark=None, dest_dir=None):
-    spark = spark or Spark.getOrCreate()
-    dest_dir = dest_dir or cls.FIXTURES.image_annos_reports_root()
-    util.mkdir(dest_dir)
+  def create_reports(cls, spark=None, dest_dir=None):
+    with Spark.sess(spark) as spark:
+      dest_dir = dest_dir or cls.ANNO_TABLE.FIXTURES.image_annos_reports_root()
+      util.mkdir(dest_dir)
+      util.log.info("Creating annotation reports in %s ..." % dest_dir)
 
-    util.log.info("Creating image annotation reports in %s ..." % dest_dir)
+      ## First do overall stats reports
+      for title, pdf in cls.get_overall_stats_dfs(spark):
+        fname = title.replace(' ', '_') + '.html'
+        with open(os.path.join(dest_dir, fname), 'w') as f:
+          f.write(pdf.to_html())
+        util.log.info("Saved simple report: \n%s\n%s\n\n" % (title, pdf))
+      
+      ## Now do histogram reports
+      cls.save_histogram_reports(spark, dest_dir)      
 
-    ## First do overall stats reports
-    for title, pdf in cls.get_stats_dfs(spark):
-      fname = title.replace(' ', '_') + '.html'
-      with open(os.path.join(dest_dir, fname), 'w') as f:
-        f.write(pdf.to_html())
-      util.log.info("Saved simple report: \n%s\n%s\n\n" % (title, pdf))
+  @classmethod
+  def get_overall_stats_dfs(cls, spark):
+    """Generate a sequence of title/pandas.Dataframe pairs detailing overall
+    dataset statistics."""
+    df = cls.ANNO_TABLE.as_df(spark)
+    df.createOrReplaceTempView("nms")
+    title_queries = (
+      ("Size stats by Split", """
+              SELECT
+                split,
+                AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                COUNT(*) AS num_annos,
+                COUNT(DISTINCT frame_uri) AS num_frames
+              FROM nms
+              GROUP BY split"""
+      ),
+      ("Size stats by City", """
+              SELECT
+                  city,
+                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                  COUNT(*) AS num_annos,
+                  COUNT(DISTINCT frame_uri) AS num_frames
+                FROM nms
+                GROUP BY city"""
+      ),
+      ("Size stats by Category", """
+              SELECT
+                  category_name,
+                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                  COUNT(*) AS num_annos,
+                  COUNT(DISTINCT frame_uri) AS num_frames
+                FROM nms
+                GROUP BY category_name"""
+      ),
+      ("Size stats by Camera", """
+              SELECT
+                  camera,
+                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                  COUNT(*) AS num_annos,
+                  COUNT(DISTINCT frame_uri) AS num_frames
+                FROM nms
+                GROUP BY camera"""
+      ),
+      ("Anno Counts by Camera", """
+              SELECT
+                  camera,
+                  AVG(num_annos) AS num_annos_mu,
+                  STD(num_annos) AS num_annos_std,
+                  SUM(num_annos) AS num_annos_total,
+                  COUNT(*) AS num_frames_total
+                FROM (
+                  SELECT
+                    camera, frame_uri, COUNT(*) AS num_annos
+                  FROM nms
+                  GROUP BY camera, frame_uri
+                )
+                GROUP BY camera
+                ORDER BY camera"""
+      ),
+      ("Pedestrian stats by Distance", """
+              SELECT
+                  camera,
+                  10 * MOD(ROUND(distance_meters), 10) AS distance_m_bucket,
+                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                  COUNT(*) AS num_annos,
+                  COUNT(DISTINCT frame_uri) AS num_frames
+                FROM nms
+                WHERE
+                  category_name = 'PEDESTRIAN' AND 
+                  camera in ('ring_front_center', 'stereo_front_left')
+                GROUP BY camera, distance_m_bucket
+                ORDER BY camera ASC, distance_m_bucket ASC"""
+      ),
+    )
+    for title, query in title_queries:
+      util.log.info("Running %s ..." % title)
+      yield title, spark.sql(query).toPandas()
 
+  @classmethod
+  def save_histogram_reports(cls, spark, dest_dir):
     ## Histogram reports
     # For each of these metrics in ImageAnnoTable, generate a distinct plot
     # for each sub-pivot column
     SPLIT_AND_CITY = ['split', 'city']
-    SPLIT_CITY_CATEGORY = SPLIT_AND_CITY + ['category_name']
-    SPLIT_CITY_CAMERA = SPLIT_AND_CITY + ['camera']
     CATEGORY_AND_CAMERA = ['category_name', 'coarse_category', 'camera']
     ALL_SUB_PIVOTS = SPLIT_AND_CITY + CATEGORY_AND_CAMERA
     METRIC_AND_SUB_PIVOTS = (
-      ('distance_meters',       ALL_SUB_PIVOTS),
-      ('height_meters',         SPLIT_CITY_CATEGORY),
-      ('width_meters',          SPLIT_CITY_CATEGORY),
-      ('length_meters',         SPLIT_AND_CITY),
-      ('height',                SPLIT_CITY_CAMERA),
-      ('width',                 SPLIT_CITY_CAMERA),
-      ('relative_yaw_radians',  SPLIT_AND_CITY),
+      ('distance_meters',                 ALL_SUB_PIVOTS),
+      ('length_meters',                   SPLIT_AND_CITY + ['category_name']),
+      ('relative_yaw_radians',            SPLIT_AND_CITY),
       ('relative_yaw_to_camera_radians',  ALL_SUB_PIVOTS),
-      ('occlusion',             SPLIT_AND_CITY),
+      ('occlusion',                       SPLIT_AND_CITY),
 
       # Special handling! See below
-      ('ridden_bike_distance',   ALL_SUB_PIVOTS),
+      ('ridden_bike_distance',            ALL_SUB_PIVOTS),
     )
 
     num_plots = sum(len(spvs) for metric, spvs in METRIC_AND_SUB_PIVOTS)
@@ -1199,7 +1250,7 @@ class ImageAnnoTable(object):
     t = util.ThruputObserver(name='plotting', n_total=num_plots)
     
     # Generate plots!
-    anno_df = cls.as_df(spark)
+    anno_df = cls.ANNO_TABLE.as_df(spark)
     for metric, sub_pivots in METRIC_AND_SUB_PIVOTS:
       for sub_pivot in sub_pivots:
         df = anno_df
@@ -1252,11 +1303,16 @@ class ImageAnnoTable(object):
             
             def disp_row(title, row):
               from six.moves.urllib import parse
-              TEMPLATE = """<a href="{href}">{title} {img_tag} {uri}</a>"""
+              TEMPLATE = """
+                <a href="{href}">{title}</a><br />
+                {img_tag}<br />
+                <pre>{uri}</pre>
+                <br />
+              """
               BASE = "/view?"
               href = BASE + parse.urlencode({'uri': row.uri})
 
-              frame = AVFrame(uri=row.uri, FIXTURES=cls.FIXTURES)
+              frame = AVFrame(uri=row.uri, FIXTURES=cls.ANNO_TABLE.FIXTURES)
               debug_img = frame.get_debug_image()
               
               if row.ridden_bike_track_id:
@@ -1265,7 +1321,9 @@ class ImageAnnoTable(object):
                 # image for the rider and blend using OpenCV
                 best_bike_uri = FrameURI.from_str(row.uri)
                 best_bike_uri.track_id = row.ridden_bike_track_id
-                dframe = AVFrame(uri=best_bike_uri, FIXTURES=cls.FIXTURES)
+                dframe = AVFrame(
+                            uri=best_bike_uri,
+                            FIXTURES=cls.ANNO_TABLE.FIXTURES)
                 debug_img_bike = dframe.get_debug_image()
                 import cv2
                 debug_img[:] = cv2.addWeighted(
@@ -1273,7 +1331,7 @@ class ImageAnnoTable(object):
 
               img_tag = aupl.img_to_img_tag(
                           debug_img,
-                          jpeg_quality=50,
+                          jpeg_quality=60,
                           display_viewport_hw=(300, 300))
               s = TEMPLATE.format(
                               href=href,

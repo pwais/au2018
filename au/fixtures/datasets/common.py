@@ -48,7 +48,7 @@ class BBox(object):
     self.update(x=x1, y=y1, width=x2 - x1 + 1, height=y2 - y1 + 1)
 
   def get_x1_y1_x2_y2(self):
-    return self.x, self.y, self.x + self.width, self.y + self.width
+    return self.x, self.y, self.x + self.width, self.y + self.height
 
   @staticmethod
   def from_x1_y1_x2_y2(x1, y1, x2, y2):
@@ -82,7 +82,6 @@ class BBox(object):
       return int(round(v)) if v is not None else v
     for attr in attrs:
       setattr(self, attr, quantize(getattr(self, attr)))
-
 
   def clamp_to_screen(self):
     def clip_and_norm(v, max_v):

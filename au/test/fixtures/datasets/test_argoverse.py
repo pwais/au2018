@@ -44,21 +44,6 @@ FIXTURES_BASE_PATH = os.path.join(conf.AU_ROOT, 'au/test/')
 
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_argoverse')
 
-# class TestFixturesBase(av.Fixtures):
-#   ROOT = os.path.join(TEST_TEMPDIR, 'argoverse')
-
-#   def setup(cls):
-#     try:
-#       os.symlink(av.Fixtures.ROOT, cls.ROOT)
-#     except FileExistsError:
-#       pass
-
-#   @classmethod
-#   def tarballs_dir(cls):
-#     # Provide read access to real uncompressed tarballs because
-#     # copying them is prohibitive
-#     return REAL_TARBALLS_ROOT
-
 class TestImageAnnoTableBase(av.ImageAnnoTable):
   # NB: We will override FIXTURES at test time
 
@@ -80,6 +65,7 @@ class TestArgoverseImageTable(unittest.TestCase):
   # We'll set up these classes, if posible, in test setup
   TestFixtures = None
   ImageAnnoTable = None
+  AnnoReports = None
 
   @classmethod
   def setUpClass(cls):
@@ -87,30 +73,40 @@ class TestArgoverseImageTable(unittest.TestCase):
           os.path.exists(av.Fixtures.tarball_dir(tarball))
           for tarball in av.Fixtures.TRACKING_TARBALLS)
 
-    TEST_FIXTURES_ROOT = os.path.join(TEST_TEMPDIR, 'argoverse_data_root')
+    TEST_FIXTURES_ROOT = os.path.join(TEST_TEMPDIR, 'real_argoverse_data_root')
+    REAL_FIXTURES_ROOT = av.Fixtures.ROOT
 
+    # Now monkeypatch au.conf and friends
     from _pytest.monkeypatch import MonkeyPatch
     monkeypatch = MonkeyPatch()
     testconf.use_tempdir(monkeypatch, TEST_TEMPDIR)
     
     if cls.have_fixtures:
-      util.mkdir(TEST_TEMPDIR)
+      # Symlink in the real data for TestFixtures because copying
+      # is too expensive
+      util.mkdir(os.path.dirname(TEST_FIXTURES_ROOT)) # or symlink will 404
       try:
-        os.symlink(av.Fixtures.ROOT, TEST_FIXTURES_ROOT)
+        os.symlink(REAL_FIXTURES_ROOT, TEST_FIXTURES_ROOT)
       except FileExistsError:
         pass
-
       class TestFixtures(av.Fixtures):
-        # Use patched value
-        ROOT = TEST_FIXTURES_ROOT
-
+        ROOT = TEST_TEMPDIR
+        @classmethod
+        def tarballs_dir(cls):
+          return os.path.join(REAL_FIXTURES_ROOT, 'tarballs')
+      
       class TestImageAnnoTable(TestImageAnnoTableBase):
         FIXTURES = TestFixtures
     
+      class TestAnnoReports(av.AnnoReports):
+        ANNO_TABLE = TestImageAnnoTable
+
       cls.TestFixtures = TestFixtures
       cls.ImageAnnoTable = TestImageAnnoTable
+      cls.AnnoReports = TestAnnoReports
     
     if cls.ImageAnnoTable:
+      # Many tests need this fixture
       with testutils.LocalSpark.sess() as spark:
         cls.ImageAnnoTable.setup(spark)
 
@@ -127,7 +123,7 @@ class TestArgoverseImageTable(unittest.TestCase):
 
       # Only require the user to have the sample fixture set up
       if self.have_fixtures and uri.split == 'sample':
-        loader = av.Fixtures.get_loader(uri)
+        loader = cls.TestFixtures.get_loader(uri)
         assert loader
 
   @pytest.mark.slow
@@ -148,28 +144,35 @@ class TestArgoverseImageTable(unittest.TestCase):
       num_annos = anno_df.count()
       assert num_annos >= expected_num_frames
 
-      ### Stats Checks
-      # We'll just do a 'binary' diff of stats for now because it's easy
-      # and sanity-checks of fixture updates (i.e. adding a URI) should
-      # be easy to check / fix.
-      title_pdf = self.ImageAnnoTable.get_stats_dfs(spark)
-      actual_report = '\n\n'.join(
-                        '%s\n%s' % (title, str(pdf))
-                          for title, pdf in title_pdf)
-      util.log.info(
-        'test_image_anno_table_stats actual report: \n\n' + actual_report)
-      
-      # Save the actual report
-      FIXTURE_NAME = 'test_image_anno_table_stats.txt'
-      actual_path = os.path.join(TEST_TEMPDIR, 'actual_' + FIXTURE_NAME)
-      with open(actual_path, 'w') as f:
-        f.write(actual_report)
-      FIXTURE_PATH = os.path.join(FIXTURES_BASE_PATH, FIXTURE_NAME)
-      expected_report = open(FIXTURE_PATH, 'r').read()
+      if self.AnnoReports:
+        ### Stats Checks
+        # We'll just do a 'binary' diff of stats for now because it's easy
+        # and sanity-checks of fixture updates (i.e. adding a URI) should
+        # be easy to check / fix.
+        title_pdf = self.AnnoReports.get_overall_stats_dfs(spark)
+        actual_report = '\n\n'.join(
+                          '%s\n%s' % (title, str(pdf))
+                            for title, pdf in title_pdf)
+        util.log.info(
+          'test_image_anno_table_stats actual report: \n\n' + actual_report)
+        
+        # Save the actual report
+        FIXTURE_NAME = 'test_image_anno_table_stats.txt'
+        actual_path = os.path.join(TEST_TEMPDIR, 'actual_' + FIXTURE_NAME)
+        with open(actual_path, 'w') as f:
+          f.write(actual_report)
+        FIXTURE_PATH = os.path.join(FIXTURES_BASE_PATH, FIXTURE_NAME)
+        expected_report = open(FIXTURE_PATH, 'r').read()
 
-      assert expected_report == actual_report, """
-        Report mismatch; to update fixture use:
-        cp %s %s""" % (actual_path, FIXTURE_PATH)
+        assert expected_report == actual_report, """
+          Report mismatch; to update fixture use:
+          cp %s %s""" % (actual_path, FIXTURE_PATH)
+
+  @pytest.mark.slow
+  def test_image_anno_table_reports_smoke(self):
+    with testutils.LocalSpark.sess() as spark:
+      self.AnnoReports.create_reports(spark)
+
 
 
   # def test_samplexxxxxxx(self):
