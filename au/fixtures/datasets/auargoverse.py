@@ -536,12 +536,18 @@ class HardNegativeMiner(object):
     return None
 
 class RingMiner(HardNegativeMiner):
-  WIDTH_PIXELS_MU_STD = (121, 50)
-  HEIGHT_PIXELS_MU_STD = (121, 50)
+  # We could perhaps choose these using camera intrinsics, but instead
+  # we use the empircal distributon from existing annotations
+  # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
+  WIDTH_PIXELS_MU_STD = (107.842119, 123.289099)
+  HEIGHT_PIXELS_MU_STD = (92.435195, 107.863304)
 
 class StereoMiner(HardNegativeMiner):
-  WIDTH_PIXELS_MU_STD = (121, 50)
-  HEIGHT_PIXELS_MU_STD = (121, 50)
+  # We could perhaps choose these using camera intrinsics, but instead
+  # we use the empircal distributon from existing annotations
+  # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
+  WIDTH_PIXELS_MU_STD = (201.600639, 189.607279)
+  HEIGHT_PIXELS_MU_STD = (196.776626, 198.066231)
 
 
 
@@ -976,6 +982,16 @@ class ImageAnnoTable(object):
                 FROM nms
                 GROUP BY category_name"""
       ),
+      ("Size stats by Camera", """
+              SELECT
+                  camera,
+                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+                  COUNT(*) AS num_annos,
+                  COUNT(DISTINCT frame_uri) AS num_frames
+                FROM nms
+                GROUP BY camera"""
+      ),
       ("Anno Counts by Camera", """
               SELECT
                   camera,
@@ -1064,7 +1080,7 @@ class ImageAnnoTable(object):
       util.log.info("... no matchings!")
       return df
     matched = spark.createDataFrame(nearest_bike)
-    util.log.info("... matched %s bikes ." % matched.count())
+    util.log.info("... matched %s bikes." % matched.count())
     
     joined = df.join(matched, ['uri', 'track_id'], 'outer')
 

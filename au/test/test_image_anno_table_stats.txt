@@ -22,6 +22,14 @@ Size stats by Category
 8            BICYCLE   106.538462    103.134714   106.615385    103.083735         13           4
 9        OTHER_MOVER   173.000000      4.242641   172.500000      3.535534          2           2
 
+Size stats by Camera
+              camera  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
+0   ring_front_right   595.000000    675.994083   492.000000    223.445743          2           1
+1    ring_rear_right   404.500000    129.400541   542.000000     66.468037          2           1
+2  ring_front_center    84.583333    102.533909    95.898810    122.103747        168           6
+3    ring_front_left   122.659574    137.059694   130.723404    139.479577         47           2
+4  stereo_front_left   205.541667    233.125639   216.458333    250.860949         24           1
+
 Anno Counts by Camera
               camera  num_annos_mu  num_annos_std  num_annos_total  num_frames_total
 0  ring_front_center          28.0       17.13476              168                 6
