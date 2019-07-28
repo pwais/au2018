@@ -946,7 +946,7 @@ class ImageAnnoTable(object):
       df = cls.as_df(spark)
     df.createOrReplaceTempView("nms")
     title_queries = (
-      ("Width/Height stats by Split", """
+      ("Size stats by Split", """
               SELECT
                 split,
                 AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
@@ -956,7 +956,7 @@ class ImageAnnoTable(object):
               FROM nms
               GROUP BY split"""
       ),
-      ("Width/Height stats by City", """
+      ("Size stats by City", """
               SELECT
                   city,
                   AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
@@ -966,7 +966,7 @@ class ImageAnnoTable(object):
                 FROM nms
                 GROUP BY city"""
       ),
-      ("Width/Height stats by Category", """
+      ("Size stats by Category", """
               SELECT
                   category_name,
                   AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
@@ -1008,10 +1008,9 @@ class ImageAnnoTable(object):
                 ORDER BY camera ASC, distance_m_bucket ASC"""
       ),
     )
-    return [
-      (title, spark.sql(query).toPandas())
-      for title, query in title_queries
-    ]
+    for title, query in title_queries:
+      util.log.info("Running %s ..." % title)
+      yield title, spark.sql(query).toPandas()
 
   @classmethod
   def _impute_rider_for_bikes(cls, spark, df):
@@ -1142,12 +1141,21 @@ class ImageAnnoTable(object):
     return df
 
   @classmethod
-  def save_anno_reports(cls, spark, dest_dir=None):
+  def save_anno_reports(cls, spark=None, dest_dir=None):
+    spark = spark or Spark.getOrCreate()
     dest_dir = dest_dir or cls.FIXTURES.image_annos_reports_root()
-
     util.mkdir(dest_dir)
+
     util.log.info("Creating image annotation reports in %s ..." % dest_dir)
 
+    ## First do overall stats reports
+    for title, pdf in cls.get_stats_dfs(spark):
+      fname = title.replace(' ', '_') + '.html'
+      with open(os.path.join(dest_dir, fname), 'w') as f:
+        f.write(pdf.to_html())
+      util.log.info("Saved simple report: \n%s\n%s\n\n" % (title, pdf))
+
+    ## Histogram reports
     # For each of these metrics in ImageAnnoTable, generate a distinct plot
     # for each sub-pivot column
     SPLIT_AND_CITY = ['split', 'city']

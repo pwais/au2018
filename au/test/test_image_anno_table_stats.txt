@@ -1,15 +1,15 @@
-Width/Height stats by Split
+Size stats by Split
     split  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
 0   train    98.362637    121.671373   108.615385    136.072273        182           7
 1  sample   235.500000    281.920734   237.653846    255.930607         26           2
 2     val    82.342857     75.764318   102.028571    116.583090         35           2
 
-Width/Height stats by City
+Size stats by City
   city  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
 0  MIA   108.778846    120.021354   114.846154    125.266843        104           4
 1  PIT   112.187050    166.768935   126.431655    174.891107        139           7
 
-Width/Height stats by Category
+Size stats by Category
        category_name  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
 0         PEDESTRIAN    51.157143     33.853322    51.200000     33.771869         70           9
 1      LARGE_VEHICLE   136.888889    117.079508   136.888889    116.960938          9           5
