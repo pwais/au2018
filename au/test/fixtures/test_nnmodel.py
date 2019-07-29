@@ -99,17 +99,8 @@ def _check_rows(fixture, filled_rows):
       sobel_y = sobel_tensor[...,0]
       sobel_x = sobel_tensor[...,1]
       
-      # We need to compare actual and expected via image bytes b/c imageio
-      # does some sort of subtle color normalization and we want our fixtures
-      # to simply be PNGs.
-      def to_png_bytes(arr):
-        import io
-        buf = io.BytesIO()
-        imageio.imwrite(buf, arr, 'png')
-        return buf.getvalue()
-      
-      sobel_y_bytes = to_png_bytes(sobel_y)
-      sobel_x_bytes = to_png_bytes(sobel_x)
+      sobel_y_bytes = testutils.to_png_bytes(sobel_y)
+      sobel_x_bytes = testutils.to_png_bytes(sobel_x)
       
       SOBEL_Y_TEST_IMG_PATH = os.path.join(
                   conf.AU_ROOT,

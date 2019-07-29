@@ -177,9 +177,9 @@ class BBox(common.BBox):
   )
 
   def translate(self, *args):
-    super(self, BBox).translate(*args)
+    super(BBox, self).translate(*args)
     if len(args) == 1:
-      x, y = args.tolist()
+      x, y = args[0].tolist()
     else:
       x, y = args
     self.cuboid_pts_image += np.array([x, y])
@@ -375,11 +375,11 @@ class AVFrame(object):
       path = self.loader.get_nearest_image_path(
                       self.uri.camera, self.uri.timestamp)
       self._image = AVFrame.__load_image(path)
-      # if not self.viewport.is_full_image():
-      #   c, r, w, h = (
-      #     self.viewport.x, self.viewport.y,
-      #     self.viewport.width, self.viewport.height)
-      #   self._image = self._image[r:r+h, c:c+w, :]
+      if not self.viewport.is_full_image():
+        c, r, w, h = (
+          self.viewport.x, self.viewport.y,
+          self.viewport.width, self.viewport.height)
+        self._image = self._image[r:r+h, c:c+w, :]
     return self._image
   
   @property
@@ -444,7 +444,9 @@ class AVFrame(object):
 
       # Correct for image origin if this frame is a crop
       for bbox in self._image_bboxes:
-        bbox.translate(-np.array(bbox.get_x1_y1()))
+        bbox.translate(-np.array(self.viewport.get_x1_y1()))
+        bbox.im_width = self.viewport.width
+        bbox.im_height = self.viewport.height
 
     return self._image_bboxes
 
@@ -467,11 +469,11 @@ class AVFrame(object):
       bbox.draw_cuboid_in_image(img)
       bbox.draw_in_image(img)
     
-    if not self.viewport.is_full_image():
-      c, r, w, h = (
-        self.viewport.x, self.viewport.y,
-        self.viewport.width, self.viewport.height)
-      img = img[r:r+h, c:c+w, :]
+    # if not self.viewport.is_full_image():
+    #   c, r, w, h = (
+    #     self.viewport.x, self.viewport.y,
+    #     self.viewport.width, self.viewport.height)
+    #   img = img[r:r+h, c:c+w, :]
     return img
 
   def get_cropped(self, bbox):
@@ -1142,6 +1144,29 @@ class AnnoReports(object):
 
   ANNO_TABLE = ImageAnnoTable
 
+  ### For histogram reports
+  NUM_BINS = 20
+
+  # Show only this many examples for each bucket.  More
+  # examples -> more images -> larger plot files.
+  EXAMPLES_PER_BUCKET = 10
+
+  # For each of these metrics in ImageAnnoTable, generate a distinct plot
+  # for each sub-pivot column
+  SPLIT_AND_CITY = ['split', 'city']
+  CATEGORY_AND_CAMERA = ['category_name', 'coarse_category', 'camera']
+  ALL_SUB_PIVOTS = SPLIT_AND_CITY + CATEGORY_AND_CAMERA
+  METRIC_AND_SUB_PIVOTS = (
+    ('distance_meters',                 ALL_SUB_PIVOTS),
+    ('length_meters',                   SPLIT_AND_CITY + ['category_name']),
+    ('relative_yaw_radians',            SPLIT_AND_CITY),
+    ('relative_yaw_to_camera_radians',  ALL_SUB_PIVOTS),
+    ('occlusion',                       SPLIT_AND_CITY),
+
+    # Special handling! See below
+    ('ridden_bike_distance',            ALL_SUB_PIVOTS),
+  )
+
   @classmethod
   def create_reports(cls, spark=None, dest_dir=None):
     with Spark.sess(spark) as spark:
@@ -1245,29 +1270,14 @@ class AnnoReports(object):
   @classmethod
   def save_histogram_reports(cls, spark, dest_dir):
     ## Histogram reports
-    # For each of these metrics in ImageAnnoTable, generate a distinct plot
-    # for each sub-pivot column
-    SPLIT_AND_CITY = ['split', 'city']
-    CATEGORY_AND_CAMERA = ['category_name', 'coarse_category', 'camera']
-    ALL_SUB_PIVOTS = SPLIT_AND_CITY + CATEGORY_AND_CAMERA
-    METRIC_AND_SUB_PIVOTS = (
-      ('distance_meters',                 ALL_SUB_PIVOTS),
-      ('length_meters',                   SPLIT_AND_CITY + ['category_name']),
-      ('relative_yaw_radians',            SPLIT_AND_CITY),
-      ('relative_yaw_to_camera_radians',  ALL_SUB_PIVOTS),
-      ('occlusion',                       SPLIT_AND_CITY),
-
-      # Special handling! See below
-      ('ridden_bike_distance',            ALL_SUB_PIVOTS),
-    )
-
-    num_plots = sum(len(spvs) for metric, spvs in METRIC_AND_SUB_PIVOTS)
+    
+    num_plots = sum(len(spvs) for metric, spvs in cls.METRIC_AND_SUB_PIVOTS)
     util.log.info("Going to generate %s plots ..." % num_plots)
     t = util.ThruputObserver(name='plotting', n_total=num_plots)
     
     # Generate plots!
     anno_df = cls.ANNO_TABLE.as_df(spark)
-    for metric, sub_pivots in METRIC_AND_SUB_PIVOTS:
+    for metric, sub_pivots in cls.METRIC_AND_SUB_PIVOTS:
       for sub_pivot in sub_pivots:
         df = anno_df
         if metric == 'ridden_bike_distance':
@@ -1287,14 +1297,12 @@ class AnnoReports(object):
         
         from au import plotting as aupl
         class AVHistogramPlotter(aupl.HistogramWithExamplesPlotter):
-          NUM_BINS = 20
+          NUM_BINS = cls.NUM_BINS
           SUB_PIVOT_COL = sub_pivot
           WIDTH = 1400
           TITLE = plot_name
 
-          # Show only this many examples for each bucket.  More
-          # examples -> more images -> larger plot files.
-          EXAMPLES_PER_BUCKET = 10
+          EXAMPLES_PER_BUCKET = cls.EXAMPLES_PER_BUCKET
 
           def display_bucket(self, sub_pivot, bucket_id, irows):
             util.log.info("Displaying bucket %s %s" % (sub_pivot, bucket_id))
@@ -1577,6 +1585,17 @@ TODO
  * do kl divergence or some sort of tests in 'split' plots
  * log-scale option for? plots
  * debug draw lider pts
- * try to measure occlusion / clutter by overlaping cuboids? raytrace / z-buffer
+ 
+ * try to measure occlusion / clutter by:
+   * overlapping / subsuming cuboids .. how many are completely subsumed?
+   * fraction of lidar points that overlap with cuboid in image frame but
+       do NOT overlap with cuboid in 3D-- think person occluded by car
+       or car thru window.
+   * prolly an exception for bikes and riders
+   * maybe also build occlusion graph:
+      * col with edges using the above measures
+      * ** then we can also mine for person-car occluders, etc
+      .... can deep net detect occlusion?  
+               ** can deep net discrim car w/ and w/out occluded thing behind?
 """
 

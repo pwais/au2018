@@ -50,6 +50,21 @@ class BBox(object):
   def get_x1_y1_x2_y2(self):
     return self.x, self.y, self.x + self.width, self.y + self.height
 
+  def get_x1_y1(self):
+    return self.x, self.y
+
+  def add_padding(self, *args):
+    if len(args) == 1:
+      px, py = args[0], args[0]
+    elif len(args) == 2:
+      px, py = args[0], args[1]
+    else:
+      raise ValueError(len(args))
+    self.x -= px
+    self.y -= py
+    self.width += 2 * px
+    self.height += 2 * py
+
   @staticmethod
   def from_x1_y1_x2_y2(x1, y1, x2, y2):
     b = BBox()
@@ -122,6 +137,14 @@ class BBox(object):
 
   def get_area(self):
     return self.width * self.height
+
+  def translate(self, *args):
+    if len(args) == 1:
+      x, y = args[0].tolist()
+    else:
+      x, y = args
+    self.x += x
+    self.y += y
 
   def draw_in_image(self, img, color=None, thickness=2):
     assert self.im_height == img.shape[0], (self.im_height, img.shape)

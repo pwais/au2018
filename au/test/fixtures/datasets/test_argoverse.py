@@ -100,6 +100,14 @@ class TestArgoverseImageTable(unittest.TestCase):
     
       class TestAnnoReports(av.AnnoReports):
         ANNO_TABLE = TestImageAnnoTable
+        NUM_BINS = 4
+        EXAMPLES_PER_BUCKET = 1
+        METRIC_AND_SUB_PIVOTS = (
+          # Do minimal plots for fast testing
+          ('distance_meters', ['split']),
+          ('ridden_bike_distance', ['category_name']),
+            # Has special handling
+        )
 
       cls.TestFixtures = TestFixtures
       cls.ImageAnnoTable = TestImageAnnoTable
@@ -109,6 +117,10 @@ class TestArgoverseImageTable(unittest.TestCase):
       # Many tests need this fixture
       with testutils.LocalSpark.sess() as spark:
         cls.ImageAnnoTable.setup(spark)
+
+
+
+  ### Tests
 
   def test_fixture_uris(self):
     for s in TEST_FIXTURE_URIS:
@@ -123,8 +135,53 @@ class TestArgoverseImageTable(unittest.TestCase):
 
       # Only require the user to have the sample fixture set up
       if self.have_fixtures and uri.split == 'sample':
-        loader = cls.TestFixtures.get_loader(uri)
+        loader = self.TestFixtures.get_loader(uri)
         assert loader
+
+  def test_loader(self):
+    if not self.have_fixtures:
+      return
+    
+    test_uri = av.FrameURI(
+                    tarball_name=av.Fixtures.TRACKING_SAMPLE,
+                    log_id='c6911883-1843-3727-8eaa-41dc8cda8993')
+
+    loader = self.TestFixtures.get_loader(test_uri)
+    print('Loaded', loader)
+    assert loader.image_count == 3441
+
+    all_uris = list(itertools.chain.from_iterable(
+      av.Fixtures.get_frame_uris(log_uri)
+      for log_uri in av.Fixtures.get_log_uris('sample')))
+    assert len(all_uris) == 3441
+      
+    all_uris_strs = set(str(uri) for uri in all_uris)
+    for uri in TEST_FIXTURE_URIS:
+      if 'sample' in uri:
+        assert uri in all_uris_strs
+
+  def test_debug_image(self):
+    if not self.have_fixtures:
+      return
+    frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad')
+    
+    import imageio
+    # TODO create fixture
+    imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
+    
+    for bbox in frame.image_bboxes:
+      import copy
+      bbox = copy.deepcopy(bbox)
+      bbox.add_padding(20)
+      bbox.clamp_to_screen()
+      crop = frame.get_cropped(bbox)
+      print(crop.viewport)
+      imageio.imwrite('/opt/au/tastttt_%s.png' % bbox.track_id, crop.get_debug_image(),format='png')
+      # print(bbox.track_id, bbox.get_x1_y1_x2_y2())
+      
+    
+    
+    
 
   @pytest.mark.slow
   def test_image_anno_table_stats(self):
@@ -171,7 +228,9 @@ class TestArgoverseImageTable(unittest.TestCase):
   @pytest.mark.slow
   def test_image_anno_table_reports_smoke(self):
     with testutils.LocalSpark.sess() as spark:
-      self.AnnoReports.create_reports(spark)
+      dest_dir = os.path.join(TEST_TEMPDIR, 'hist_reports')
+      util.mkdir(dest_dir)
+      self.AnnoReports.save_histogram_reports(spark, dest_dir)
 
 
 
@@ -242,6 +301,7 @@ class TestArgoverseImageTable(unittest.TestCase):
   #       # df = spark.read.parquet(av.AnnoTable.table_root())
   #       # h = av.HistogramWithExamples()
   #       # h.run(spark, df)
+
 
 
 

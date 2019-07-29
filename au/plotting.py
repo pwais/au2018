@@ -8,8 +8,7 @@ def hash_to_rbg(x, s=0.8, v=0.8):
   import colorsys
   import sys
 
-  # NB: as of Python3, the seed to __hash__() is not stable,
-  # but hash(int) is stable
+  # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
   import hashlib
   h_i = int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
   h = (hash(h_i) % 2654435769) / 2654435769.
@@ -17,28 +16,36 @@ def hash_to_rbg(x, s=0.8, v=0.8):
   
   return rgb.astype(int).tolist()
 
-def draw_xy_depth_in_image(
-          img,
-          pts,
-          max_depth_meters=100,
-          dot_size=2,
-          color_rgb=(0, 255, 255),
-          alpha=0.15):
+def draw_xy_depth_in_image(img, pts, dot_size=1, alpha=.2):
   """Given an image `img` and a point cloud `pts` [in form
-  (pixel x, pixel y, ego depth meters)], draw the points.  Scale coloring
-  of points such that points at or beyond `max_depth_meters` are black and
-  the nearest points have full color.
+  (pixel x, pixel y, ego depth meters)], draw the points.
+  Point color varies every few meters with interpolation.
   """
+
+  def rgb_for_distance(d_meters):
+    DISTANCE_COLOR_PERIOD_METERS = 10
+    bucket_below = int(d_meters / DISTANCE_COLOR_PERIOD_METERS)
+    bucket_above = bucket_below + 1
+    
+    color_below = np.array(hash_to_rbg(bucket_below))
+    color_above = np.array(hash_to_rbg(bucket_above))
+    
+    # Interpolate color to nearest bucket
+    buckets = np.array([bucket_below, bucket_above])
+    dist_above_below = buckets * DISTANCE_COLOR_PERIOD_METERS
+    norm_dist_from_bucket = np.abs(d_meters - dist_above_below)
+    weight = 1. - norm_dist_from_bucket / DISTANCE_COLOR_PERIOD_METERS
+    w_below, w_above = weight.tolist()
+
+    return w_below * color_below + w_above * color_above
 
   import cv2
 
-  # OpenCV can't draw transparent colors, so we use the 'overlay image' trick
+  # OpenCV can't draw transparent colors, so we use the 'overlay image' trick:
+  # First draw dots an an overlay...
   overlay = img.copy()
-
-  color_rgb = np.array(color_rgb)
   for x, y, d_meters in pts.tolist():
-    color = np.clip(1 - (d_meters / max_depth_meters), 0, 1) * color_rgb
-    color = color.astype(int).tolist()
+    color = rgb_for_distance(d_meters).astype(int).tolist()
     x = int(round(x))
     y = int(round(y))
     cv2.circle(overlay, (x, y), dot_size, color, thickness=2)

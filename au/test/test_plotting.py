@@ -13,6 +13,29 @@ def test_hash_to_rgb():
   assert aupl.hash_to_rbg(5) == (204, 155, 40)
   assert aupl.hash_to_rbg('moof1') != aupl.hash_to_rbg('moof')
 
+def test_draw_xy_depth_in_image():
+  # Create points for a test image:
+  #  * One point every 10 pixels in x- and y- directions
+  #  * The depth value of the pixel is the scalar value of the y-coord
+  #      interpreted as meters
+  h, w = 600, 600
+  pts = []
+  for y in range(int(h / 10)):
+    for x in range(int(w / 10)):
+      pts.append((x * 10, y * 10, y))
+  
+  pts = np.array(pts)
+  actual = np.zeros((h, w, 3))
+  aupl.draw_xy_depth_in_image(actual, pts)
+
+  FIXTURES_BASE_PATH = os.path.join(conf.AU_ROOT, 'au/test/')
+  FIXTURE_NAME = 'test_draw_xy_depth_in_image.png'
+  
+  actual_bytes = testutils.to_png_bytes(actual)
+  expected_bytes = \
+    open(os.path.join(FIXTURES_BASE_PATH, FIXTURE_NAME), 'rb').read()
+
+  assert actual_bytes == expected_bytes
 
 @pytest.mark.slow
 def test_spark_histogram():
