@@ -53,6 +53,7 @@ class BBox(object):
   def get_x1_y1(self):
     return self.x, self.y
 
+<<<<<<< HEAD
   def add_padding(self, *args):
     if len(args) == 1:
       px, py = args[0], args[0]
@@ -65,6 +66,8 @@ class BBox(object):
     self.width += 2 * px
     self.height += 2 * py
 
+=======
+>>>>>>> 02595b5a25061fd94fa52ba6f48da6523378c084
   @staticmethod
   def from_x1_y1_x2_y2(x1, y1, x2, y2):
     b = BBox()
@@ -140,7 +143,11 @@ class BBox(object):
 
   def translate(self, *args):
     if len(args) == 1:
+<<<<<<< HEAD
       x, y = args[0].tolist()
+=======
+      x, y = args.tolist()
+>>>>>>> 02595b5a25061fd94fa52ba6f48da6523378c084
     else:
       x, y = args
     self.x += x
