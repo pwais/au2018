@@ -18,6 +18,7 @@ Total tracks: 8894
 
 import copy
 import itertools
+import random
 import os
 
 from au import conf
@@ -174,6 +175,14 @@ class BBox(common.BBox):
       'ego_to_obj',         # Translation vector in ego frame
     ]
   )
+
+  def translate(self, *args):
+    super(self, BBox).translate(*args)
+    if len(args) == 1:
+      x, y = args.tolist()
+    else:
+      x, y = args
+    self.cuboid_pts_image += np.array([x, y])
 
   def draw_cuboid_in_image(self, img, base_color=None, alpha=0.3, thickness=2):
     """Draw `cuboid_pts_image` in `img`.  Similar to argoverse
@@ -401,7 +410,11 @@ class AVFrame(object):
               uv[2, :] > 0)))
     idx_ = idx_[0]
     uv = uv[:, idx_]
-    return uv.T
+    uv = uv.T
+
+    # Correct for image origin if this frame is a crop
+    uv -= np.array([self.viewport.x, self.viewport.y, 0])
+    return uv
 
   @property
   def image_bboxes(self):
@@ -428,6 +441,10 @@ class AVFrame(object):
         bbox for bbox in bboxes
         if bbox.is_visible and self.viewport.overlaps_with(bbox)
       ]
+
+      # Correct for image origin if this frame is a crop
+      for bbox in self._image_bboxes:
+        bbox.translate(-np.array(bbox.get_x1_y1()))
 
     return self._image_bboxes
 
@@ -497,7 +514,6 @@ class HardNegativeMiner(object):
           + self.ii[r1, c1])
 
     self._ii = IntegralImage(mask)
-    import random
     self._random = random.Random(self.SEED)
 
   def next_sample(self, max_attempts=1000):
@@ -1371,7 +1387,10 @@ class CroppedObjectImageTable(dataset.ImageTable):
   VIEWPORT_WH = (160, 160)
   
   # Pad the object by this many pixels against the viewport edges
-  PADDING_PIXELS = 10
+  PADDING_PIXELS = 20
+
+  # Jitter the center of any crop vs the target bbox using this gaussian
+  CENTER_JITTER_MU_STD = (0, 10)
 
   # TODO mebbe make more rigorous check stats ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   NEGATIVE_SAMPLES_PER_FRAME = 20
@@ -1401,12 +1420,24 @@ class CroppedObjectImageTable(dataset.ImageTable):
     create a crop of the object annotated in `bbox`.  Note that the
     returned bbox may extend beyond the image edges."""
     
+    # Center of crop
+    box_center = np.array(
+      [bbox.x + .5 * bbox.width, bbox.y + .5 * bbox.height])
+
+    rand = random.Random(hash(str(bbox.uri)))
+    offset = np.array([
+        rand.gauss(*cls.CENTER_JITTER_MU_STD),
+        rand.gauss(*cls.CENTER_JITTER_MU_STD)
+      ])
+    offset = np.clip(offset, -cls.PADDING_PIXELS, cls.PADDING_PIXELS)
+    box_center += offset
+    
+    # Size of crop
     radius = .5 * max(bbox.width, bbox.height)
     padding_xy = 2. * cls.PADDING_PIXELS / np.array(cls.VIEWPORT_WH)
     radius_xy = radius + .5 * padding_xy
-    box_center = np.array(
-      [bbox.x + .5 * bbox.width, bbox.y + .5 * bbox.height])
-    
+
+    # Compute the crop
     x1, y1 = (box_center - radius_xy).tolist()
     x2, y2 = (box_center + radius_xy).tolist()
     cropped = copy.deepcopy(bbox)
@@ -1423,6 +1454,9 @@ class CroppedObjectImageTable(dataset.ImageTable):
     CONDS = (
       # Motion correction almost always succeeds
       anno_df.motion_corrected == True,
+
+      # Ignore things that extend off the side of the image
+      anno_df.has_offscreen == False,
 
       # Ignore very small things
       anno_df.height >= 50, # pixels
