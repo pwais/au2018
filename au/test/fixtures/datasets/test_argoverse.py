@@ -161,7 +161,7 @@ class TestArgoverseImageTable(unittest.TestCase):
         assert uri in all_uris_strs
 
   def test_debug_image(self):
-    if not self.have_fixtures:
+    if not self.have_fixtures: # FIXME ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       return
     frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad')
     
@@ -232,6 +232,12 @@ class TestArgoverseImageTable(unittest.TestCase):
       util.mkdir(dest_dir)
       self.AnnoReports.save_histogram_reports(spark, dest_dir)
 
+  @pytest.mark.slow
+  def test_cropped_image_table(self):
+    with testutils.LocalSpark.sess() as spark:
+      class TestCroppedObjectImageTable(av.CroppedObjectImageTable):
+        ANNOS = self.ImageAnnoTable
+      TestCroppedObjectImageTable._save_positives(spark)
 
 
   # def test_samplexxxxxxx(self):

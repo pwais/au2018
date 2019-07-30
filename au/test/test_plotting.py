@@ -1,5 +1,6 @@
 from au import conf
 from au import plotting as aupl
+from au import util
 from au.test import testconf
 from au.test import testutils
 
@@ -31,7 +32,7 @@ def test_draw_xy_depth_in_image():
   FIXTURES_BASE_PATH = os.path.join(conf.AU_ROOT, 'au/test/')
   FIXTURE_NAME = 'test_draw_xy_depth_in_image.png'
   
-  actual_bytes = testutils.to_png_bytes(actual)
+  actual_bytes = util.to_png_bytes(actual)
   expected_bytes = \
     open(os.path.join(FIXTURES_BASE_PATH, FIXTURE_NAME), 'rb').read()
 

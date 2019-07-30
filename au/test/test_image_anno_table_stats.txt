@@ -1,34 +1,34 @@
 Size stats by Split
     split  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
-0   train    98.362637    121.671373   108.615385    136.072273        182           7
-1  sample   235.500000    281.920734   237.653846    255.930607         26           2
-2     val    82.342857     75.764318   102.028571    116.583090         35           2
+0   train    98.362637    121.671373   100.313187     92.516958        182           7
+1  sample   235.500000    281.920734   214.192308    191.718339         26           2
+2     val    82.342857     75.764318    81.371429     67.625737         35           2
 
 Size stats by City
   city  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
-0  MIA   108.778846    120.021354   114.846154    125.266843        104           4
-1  PIT   112.187050    166.768935   126.431655    174.891107        139           7
+0  MIA   108.778846    120.021354   111.807692     84.386890        104           4
+1  PIT   112.187050    166.768935   108.244604    126.760406        139           7
 
 Size stats by Category
        category_name  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
-0         PEDESTRIAN    51.157143     33.853322    51.200000     33.771869         70           9
-1      LARGE_VEHICLE   136.888889    117.079508   136.888889    116.960938          9           5
-2                BUS   209.500000     99.702056   262.500000    174.655375          2           2
-3          BICYCLIST    84.812500     83.740248    84.875000     84.577282         16           3
-4   ON_ROAD_OBSTACLE    61.343750     46.046687    72.875000     83.326699         32           8
-5  EMERGENCY_VEHICLE   262.000000     72.124892   595.000000      8.485281          2           2
-6         MOTORCYCLE   105.000000     89.095454   105.000000     89.095454          2           2
-7            VEHICLE   167.263158    208.636414   182.694737    202.924369         95          11
-8            BICYCLE   106.538462    103.134714   106.615385    103.083735         13           4
-9        OTHER_MOVER   173.000000      4.242641   172.500000      3.535534          2           2
+0         PEDESTRIAN    51.157143     33.853322    99.428571     61.957108         70           9
+1      LARGE_VEHICLE   136.888889    117.079508   105.222222     81.452099          9           5
+2                BUS   209.500000     99.702056   159.000000     80.610173          2           2
+3          BICYCLIST    84.812500     83.740248   111.562500     91.525566         16           3
+4   ON_ROAD_OBSTACLE    61.343750     46.046687    72.312500     60.479502         32           8
+5  EMERGENCY_VEHICLE   262.000000     72.124892   201.500000     21.920310          2           2
+6         MOTORCYCLE   105.000000     89.095454    82.000000     83.438600          2           2
+7            VEHICLE   167.263158    208.636414   125.505263    150.780937         95          11
+8            BICYCLE   106.538462    103.134714   107.923077     82.386752         13           4
+9        OTHER_MOVER   173.000000      4.242641   228.500000    185.969083          2           2
 
 Size stats by Camera
               camera  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
-0   ring_front_right   595.000000    675.994083   492.000000    223.445743          2           1
-1    ring_rear_right   404.500000    129.400541   542.000000     66.468037          2           1
-2  ring_front_center    84.583333    102.533909    95.898810    122.103747        168           6
-3    ring_front_left   122.659574    137.059694   130.723404    139.479577         47           2
-4  stereo_front_left   205.541667    233.125639   216.458333    250.860949         24           1
+0   ring_front_right   595.000000    675.994083   422.500000    321.733585          2           1
+1    ring_rear_right   404.500000    129.400541   229.500000     17.677670          2           1
+2  ring_front_center    84.583333    102.533909    88.250000     87.243533        168           6
+3    ring_front_left   122.659574    137.059694   123.829787     88.717509         47           2
+4  stereo_front_left   205.541667    233.125639   196.833333    177.098515         24           1
 
 Anno Counts by Camera
               camera  num_annos_mu  num_annos_std  num_annos_total  num_frames_total
@@ -40,16 +40,20 @@ Anno Counts by Camera
 
 Pedestrian stats by Distance
                camera  distance_m_bucket  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
-0   ring_front_center                0.0    26.000000     14.628739    26.200000     14.532722          5           2
-1   ring_front_center               10.0    32.500000     19.122413    32.750000     18.892238          4           3
-2   ring_front_center               20.0    26.750000      2.753785    27.000000      3.162278          4           2
-3   ring_front_center               30.0    54.750000     18.355290    54.750000     18.355290          4           2
-4   ring_front_center               40.0    39.666667     23.755701    40.000000     23.515952          3           2
-5   ring_front_center               50.0    42.600000     17.357995    42.400000     17.242390          5           2
-6   ring_front_center               60.0    62.000000     65.053824    62.000000     65.053824          2           2
-7   ring_front_center               70.0    38.400000     33.328666    38.600000     33.298649          5           2
-8   ring_front_center               80.0    33.166667      8.542053    33.166667      7.985403          6           2
-9   ring_front_center               90.0    55.250000     24.563329    55.125000     24.567327          8           3
-10  stereo_front_left               10.0   236.000000           NaN   236.000000           NaN          1           1
-11  stereo_front_left               70.0    75.000000           NaN    76.000000           NaN          1           1
-12  stereo_front_left               80.0    90.500000      3.535534    90.000000      2.828427          2           1
+0   ring_front_center                0.0    26.000000     14.628739    61.800000     53.625554          5           2
+1   ring_front_center               10.0    32.500000     19.122413    59.000000     31.633316          4           3
+2   ring_front_center               20.0    26.750000      2.753785    52.500000      2.886751          4           2
+3   ring_front_center               30.0    54.750000     18.355290   107.750000     31.127426          4           2
+4   ring_front_center               40.0    39.666667     23.755701    77.666667     38.811510          3           2
+5   ring_front_center               50.0    42.600000     17.357995    81.200000     30.375977          5           2
+6   ring_front_center               60.0    62.000000     65.053824   126.000000    135.764502          2           2
+7   ring_front_center               70.0    38.400000     33.328666    71.800000     72.337404          5           2
+8   ring_front_center               80.0    33.166667      8.542053    68.166667     13.717386          6           2
+9   ring_front_center               90.0    55.250000     24.563329   123.000000     53.057920          8           3
+10  stereo_front_left               10.0   236.000000           NaN   401.000000           NaN          1           1
+11  stereo_front_left               70.0    75.000000           NaN   126.000000           NaN          1           1
+12  stereo_front_left               80.0    90.500000      3.535534   167.000000      0.000000          2           1
+
+Associated Bike Riders by Split
+   split  num_assoc_riders
+0  train                13

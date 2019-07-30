@@ -99,8 +99,8 @@ def _check_rows(fixture, filled_rows):
       sobel_y = sobel_tensor[...,0]
       sobel_x = sobel_tensor[...,1]
       
-      sobel_y_bytes = testutils.to_png_bytes(sobel_y)
-      sobel_x_bytes = testutils.to_png_bytes(sobel_x)
+      sobel_y_bytes = util.to_png_bytes(sobel_y)
+      sobel_x_bytes = util.to_png_bytes(sobel_x)
       
       SOBEL_Y_TEST_IMG_PATH = os.path.join(
                   conf.AU_ROOT,

@@ -8,17 +8,6 @@ from au.fixtures import dataset
 class LocalSpark(spark.Spark):
   MASTER = 'local[%s]' % multiprocessing.cpu_count()
 
-def to_png_bytes(arr):
-  """When comparing images, we need to compare actual and expected via image
-  bytes b/c imageio does some sort of subtle color normalization and we want
-  our fixtures to simply be user-readable PNGs."""
-
-  import io
-  import imageio
-  buf = io.BytesIO()
-  imageio.imwrite(buf, arr, 'png')
-  return buf.getvalue()
-
 def iter_video_images(n, w, h):
   images_dir = conf.AU_IMAGENET_SAMPLE_IMGS_DIR
   rows = dataset.ImageRow.rows_from_images_dir(images_dir)

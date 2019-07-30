@@ -26,6 +26,7 @@ from au import util
 from au.fixtures import dataset
 from au.fixtures.datasets import common
 from au.spark import Spark
+from au.spark import NumpyArray
 
 import imageio
 import math
@@ -175,6 +176,23 @@ class BBox(common.BBox):
       'ego_to_obj',         # Translation vector in ego frame
     ]
   )
+
+  # TODO just make Spark support numpy
+  def _adapt(v):
+    if isinstance(v, np.ndarray):
+      return NumpyArray(v)
+    elif isinstance(v, NumpyArray):
+      return v.arr
+    else:
+      return v
+
+  def to_row_dict(self):
+    return dict((k, BBox._adapt(v)) for k, v in self.to_dict().items())
+
+  @staticmethod
+  def from_row_dict(row):
+    adapted = dict((k, BBox._adapt(v)) for k, v in row.items())
+    return BBox(**adapted)
 
   def translate(self, *args):
     super(BBox, self).translate(*args)
@@ -371,7 +389,7 @@ class AVFrame(object):
 
   @property
   def image(self):
-    if not self._image:
+    if not util.np_truthy(self._image):
       path = self.loader.get_nearest_image_path(
                       self.uri.camera, self.uri.timestamp)
       self._image = AVFrame.__load_image(path)
@@ -384,7 +402,7 @@ class AVFrame(object):
   
   @property
   def cloud(self):
-    if not self._cloud:
+    if not util.np_truthy(self._cloud):
       self._cloud, motion_corrected = \
         self.loader.get_maybe_motion_corrected_cloud(self.uri.timestamp)
         # We can ignore motion_corrected failures since the Frame will already
@@ -450,6 +468,13 @@ class AVFrame(object):
 
     return self._image_bboxes
 
+  def get_target_bbox(self):
+    if self.uri.track_id:
+      for bbox in self.image_bboxes:
+          if bbox.track_id == self.uri.track_id:
+            return bbox
+    return None
+
   def get_debug_image(self):
     img = np.copy(self.image)
     
@@ -457,13 +482,12 @@ class AVFrame(object):
     xyd = self.get_cloud_in_image()
     aupl.draw_xy_depth_in_image(img, xyd)
 
-    if self.uri.track_id:
-      # Draw a gold box first; then the draw() calls below will draw over
+    target_bbox = self.get_target_bbox()
+    if target_bbox:
+      # Draw a highlight box first; then the draw() calls below will draw over
       # the box.
       WHITE = (225, 225, 255)
-      for bbox in self.image_bboxes:
-        if bbox.track_id == self.uri.track_id:
-          bbox.draw_in_image(img, color=WHITE, thickness=20)
+      target_bbox.draw_in_image(img, color=WHITE, thickness=20)
 
     for bbox in self.image_bboxes:
       bbox.draw_cuboid_in_image(img)
@@ -482,6 +506,8 @@ class AVFrame(object):
 
     uri = copy.deepcopy(self.uri)
     uri.set_crop(bbox)
+    if hasattr(bbox, 'track_id') and bbox.track_id:
+      uri.track_id = bbox.track_id
 
     frame = AVFrame(uri=uri, FIXTURES=self.FIXTURES)
     return frame
@@ -1030,9 +1056,9 @@ class ImageAnnoTable(object):
       
       # The best pair has smallest euclidean distance between centroids
       def l2_dist(r1, r2):
-        a1 = np.array([r1.ego_to_obj.x, r1.ego_to_obj.y, r1.ego_to_obj.z])
-        a2 = np.array([r2.ego_to_obj.x, r2.ego_to_obj.y, r2.ego_to_obj.z])
-        return float(np.linalg.norm(a2 - a1))
+        r1_ego_to_obj = r1.ego_to_obj.arr
+        r2_ego_to_obj = r2.ego_to_obj.arr
+        return float(np.linalg.norm(r2_ego_to_obj - r1_ego_to_obj))
 
       # Each rider gets assigned the nearest bike.  Note that bikes may not
       # have riders.
@@ -1097,37 +1123,38 @@ class ImageAnnoTable(object):
     uri_rdd = cls._create_uri_rdd(spark, splits=splits)
 
     def iter_anno_rows(uri):
-      from collections import namedtuple
-      pt = namedtuple('pt', 'x y z')
+      # from collections import namedtuple ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      # pt = namedtuple('pt', 'x y z')
 
       frame = AVFrame(uri=uri, FIXTURES=cls.FIXTURES)
-      for box in frame.image_bboxes:
+      for bbox in frame.image_bboxes:
         row = {}
 
         # Obj
-        # TODO make spark accept numpy and numpy float64 things
-        row = box.to_dict()
-        IGNORE = ('cuboid_pts', 'cuboid_pts_image', 'ego_to_obj')
-        for attr in IGNORE:
-          v = row.pop(attr)
-          if attr == 'cuboid_pts_image':
-            continue
-          if hasattr(v, 'shape'):
-            if len(v.shape) == 1:
-              row[attr] = pt(*v.tolist())
-            else:
-              row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
+        row.update(bbox.to_row_dict())
+        # # TODO make spark accept numpy and numpy float64 things
+        # row = box.to_dict()
+        # IGNORE = ('cuboid_pts', 'cuboid_pts_image', 'ego_to_obj')
+        # for attr in IGNORE:
+        #   v = row.pop(attr)
+        #   if attr == 'cuboid_pts_image':
+        #     continue
+        #   if hasattr(v, 'shape'):
+        #     if len(v.shape) == 1:
+        #       row[attr] = pt(*v.tolist())
+        #     else:
+        #       row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
         
         # Anno Context
         obj_uri = copy.deepcopy(frame.uri)
-        obj_uri.track_id = box.track_id
+        obj_uri.track_id = bbox.track_id
         row.update(
           frame_uri=str(uri),
           uri=str(obj_uri),
           **obj_uri.to_dict())
         row.update(
           city=cls.FIXTURES.get_loader(uri).city_name,
-          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
+          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(bbox.category_name, ''))
         
         from pyspark.sql import Row
         yield Row(**row)
@@ -1262,6 +1289,15 @@ class AnnoReports(object):
                 GROUP BY camera, distance_m_bucket
                 ORDER BY camera ASC, distance_m_bucket ASC"""
       ),
+      ("Associated Bike Riders by Split", """
+              SELECT
+                  split,
+                  COUNT(DISTINCT track_id) AS num_assoc_riders
+                FROM nms
+                WHERE
+                  ridden_bike_track_id != ''
+                GROUP BY split"""
+      ),
     )
     for title, query in title_queries:
       util.log.info("Running %s ..." % title)
@@ -1392,7 +1428,7 @@ cropattrs = namedtuple('cropattrs', 'anno cloud_npz viewport_annos')
 class CroppedObjectImageTable(dataset.ImageTable):
 
   # Center the object in a viewport of this size (pixels)
-  VIEWPORT_WH = (160, 160)
+  VIEWPORT_WH = (170, 170)
   
   # Pad the object by this many pixels against the viewport edges
   PADDING_PIXELS = 20
@@ -1432,18 +1468,27 @@ class CroppedObjectImageTable(dataset.ImageTable):
     box_center = np.array(
       [bbox.x + .5 * bbox.width, bbox.y + .5 * bbox.height])
 
-    rand = random.Random(hash(str(bbox.uri)))
+    def stable_hash(x):
+      # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
+      import hashlib
+      return int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
+
+    rand = random.Random(stable_hash(str(bbox)))
     offset = np.array([
         rand.gauss(*cls.CENTER_JITTER_MU_STD),
         rand.gauss(*cls.CENTER_JITTER_MU_STD)
       ])
     offset = np.clip(offset, -cls.PADDING_PIXELS, cls.PADDING_PIXELS)
     box_center += offset
+      # Jitter the center, but not so much that it exceeds the padding; then
+      # the center will have moved so far that the target extends outside
+      # the crop viewport.
     
     # Size of crop
     radius = .5 * max(bbox.width, bbox.height)
-    padding_xy = 2. * cls.PADDING_PIXELS / np.array(cls.VIEWPORT_WH)
-    radius_xy = radius + .5 * padding_xy
+    padding_in_target_res = radius * (
+      cls.PADDING_PIXELS / np.array(cls.VIEWPORT_WH))
+    radius_xy = radius + padding_in_target_res
 
     # Compute the crop
     x1, y1 = (box_center - radius_xy).tolist()
@@ -1455,7 +1500,62 @@ class CroppedObjectImageTable(dataset.ImageTable):
     return cropped
 
   @classmethod
-  def _create_crop_spec_df(cls, spark):
+  def _to_cropped_image_anno_df(cls, spark, anno_df, and_debug=True):
+    """Adjusts annos to cropped viewpoint and adds columns:
+     * jpeg_bytes (cropped image encoded as max quality jpeg)
+     * debug_jpeg_bytes (debug image as medium-quality jpeg)
+    """
+
+    def anno_row_to_crop_row(row):
+      from au import plotting as aupl
+      import cv2
+
+      bbox = BBox.from_row_dict(row.asDict())
+      cropbox = cls.get_crop_viewport(bbox)
+      has_offscreen = (cropbox.get_num_onscreen_corners() != 4)
+      # Skip anything that is too near (or off) the edge of the image
+      if has_offscreen:
+        return None
+
+      frame = AVFrame(uri=row.uri, FIXTURES=cls.ANNOS.FIXTURES)
+      cropped_frame = frame.get_cropped(cropbox)
+      cropped_anno = frame.get_target_bbox()
+      
+      row_out = row.asDict()
+      if cropped_anno:
+        row_out.update(cropped_anno.to_row_dict())
+      else:
+        # For negatives, there is no real anno, but do record the
+        # crop bounds
+        row_out.update(cropbox.to_dict())
+
+      # Generate unformly-sized crop
+      crop = cropped_frame.image
+      crop = cv2.resize(crop, cls.VIEWPORT_WH, interpolation=cv2.INTER_NEAREST)
+      row_out['jpeg_bytes'] = bytearray(util.to_jpeg_bytes(crop, quality=100))
+
+      open('/opt/au/tasty/' + str(hash(row_out['uri'])) + '.jpg', 'wb').write(row_out['jpeg_bytes'])
+      
+      if and_debug:
+        # Rescale debug image to save space
+        crop_debug = cropped_frame.get_debug_image()
+        th, tw = aupl.get_hw_in_viewport(crop_debug.shape[:2], (300, 300))
+        crop_debug = cv2.resize(
+          crop_debug, (tw, th), interpolation=cv2.INTER_NEAREST)
+        row_out['debug_jpeg_bytes'] = bytearray(
+          util.to_jpeg_bytes(crop_debug, quality=60))
+
+        open('/opt/au/tasty/' + str(hash(row_out['uri'])) + 'degbug.jpg', 'wb').write(row_out['debug_jpeg_bytes'])
+      
+      return Row(**row_out)
+    
+    crop_anno_rdd = anno_df.rdd.map(anno_row_to_crop_row)
+    crop_anno_rdd = crop_anno_rdd.filter(lambda x: x is not None)
+    crop_anno_df = spark.createDataFrame(crop_anno_rdd)
+    return crop_anno_df
+
+  @classmethod
+  def _create_croppable_anno_df(cls, spark):
     anno_df = cls.ANNOS.as_df(spark)
 
     # Filter
@@ -1477,108 +1577,112 @@ class CroppedObjectImageTable(dataset.ImageTable):
     for cond in CONDS:
       anno_df = anno_df.filter(cond)
     
-    def anno_row_to_crop_row(anno):
-      bbox = BBox(**anno.asDict())
-      cropbox = cls.get_crop_viewport(bbox)
-      has_offscreen = (cropbox.get_num_onscreen_corners() != 4)
-      # Skip anything that is too near (or off) the edge of the image
-      if has_offscreen:
-        return None
-      
-      return Row(**cropbox.to_dict())
-
-    crop_spec_rdd = anno_df.rdd.map(anno_row_to_crop_row)
-    crop_spec_rdd = crop_spec_rdd.filter(lambda x: x is not None)
-    crop_spec_df = spark.createDataFrame(crop_spec_rdd)
-
-
-    print(crop_spec_df.count())
-    crop_spec_df.show()
-    import pdb; pdb.set_trace()
-
-    return crop_spec_df
+    return anno_df
   
   @classmethod
   def _save_positives(cls, spark):
-    def anno_row_to_imagerow(crop_spec_row):
-      import cv2
-      frame = AVFrame(uri=anno.uri, FIXTURES=cls.FIXTURES)
-      cropbox = BBox(**crop_spec_row.asDict())
-      cropped = frame.get_crop(cropbox)
-
-      # TODO clean up dataset.ImageRow so we can use it here with jpeg
-      def to_jpg_bytes(arr):
-        import imageio
-        import io
-        buf = io.BytesIO()
-        imageio.imwrite(buf, arr, 'jpeg', quality=100)
-        return bytearray(buf.getvalue())
-
-      def to_npz_bytes(arr):
-        import io
-        buf = io.BytesIO()
-        np.savez_compressed(buf, arr)
-        return bytearray(buf.getvalue())
-
-      crop_img = cv2.resize(cropped.image, cls.VIEWPORT_WH)
-      cloud = cropped.get_cloud_in_image()
-      # TODO: expose other labels as cols, add a shard key ~~~~~~~~~~~~~~~~~~~~~~~~
-      row = Row(
-        uri=cropped.uri,
-        split=cropped.split,
-        dataset='argoverse',
-        img_byte_jpeg=to_jpg_bytes(crop_img),
-        label=cropbox.category_name,
-        attrs=cropattrs(
-          anno=crop_spec_row,
-          cloud_npz=to_npz_bytes(cloud),
-          viewport_annos=''))# TODO ~~~~~~also add other labels~~~~~~~~~~~~~~~~~~~~~~cropped.image_bboxes))
-      return row
-    
-    crop_spec_df = cls._create_crop_spec_df(spark)
-    imagerow_rdd = crop_spec_df.rdd.map(anno_row_to_imagerow)
-    imagerow_df = spark.createDataFrame(imagerow_rdd)
-    imagerow_df.write.parquet(
+    anno_df = cls._create_croppable_anno_df(spark)
+    cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
+    cropped_anno_df.write.parquet(
       cls.table_root(),
       mode='append',        # Write positives and negatives in separate steps
       compression='snappy') # TODO pyarrow / lz4
-  
-  @classmethod
-  def _save_negatives(cls, spark):
-    anno_df = cls.ANNOS.as_df(spark)
-    frame_uris = anno_df.select('frame_uri').distinct()
-    frame_uri_rdd = frame_uris.rdd.flatMap(lambda r: r)
-    
-    def iter_samples(uri):
-      frame = AVFrame(uri=uri, FIXTURES=cls.FIXTURES)
 
-      # Get a miner
-      from argoverse.utils import camera_stats
-      if frame.uri.camera in camera_stats.RING_CAMERA_LIST:
-        miner = RingMiner(frame)
-      elif frame.uri.camera in camera_stats.STEREO_CAMERA_LIST:
-        miner = StereoMiner(frame)
-      else:
-        raise ValueError("Unknown camera: %s" % frame.uri.camera)
+  # @classmethod
+  # def _save_negatives(cls, spark):
+  #   # We'll mine negatives from all images, TODO even those w/out annotations ~~~~~~
+  #   anno_df = cls.ANNOS.as_df(spark)
+  #   frame_uris = anno_df.select('frame_uri').distinct()
+  #   frame_uri_rdd = frame_uris.rdd.flatMap(lambda r: r)
+    
+  #   def iter_samples(uri):
+  #     frame = AVFrame(uri=uri, FIXTURES=cls.FIXTURES)
+
+  #     # Get a miner
+  #     from argoverse.utils import camera_stats
+  #     if frame.uri.camera in camera_stats.RING_CAMERA_LIST:
+  #       miner = RingMiner(frame)
+  #     elif frame.uri.camera in camera_stats.STEREO_CAMERA_LIST:
+  #       miner = StereoMiner(frame)
+  #     else:
+  #       raise ValueError("Unknown camera: %s" % frame.uri.camera)
       
-      for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
-        bbox = miner.next_sample()
-        cropbox = cls.get_crop_viewport(bbox)
-        has_offscreen = (cropbox.get_num_onscreen_corners() != 4)
-        # Skip anything that is too near (or off) the edge of the image
-        if has_offscreen:
-          continue
+  #     for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
+  #       cropbox = miner.next_sample()
+  #       row = cropbox.as_row_dict()
+  #       row.update(
+  #         category_name='background',
+  #         frame_uri=str(uri),
+  #         city=frame.loader.city_name,
+
+
+  #         obj_uri='',
+  #       obj_uri.track_id = box.track_id
+  #       row.update(
+  #         frame_uri=str(uri),
+  #         uri=str(obj_uri),
+  #         **obj_uri.to_dict())
+  #       row.update(
+  #         city=cls.FIXTURES.get_loader(uri).city_name,
+  #         coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
+  #       )
         
-        cropbox.category_name = 'background'
-        yield frame.get_crop(cropbbox) # ~~~~ combine with other row encoding above
+  #       cropbox.
+  #       yield Row(**)
+
+  #   negative_anno_df = 
+
+    # def anno_row_to_imagerow(crop_spec_row):
+    #   import cv2
+    #   frame = AVFrame(uri=anno.uri, FIXTURES=cls.FIXTURES)
+    #   cropbox = BBox(**crop_spec_row.asDict())
+    #   cropped = frame.get_crop(cropbox)
+
+    #   # # TODO clean up dataset.ImageRow so we can use it here with jpeg
+    #   # def to_jpg_bytes(arr):
+    #   #   import imageio
+    #   #   import io
+    #   #   buf = io.BytesIO()
+    #   #   imageio.imwrite(buf, arr, 'jpeg', quality=100)
+    #   #   return bytearray(buf.getvalue())
+
+    #   def to_npz_bytes(arr):
+    #     import io
+    #     buf = io.BytesIO()
+    #     np.savez_compressed(buf, arr)
+    #     return bytearray(buf.getvalue())
+
+    #   crop_img = cv2.resize(cropped.image, cls.VIEWPORT_WH)
+    #   cloud = cropped.get_cloud_in_image()
+    #   # TODO: expose other labels as cols, add a shard key ~~~~~~~~~~~~~~~~~~~~~~~~
+    #   row = Row(
+    #     uri=cropped.uri,
+    #     split=cropped.split,
+    #     dataset='argoverse',
+    #     img_byte_jpeg=to_jpg_bytes(crop_img),
+    #     label=cropbox.category_name,
+    #     attrs=cropattrs(
+    #       anno=crop_spec_row,
+    #       cloud_npz=to_npz_bytes(cloud),
+    #       viewport_annos=''))# TODO ~~~~~~also add other labels~~~~~~~~~~~~~~~~~~~~~~cropped.image_bboxes))
+    #   return row
+    
+    # crop_spec_df = cls._create_crop_spec_df(spark)
+    # imagerow_rdd = crop_spec_df.rdd.map(anno_row_to_imagerow)
+    # imagerow_df = spark.createDataFrame(imagerow_rdd)
+    
+  
+  
 
 
               
     
 """
 TODO
- #* draw bike associations, wtf with very very far motorcycle
- # file:///Users/pwais/Downloads/imag_annos_new/best_rider_distance_by_category_name.html
+ 
+ *** find images that have no annotations!
+ * a ped can stand on OTHER_MOVER
+
  * report on number of invisible things (e.g. top of file comment)
     * report on number of motion-corrected frames
     * report on bikes no riders

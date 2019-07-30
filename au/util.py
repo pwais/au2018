@@ -55,6 +55,13 @@ log = create_log()
 
 ### Pythonisms
 
+def np_truthy(v):
+  import numpy as np
+  if isinstance(v, np.ndarray):
+    return bool(v.size)
+  else:
+    return bool(v)
+
 def ichunked(seq, n):
   """Generate chunks of `seq` of size (at most) `n`.  More efficient
   and less junk than itertools recipes version using izip_longest...
@@ -295,6 +302,28 @@ def imageio_ignore_warnings():
     yield
   finally:
     imageio.core.util._precision_warn = old
+
+def to_png_bytes(arr):
+  """Typically used for testing; when comparing images, we need to compare
+  actual and expected via image bytes b/c imageio does some sort of subtle
+  color normalization and we want our fixtures to simply be user-readable
+  PNGs."""
+
+  import io
+  import imageio
+  buf = io.BytesIO()
+  imageio.imwrite(buf, arr, 'png')
+  return buf.getvalue()
+
+def to_jpeg_bytes(arr, quality=100):
+  """Given a numpy array image `arr`, return the image encoded as a
+  jpeg buffer."""
+
+  import io
+  import imageio
+  buf = io.BytesIO()
+  imageio.imwrite(buf, arr, 'jpg', quality=quality)
+  return buf.getvalue()
 
 def run_cmd(cmd, collect=False, nolog=False):
   dolog = not nolog
