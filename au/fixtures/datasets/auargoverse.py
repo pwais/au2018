@@ -533,13 +533,13 @@ class HardNegativeMiner(object):
     # We'll use the integral image trick to make rejection sampling efficient
     class IntegralImage(object):
       def __init__(self, img):
-        self.ii = img.cumsum(axis=0).cumsum(axis=1)
+        self.__ii = img.cumsum(axis=0).cumsum(axis=1)
       
       def get_sum(self, r1, c1, r2, c2):
         return (
-          self.ii[r2, c2]
-          - self.ii[r1, c2] - self.ii[r2, c1]
-          + self.ii[r1, c1])
+          self.__ii[r2, c2]
+          - self.__ii[r1, c2] - self.__ii[r2, c1]
+          + self.__ii[r1, c1])
 
     self._ii = IntegralImage(mask)
     self._random = random.Random(self.SEED)
@@ -568,13 +568,12 @@ class HardNegativeMiner(object):
       proposal = BBox.from_x1_y1_x2_y2(x1, y1, x2, y2)
       proposal.quantize()
       sample = v.get_intersection_with(proposal)
-
-      num_anno_pixels = self._ii.get_sum(y1, x1, y2, x2)
-      sample = BBox.from_x1_y1_x2_y2(x1, y1, x2, y2)
+      num_anno_pixels = self._ii.get_sum(*sample.get_r1_c1_r2_r2())
+      # sample = BBox.from_x1_y1_x2_y2(x1, y1, x2, y2)
       
       # Do we have enough non-annotated pixels to accept?
       if num_anno_pixels / sample.get_area() <= self.MAX_FRACTION_ANNOTATED:
-        print(num_anno_pixels / sample.get_area()) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # print(num_anno_pixels / sample.get_area()) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         return sample
     util.log.warn(
       "Tried %s times and could not sample an unannotated box" % max_attempts)
@@ -1453,7 +1452,50 @@ class CroppedObjectImageTable(dataset.ImageTable):
       return
     
     cls._create_eligable_annos(kwargs.get('spark'))
+  
+  @classmethod
+  def as_imagerow_df(cls, spark):
+    df = spark.read.parquet(cls.table_root())
     
+    # Alias column to aid ImageRow Construction
+    df = df.withColumn('image_bytes', df['jpeg_bytes'])
+    df = df.withColumn('label', df['category_name'])
+
+    return df
+
+  @classmethod
+  def to_html(cls, spark, limit=50):
+    pdf = cls.as_imagerow_df(spark).limit(limit).toPandas()
+
+    def maybe_to_img(v):
+      from au import plotting as aupl
+      if isinstance(v, bytearray):
+        try:
+          from io import BytesIO
+          img = imageio.imread(BytesIO(v))
+          return aupl.img_to_img_tag(img)
+        except Exception as e:
+          print(e)
+      return v
+
+    COLS = [
+      'category_name',
+      'jpeg_bytes',
+      'debug_jpeg_bytes',
+      'camera',
+    ]
+    other_cols = set(pdf.columns) - set(COLS)
+    pdf = pdf.reindex(columns=COLS + list(sorted(other_cols)))
+
+    import pandas as pd
+    with pd.option_context('display.max_colwidth', -1):
+      html = pdf.to_html(
+            escape=False,
+            formatters=dict(
+              (col, maybe_to_img)
+              for col in pdf.columns
+              if 'bytes' in col))
+    return html
 
   ### Utils
 
@@ -1527,15 +1569,17 @@ class CroppedObjectImageTable(dataset.ImageTable):
       else:
         # For negatives, there is no real anno, but do record the
         # crop bounds
-        row_out.update(cropbox.to_dict())
+        row_out.update(dict(
+          (k, v) for k, v in cropbox.to_dict().items()
+          if v is not None))
+            # TODO create false annos ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      row_out.update(cropped_frame.uri.to_dict())
 
       # Generate unformly-sized crop
       crop = cropped_frame.image
       crop = cv2.resize(crop, cls.VIEWPORT_WH, interpolation=cv2.INTER_NEAREST)
       row_out['jpeg_bytes'] = bytearray(util.to_jpeg_bytes(crop, quality=100))
 
-      open('/opt/au/tasty/' + str(hash(row_out['uri'])) + '.jpg', 'wb').write(row_out['jpeg_bytes'])
-      
       if and_debug:
         # Rescale debug image to save space
         crop_debug = cropped_frame.get_debug_image()
@@ -1544,8 +1588,6 @@ class CroppedObjectImageTable(dataset.ImageTable):
           crop_debug, (tw, th), interpolation=cv2.INTER_NEAREST)
         row_out['debug_jpeg_bytes'] = bytearray(
           util.to_jpeg_bytes(crop_debug, quality=60))
-
-        open('/opt/au/tasty/' + str(hash(row_out['uri'])) + 'degbug.jpg', 'wb').write(row_out['debug_jpeg_bytes'])
       
       return Row(**row_out)
     
@@ -1588,49 +1630,43 @@ class CroppedObjectImageTable(dataset.ImageTable):
       mode='append',        # Write positives and negatives in separate steps
       compression='snappy') # TODO pyarrow / lz4
 
-  # @classmethod
-  # def _save_negatives(cls, spark):
-  #   # We'll mine negatives from all images, TODO even those w/out annotations ~~~~~~
-  #   anno_df = cls.ANNOS.as_df(spark)
-  #   frame_uris = anno_df.select('frame_uri').distinct()
-  #   frame_uri_rdd = frame_uris.rdd.flatMap(lambda r: r)
+  
+
+  @classmethod
+  def _save_negatives(cls, spark):
+    # We'll mine negatives from all images, TODO even those w/out annotations ~~~~~~
+    anno_df = cls.ANNOS.as_df(spark)
+    frame_uris = anno_df.select('frame_uri').distinct()
+    frame_uri_rdd = frame_uris.rdd.flatMap(lambda r: r)
     
-  #   def iter_samples(uri):
-  #     frame = AVFrame(uri=uri, FIXTURES=cls.FIXTURES)
+    def iter_samples(uri):
+      frame = AVFrame(uri=uri, FIXTURES=cls.ANNOS.FIXTURES)
 
-  #     # Get a miner
-  #     from argoverse.utils import camera_stats
-  #     if frame.uri.camera in camera_stats.RING_CAMERA_LIST:
-  #       miner = RingMiner(frame)
-  #     elif frame.uri.camera in camera_stats.STEREO_CAMERA_LIST:
-  #       miner = StereoMiner(frame)
-  #     else:
-  #       raise ValueError("Unknown camera: %s" % frame.uri.camera)
+      # Get a miner
+      from argoverse.utils import camera_stats
+      if frame.uri.camera in camera_stats.RING_CAMERA_LIST:
+        miner = RingMiner(frame)
+      elif frame.uri.camera in camera_stats.STEREO_CAMERA_LIST:
+        miner = StereoMiner(frame)
+      else:
+        raise ValueError("Unknown camera: %s" % frame.uri.camera)
       
-  #     for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
-  #       cropbox = miner.next_sample()
-  #       row = cropbox.as_row_dict()
-  #       row.update(
-  #         category_name='background',
-  #         frame_uri=str(uri),
-  #         city=frame.loader.city_name,
+      for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
+        cropbox = miner.next_sample()
+        row = cropbox.to_dict()
+        row.update(
+          category_name='background',
+          uri=str(uri))
+        yield Row(**row)
 
+    negative_annos = frame_uri_rdd.flatMap(iter_samples)
+    anno_df = spark.createDataFrame(negative_annos)
+    cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
+    cropped_anno_df.write.parquet(
+      cls.table_root(),
+      mode='append',        # Write positives and negatives in separate steps
+      compression='snappy') # TODO pyarrow / lz4
 
-  #         obj_uri='',
-  #       obj_uri.track_id = box.track_id
-  #       row.update(
-  #         frame_uri=str(uri),
-  #         uri=str(obj_uri),
-  #         **obj_uri.to_dict())
-  #       row.update(
-  #         city=cls.FIXTURES.get_loader(uri).city_name,
-  #         coarse_category=AV_OBJ_CLASS_TO_COARSE.get(box.category_name, ''))
-  #       )
-        
-  #       cropbox.
-  #       yield Row(**)
-
-  #   negative_anno_df = 
 
     # def anno_row_to_imagerow(crop_spec_row):
     #   import cv2

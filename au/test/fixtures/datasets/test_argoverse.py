@@ -237,8 +237,30 @@ class TestArgoverseImageTable(unittest.TestCase):
     with testutils.LocalSpark.sess() as spark:
       class TestCroppedObjectImageTable(av.CroppedObjectImageTable):
         ANNOS = self.ImageAnnoTable
-      TestCroppedObjectImageTable._save_positives(spark)
+      
+      TestCroppedObjectImageTable._save_negatives(spark)
+      pdf = TestCroppedObjectImageTable.as_imagerow_df(spark).limit(10).toPandas()
+      html = TestCroppedObjectImageTable.to_html(spark)
+      open('/opt/au/tasty.html', 'w').write(html)
+      print(pdf)
+      import pdb; pdb.set_trace()
+      print('moof')
 
+  def test_caasdgadsg(self):
+    frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad', 
+                  FIXTURES=self.TestFixtures)
+    import imageio
+    # TODO create fixture
+    imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
+
+    hnm = av.HardNegativeMiner(frame)
+    for i in range(10):
+      bbox = hnm.next_sample()
+      imageio.imwrite(
+        '/opt/au/tastttt_%s.png' % i,
+        frame.get_cropped(bbox).get_debug_image(),
+        format='png')
+      print('/opt/au/tastttt_%s.png' % i)
 
   # def test_samplexxxxxxx(self):
   #   # if not self.have_fixtures:

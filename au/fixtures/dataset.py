@@ -532,6 +532,13 @@ class ImageTable(object):
           break
     return iter_image_rows
 
+  @classmethod
+  def to_html(cls, spark, limit=50):
+    pdf = cls.as_imagerow_df(spark).limit(limit).toPandas()
+    return pdf.to_html()
+
+
+
 
 # class TFDatasetAdapter(object):
 

@@ -48,7 +48,10 @@ class BBox(object):
     self.update(x=x1, y=y1, width=x2 - x1 + 1, height=y2 - y1 + 1)
 
   def get_x1_y1_x2_y2(self):
-    return self.x, self.y, self.x + self.width, self.y + self.height
+    return self.x, self.y, self.x + self.width - 1, self.y + self.height - 1
+
+  def get_r1_c1_r2_r2(self):
+    return self.y, self.x, self.y + self.height - 1, self.x + self.width - 1
 
   def get_x1_y1(self):
     return self.x, self.y
@@ -111,25 +114,27 @@ class BBox(object):
     self.set_x1_y1_x2_y2(x1, y1, x2, y2)
     
   def get_intersection_with(self, other):
-    ix1 = max(self.x, other.x)
-    ix2 = min(self.x + self.width, other.x + other.width)
-    iy1 = max(self.y, other.y)
-    iy2 = min(self.y + self.height, other.y + other.height)
+    x1, y1, x2, y2 = self.get_x1_y1_x2_y2()
+    ox1, oy1, ox2, oy2 = other.get_x1_y1_x2_y2()
+    ix1 = max(x1, ox1)
+    ix2 = min(x2, ox2)
+    iy1 = max(y1, oy1)
+    iy2 = min(y2, oy2)
     
     intersection = copy.deepcopy(self)
-    intersection.update(
-      x=ix1, y=iy1, width=ix2-ix1, height=iy2-iy1)
+    intersection.set_x1_y1_x2_y2(ix1, iy1, ix2, iy2)
     return intersection
 
   def get_union_with(self, other):
-    ux1 = min(self.x, other.x)
-    ux2 = max(self.x + self.width, other.x + other.width)
-    uy1 = min(self.y, other.y)
-    uy2 = max(self.y + self.height, other.y + other.height)
+    x1, y1, x2, y2 = self.get_x1_y1_x2_y2()
+    ox1, oy1, ox2, oy2 = other.get_x1_y1_x2_y2()
+    ux1 = min(x1, ox1)
+    ux2 = max(x2, ox2)
+    uy1 = min(y1, oy1)
+    uy2 = max(y2, oy2)
     
     union = copy.deepcopy(self)
-    union.update(
-      x=ux1, y=uy1, width=ux2-ux1, height=uy2-uy1)
+    union.set_x1_y1_x2_y2(ux1, uy1, ux2, uy2)
     return union
 
   def overlaps_with(self, other):
