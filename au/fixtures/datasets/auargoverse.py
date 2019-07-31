@@ -438,6 +438,7 @@ class AVFrame(object):
   def image_bboxes(self):
     if not self._image_bboxes:
       
+      ## MOVE THIS AND frame factory into Fixtures ... then finish special queries ~~~~
       t = self.uri.timestamp
       av_label_objects = self.loader.get_nearest_label_object(t)
 
@@ -583,17 +584,24 @@ class RingMiner(HardNegativeMiner):
   # We could perhaps choose these using camera intrinsics, but instead
   # we use the empircal distributon from existing annotations
   # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
-  WIDTH_PIXELS_MU_STD = (107.842119, 123.289099)
-  HEIGHT_PIXELS_MU_STD = (92.435195, 107.863304)
+  WIDTH_PIXELS_MU_STD = (111.894619, 128.690585)
+  HEIGHT_PIXELS_MU_STD = (92.435195, 119.881747)
 
 class StereoMiner(HardNegativeMiner):
   # We could perhaps choose these using camera intrinsics, but instead
   # we use the empircal distributon from existing annotations
   # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
-  WIDTH_PIXELS_MU_STD = (201.600639, 189.607279)
-  HEIGHT_PIXELS_MU_STD = (196.776626, 198.066231)
+  WIDTH_PIXELS_MU_STD = (204.346622, 192.078106)
+  HEIGHT_PIXELS_MU_STD = (204.070778, 212.397835)
 
-
+def create_miner(frame):
+  from argoverse.utils import camera_stats
+  if frame.uri.camera in camera_stats.RING_CAMERA_LIST:
+    return RingMiner(frame)
+  elif frame.uri.camera in camera_stats.STEREO_CAMERA_LIST:
+    return StereoMiner(frame)
+  else:
+    raise ValueError("Unknown camera: %s" % frame.uri.camera)
 
 class AUTrackingLoader(ArgoverseTrackingLoader):
   """This class makes several modifications to `ArgoverseTrackingLoader`:
@@ -1098,7 +1106,7 @@ class ImageAnnoTable(object):
     return joined
 
   @classmethod
-  def _create_uri_rdd(cls, spark, splits=None):
+  def create_frame_uri_rdd(cls, spark, splits=None):
     if not splits:
       splits = cls.FIXTURES.SPLITS
 
@@ -1119,7 +1127,7 @@ class ImageAnnoTable(object):
 
   @classmethod
   def build_anno_df(cls, spark, splits=None):
-    uri_rdd = cls._create_uri_rdd(spark, splits=splits)
+    uri_rdd = cls.create_frame_uri_rdd(spark, splits=splits)
 
     def iter_anno_rows(uri):
       # from collections import namedtuple ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1297,10 +1305,21 @@ class AnnoReports(object):
                   ridden_bike_track_id != ''
                 GROUP BY split"""
       ),
+      ("Number of Tracks That Never Appear on Camera", """
+              select track_id, sum(if(is_visible, 1, 0)) num_invisible, count(*) total
+  from data
+  group by track_id having total - num_invisible < 10"""
+      ),
     )
     for title, query in title_queries:
       util.log.info("Running %s ..." % title)
       yield title, spark.sql(query).toPandas()
+    
+    ## Special queries
+    title = "Number of Tracks That Never Appear on Camera"
+    frame_uri_rdd = cls.ANNO_TABLE.create_frame_uri_rdd(spark).cache()
+    
+    
 
   @classmethod
   def save_histogram_reports(cls, spark, dest_dir):
@@ -1435,7 +1454,8 @@ class CroppedObjectImageTable(dataset.ImageTable):
   # Jitter the center of any crop vs the target bbox using this gaussian
   CENTER_JITTER_MU_STD = (0, 10)
 
-  # TODO mebbe make more rigorous check stats ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # The front camera has on average 18.53 annotations per image
+  # cache/data/argoverse/index/image_annos/Anno_Counts_by_Camera.html
   NEGATIVE_SAMPLES_PER_FRAME = 20
 
   ANNOS = ImageAnnoTable
@@ -1445,13 +1465,21 @@ class CroppedObjectImageTable(dataset.ImageTable):
 
   @classmethod
   def setup(cls, **kwargs):
-    if os.path.exists(cls.table_root()):
+    if util.missing_or_empty(cls.table_root()):
+      spark = kwargs['spark']
+      cls._save_positives(spark)
+      cls._save_negatives(spark)
       util.log.info(
-        "Skipping setup for %s, %s exists." % (
-          cls.TABLE_NAME, cls.table_root()))
-      return
-    
-    cls._create_eligable_annos(kwargs.get('spark'))
+        "Created %s total crops." % cls.as_imagerow_df(spark).count())
+
+      util.log.info("Creating HTML sample report ...")
+      html = cls.to_html(spark)
+      fname = cls.TABLE_NAME + '_sample.html'
+      dest = os.path.join(cls.ANNOS.FIXTURES.index_root(), fname)
+      util.mkdir(cls.ANNOS.FIXTURES.index_root())
+      with open(dest, 'w') as f:
+        f.write(html)
+      util.log.info("... saved HTML sample report to %s" % dest)
   
   @classmethod
   def as_imagerow_df(cls, spark):
@@ -1464,8 +1492,17 @@ class CroppedObjectImageTable(dataset.ImageTable):
     return df
 
   @classmethod
-  def to_html(cls, spark, limit=50):
-    pdf = cls.as_imagerow_df(spark).limit(limit).toPandas()
+  def to_html(cls, spark, limit=100, random_sample_seed=1337):
+    df = cls.as_imagerow_df(spark)
+    if random_sample_seed is not None:
+      fraction_approx = float(limit) / df.count()
+      df = df.sample(
+                withReplacement=False,
+                fraction=fraction_approx + .1,
+                seed=random_sample_seed)
+    if limit and limit >= 1:
+      df = df.limit(limit)
+    pdf = df.toPandas()
 
     def maybe_to_img(v):
       from au import plotting as aupl
@@ -1619,21 +1656,26 @@ class CroppedObjectImageTable(dataset.ImageTable):
     for cond in CONDS:
       anno_df = anno_df.filter(cond)
     
+    util.log.info("Found %s eligible annos." % anno_df.count())
     return anno_df
   
   @classmethod
-  def _save_positives(cls, spark):
-    anno_df = cls._create_croppable_anno_df(spark)
-    cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
-    cropped_anno_df.write.parquet(
+  def __save_df(cls, crop_df):
+    crop_df.write.parquet(
       cls.table_root(),
       mode='append',        # Write positives and negatives in separate steps
       compression='snappy') # TODO pyarrow / lz4
 
+  @classmethod
+  def _save_positives(cls, spark):
+    util.log.info("Saving positives ....")
+    anno_df = cls._create_croppable_anno_df(spark)
+    cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
+    cls.__save_df(cropped_anno_df)
   
-
   @classmethod
   def _save_negatives(cls, spark):
+    util.log.info("Saving negatives ...")
     # We'll mine negatives from all images, TODO even those w/out annotations ~~~~~~
     anno_df = cls.ANNOS.as_df(spark)
     frame_uris = anno_df.select('frame_uri').distinct()
@@ -1642,15 +1684,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     def iter_samples(uri):
       frame = AVFrame(uri=uri, FIXTURES=cls.ANNOS.FIXTURES)
 
-      # Get a miner
-      from argoverse.utils import camera_stats
-      if frame.uri.camera in camera_stats.RING_CAMERA_LIST:
-        miner = RingMiner(frame)
-      elif frame.uri.camera in camera_stats.STEREO_CAMERA_LIST:
-        miner = StereoMiner(frame)
-      else:
-        raise ValueError("Unknown camera: %s" % frame.uri.camera)
-      
+      miner = create_miner(frame)
       for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
         cropbox = miner.next_sample()
         row = cropbox.to_dict()
@@ -1660,12 +1694,11 @@ class CroppedObjectImageTable(dataset.ImageTable):
         yield Row(**row)
 
     negative_annos = frame_uri_rdd.flatMap(iter_samples)
-    anno_df = spark.createDataFrame(negative_annos)
+    anno_df = spark.createDataFrame(negative_annos).cache()
+    
+    util.log.info("... going to save %s negatives ..." % anno_df.count())
     cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
-    cropped_anno_df.write.parquet(
-      cls.table_root(),
-      mode='append',        # Write positives and negatives in separate steps
-      compression='snappy') # TODO pyarrow / lz4
+    cls.__save_df(cropped_anno_df)
 
 
     # def anno_row_to_imagerow(crop_spec_row):

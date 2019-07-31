@@ -48,7 +48,7 @@ class TestImageAnnoTableBase(av.ImageAnnoTable):
   # NB: We will override FIXTURES at test time
 
   @classmethod
-  def _create_uri_rdd(cls, spark, splits=None):
+  def create_frame_uri_rdd(cls, spark, splits=None):
     uri_rdd = spark.sparkContext.parallelize(
                             TEST_FIXTURE_URIS,
                             numSlices=len(TEST_FIXTURE_URIS))
@@ -238,13 +238,7 @@ class TestArgoverseImageTable(unittest.TestCase):
       class TestCroppedObjectImageTable(av.CroppedObjectImageTable):
         ANNOS = self.ImageAnnoTable
       
-      TestCroppedObjectImageTable._save_negatives(spark)
-      pdf = TestCroppedObjectImageTable.as_imagerow_df(spark).limit(10).toPandas()
-      html = TestCroppedObjectImageTable.to_html(spark)
-      open('/opt/au/tasty.html', 'w').write(html)
-      print(pdf)
-      import pdb; pdb.set_trace()
-      print('moof')
+      TestCroppedObjectImageTable.setup(spark=spark)
 
   def test_caasdgadsg(self):
     frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad', 
