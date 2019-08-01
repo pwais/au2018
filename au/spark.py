@@ -312,7 +312,8 @@ class Spark(object):
     for df_other in dfs[1:]:
       left_types = {f.name: f.dataType for f in df.schema}
       right_types = {f.name: f.dataType for f in df_other.schema}
-      left_fields = set((f.name, f.dataType, f.nullable) for f in df.schema)
+      left_fields = set(
+        (f.name, f.dataType, f.nullable) for f in df.schema)
       right_fields = set(
         (f.name, f.dataType, f.nullable) for f in df_other.schema)
 
@@ -529,6 +530,9 @@ class NumpyArrayUDT(types.UserDefinedType):
   def module(cls):
     return 'au.spark'
 
+  def __hash__(self):
+    return hash(self.simpleString())
+
   def serialize(self, a):
     return [a.get_bytes()]
 
@@ -562,6 +566,160 @@ class NumpyArray(object):
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and other.arr == self.arr
+
+def spark_df_to_tf_dataset(
+      spark_df,
+      spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
+      tf_element_types, # E.g. [tf.int64]
+      non_deterministic_element_order=True,
+      num_reader_threads=-1):
+    """Create a tf.data.Dataset that reads from the Spark Dataframe
+    `spark_df`.  Executes parallel reads using the Tensorflow's internal
+    (native code) threadpool.  Each thread reads a single Spark partition
+    at a time.
+
+    This utility is similar to Petastorm's `make_reader()` but is far simpler
+    and leverages Tensorflow's build-in threadpool (so we let Tensorflow
+    do the read scheduling).
+
+    Args:
+      spark_df (pyspark.sql.DataFrame): Read from this Dataframe
+      spark_row_to_tf_element (func): 
+        Use this function to map each pyspark.sql.Row in `spark_df`
+        to a tuple that represents a single element of the
+        induced TF Dataset.
+      tf_element_types (tuple):
+        The types of the elements that `spark_row_to_tf_element` returns;
+        e.g. (tf.float32, tf.string).
+      non_deterministic_element_order (bool):
+        Allow the resulting tf.data.Dataset to have elements in
+        non-deterministic order for speed gains.
+      num_reader_threads (int):
+        Tell Tensorflow to use this many reader threads, or use -1
+        to provision one reader thread per CPU core.
+    
+    Returns:
+      tf.data.Dataset: The induced TF Datset with one element per
+        row in `spark_df`.
+    """
+
+    # import tensorflow as tf
+    # tuple_rdd = spark_df.rdd.map(spark_row_to_tf_element)
+    # tuple_rdd = tuple_rdd.persist(pyspark.StorageLevel.MEMORY_AND_DISK)
+    # ds = tf.data.Dataset.from_generator(
+    #           tuple_rdd.toLocalIterator,tf_element_types)
+    # return ds
+
+
+
+
+    if num_reader_threads < 1:
+      import multiprocessing
+      num_reader_threads = multiprocessing.cpu_count()
+
+    # Each Tensorflow reader thread will read a single Spark partition
+    from pyspark.sql.functions import spark_partition_id
+    # df = spark_df.withColumn('_spark_part_id', spark_partition_id())
+    df = spark_df
+    # pids = df.select('_spark_part_id').distinct().rdd.flatMap(lambda x: x).collect()
+    pids = df.select('part').distinct().rdd.flatMap(lambda x: x).collect()
+    
+
+    import tensorflow as tf
+    pid_ds = tf.data.Dataset.from_tensor_slices(pids)
+    
+
+    def get_rows(pid):
+      util.log.info("Fetching partition %s" % pid)
+      # part_df = df.filter('_spark_part_id == %s' % pid)
+      part_df = df.filter('part == %s' % pid)
+        # NB: this can be a linear scan :(
+      rows = part_df.rdd.map(spark_row_to_tf_element).collect()
+      util.log.info("Partition %s had %s rows" % (pid, len(rows)))
+      for row in rows:
+        yield row
+    
+    ds = pid_ds.interleave(
+      lambda pid_t: \
+        tf.data.Dataset.from_generator(
+          get_rows, 
+          args=(pid_t,),
+          output_types=tf_element_types),
+      cycle_length=2,
+      num_parallel_calls=2)
+    return ds
+
+    # gens_dss = [
+      
+    #   for pid in pids
+    # ]
+
+    # ds = gens_dss[0]
+    # for i in range(1, len(gens_dss)):
+    #   ds.concatentate(gens_dss[i])
+    # return ds
+
+    # pid_ds.apply(
+    #   tf.data.experimental.parallel_interleave(
+
+
+
+    # def make_gen(pid_array):
+    #   def gen():
+    #     for row in get_rows(pid_array):
+    #       print('row', row)
+    #       yield row
+    #   return tf.data.Dataset.from_generator(gen, tf_element_types)
+    # ds = pid_ds.apply(
+    #   tf.data.experimental.parallel_interleave(
+    #     make_gen,
+    #     cycle_length=num_reader_threads,
+    #     sloppy=True))
+    # return ds
+
+    
+      
+
+
+      # def pid_to_element_cols(pid):
+        
+        
+      #   if not rows:
+      #     # Tensorflow expects empty numpy columns of promised dtype
+      #     import numpy as np
+      #     util.log.warn("No rows!")
+      #     return tuple(
+      #       np.empty(0, dtype=tf_dtype.as_numpy_dtype)
+      #       for tf_dtype in tf_element_types
+      #     )
+      #   util.log.info("FetchED partition %s" % pid)
+      #   xformed = [spark_row_to_tf_element(row) for row in rows]
+
+      #   # Sadly TF py_func can't easily return a list of objects, just a
+      #   # tuple of arrays.  So we re-organize the rows into columns, each
+      #   # which has a known type.
+      #   import itertools
+      #   cwise = list(zip(*xformed))
+
+      #   return cwise
+      
+      # pds = pds.map(
+      #   lambda p: tf.numpy_function(
+      #     pid_to_element_cols, [p], tf_element_types))
+      #       # NB: why tuple()? https://github.com/tensorflow/tensorflow/issues/12396#issuecomment-323407387
+      
+    #   # import uuid
+    #   # path = '/tmp/cache_yay_' + str(uuid.uuid4())
+    #   # print 'save cache for pid to ', path
+    #   # pds = pds.cache(path)
+    #   # print 'warming cache'
+    #   # with util.tf_data_session(pds) as (sess, iter_dataset):
+    #   #   n = 0
+    #   #   for _ in iter_dataset():
+    #   #     n += 1
+    #   #   print 'warmed', n
+    #   # util.rm_rf(path + '_0.lockfile')
+    #   return pds
 
 
 # # FIXME

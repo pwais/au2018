@@ -144,12 +144,14 @@ class FrameURI(object):
 
   @staticmethod
   def from_str(s):
+    if isinstance(s, FrameURI):
+      return s
     assert s.startswith(FrameURI.PREFIX)
     toks_s = s[len(FrameURI.PREFIX):]
     toks = toks_s.split('&')
     assert len(toks) >= (len(FrameURI.__slots__) - len(FrameURI.OPTIONAL))
-    iu = FrameURI(**dict(tok.split('=') for tok in toks))
-    return iu
+    uri = FrameURI(**dict(tok.split('=') for tok in toks))
+    return uri
 
 class BBox(common.BBox):
   __slots__ = tuple(
@@ -437,23 +439,7 @@ class AVFrame(object):
   @property
   def image_bboxes(self):
     if not self._image_bboxes:
-      
-      ## MOVE THIS AND frame factory into Fixtures ... then finish special queries ~~~~
-      t = self.uri.timestamp
-      av_label_objects = self.loader.get_nearest_label_object(t)
-
-      # Some of the labels are complete junk
-      av_label_objects = [
-        olr for olr in av_label_objects
-        if not (
-          np.isnan(olr.quaternion).any() or 
-          np.isnan(olr.translation).any())
-      ]
-
-      bboxes = [
-        BBox.from_argoverse_label(self.uri, olr, fixures_cls=self.FIXTURES)
-        for olr in av_label_objects
-      ]
+      bboxes = self.loader.get_nearest_label_bboxes(self.uri)
 
       # Ingore invisible things
       self._image_bboxes = [
@@ -510,7 +496,7 @@ class AVFrame(object):
     if hasattr(bbox, 'track_id') and bbox.track_id:
       uri.track_id = bbox.track_id
 
-    frame = AVFrame(uri=uri, FIXTURES=self.FIXTURES)
+    frame = self.FIXTURES.get_frame(uri)
     return frame
 
 class HardNegativeMiner(object):
@@ -616,7 +602,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       `demo_usage/cuboids_to_bboxes.py` in Argoverse.
   """
 
-  def __init__(self, root_dir, log_name):
+  def __init__(self, root_dir, log_name, FIXTURES=None):
     """Create a new loader.
     
     Args:
@@ -624,7 +610,10 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
         e.g. /media/data/path/to/argoverse/argoverse-tracking/train1
       log_name: string, the name of the log to load,
         e.g. 5ab2697b-6e3e-3454-a36a-aba2c6f27818
+      FIXTURES: `Fixtures` class that specifies paths to source data fixtures.
     """
+
+    self.FIXTURES = FIXTURES or Fixtures
 
     assert os.path.exists(os.path.join(root_dir, log_name)), "Sanity check"
 
@@ -647,7 +636,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     util.log.info(
       "Creating loader for log %s with root dir %s" % (log_name, root_dir))
     super(AUTrackingLoader, self).__init__(virtual_root)
-  
+
   def get_nearest_image_path(self, camera, timestamp):
     """Return a path to the image from `camera` at `timestamp`;
     provide either an exact match or choose the closest available."""
@@ -671,7 +660,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       "Could not find a cloud within 1 sec of %s, diff %s" % (timestamp, diff)
     return idx, self.lidar_timestamp_list[idx]
 
-  def get_nearest_label_object(self, timestamp):
+  def get_nearest_label_objects(self, timestamp):
     """Load and return the `ObjectLabelRecord`s nearest to `timestamp`;
     provide either an exact match or choose the closest available."""
 
@@ -694,6 +683,30 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       obj.timestamp = label_t
     
     return objs
+  
+  def get_nearest_label_bboxes(self, uri):
+    """Load and return a list of `BBox`es using the `ObjectLabelRecord`s
+    nearest to `timestamp`; provide either an exact match or choose the closest
+    available."""
+    uri = FrameURI.from_str(uri)
+
+    av_label_objects = self.get_nearest_label_objects(uri.timestamp)
+
+    # Some of the labels are complete junk.  Argoverse filters these
+    # interally in scattered places.
+    av_label_objects = [
+      olr for olr in av_label_objects
+      if not (
+        np.isnan(olr.quaternion).any() or 
+        np.isnan(olr.translation).any())
+    ]
+
+    bboxes = [
+      BBox.from_argoverse_label(uri, olr, fixures_cls=self.FIXTURES)
+      for olr in av_label_objects
+    ]
+
+    return bboxes
 
   # @klepto.lru_cache(maxsize=1000, ignore=(0,)) doesnt seem to work concurrent ... 
   def get_maybe_motion_corrected_cloud(self, timestamp):
@@ -874,11 +887,18 @@ class Fixtures(object):
     for log_dir in cls.get_log_dirs(base_path):
       cur_log_id = os.path.split(log_dir)[-1]
       if cur_log_id == log_id:
-        loader = AUTrackingLoader(os.path.dirname(log_dir), log_id)
+        loader = AUTrackingLoader(
+          os.path.dirname(log_dir), log_id, FIXTURES=cls)
         break
     
     assert loader, "Could not find log %s in %s" % (log_id, base_path)
     return loader
+
+  @classmethod
+  def get_frame(cls, uri):
+    """Factory function for constructing an AVFrame that uses this Fixtures
+    instance as fixtures."""
+    return AVFrame(uri=uri, FIXTURES=cls)
 
 
     # # These stupid Loader objects are painfully, painfully expensive because
@@ -1133,7 +1153,7 @@ class ImageAnnoTable(object):
       # from collections import namedtuple ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       # pt = namedtuple('pt', 'x y z')
 
-      frame = AVFrame(uri=uri, FIXTURES=cls.FIXTURES)
+      frame = cls.FIXTURES.get_frame(uri)
       for bbox in frame.image_bboxes:
         row = {}
 
@@ -1222,104 +1242,166 @@ class AnnoReports(object):
   def get_overall_stats_dfs(cls, spark):
     """Generate a sequence of title/pandas.Dataframe pairs detailing overall
     dataset statistics."""
-    df = cls.ANNO_TABLE.as_df(spark)
-    df.createOrReplaceTempView("nms")
+    
+    ## Register anno table
+    anno_df = cls.ANNO_TABLE.as_df(spark)
+    anno_df.createOrReplaceTempView("annos")
+
+    ## Register raw anno table for special queries
+    # We use a Dataframe that is similar to `anno_df` but (1) includes some
+    # extra information and (2) is not serializable due to null columns.
+    frame_uri_rdd = cls.ANNO_TABLE.create_frame_uri_rdd(spark).cache()
+    def iter_all_bbox_rows(uri):
+      uri_cells = FrameURI.from_str(uri).to_dict()
+      loader = cls.ANNO_TABLE.FIXTURES.get_loader(uri)
+      bboxes = loader.get_nearest_label_bboxes(uri)
+      yield dict(frame_uri=uri, num_bboxes=len(bboxes), **uri_cells)
+      
+      for bbox in bboxes:
+        row = dict(bbox.to_row_dict())
+        row.update(**uri_cells)
+        yield row
+    
+    raw_anno_row_rdd = frame_uri_rdd.flatMap(iter_all_bbox_rows)
+    raw_anno_df = spark.createDataFrame(raw_anno_row_rdd, samplingRatio=0.5)
+    raw_anno_df.createOrReplaceTempView("raw_annos")
+
     title_queries = (
-      ("Size stats by Split", """
-              SELECT
-                split,
-                AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                COUNT(*) AS num_annos,
-                COUNT(DISTINCT frame_uri) AS num_frames
-              FROM nms
-              GROUP BY split"""
+      ("Size Stats by Split", """
+          SELECT
+            split,
+            AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+            AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+            COUNT(*) AS num_annos,
+            COUNT(DISTINCT frame_uri) AS num_frames
+          FROM annos
+          GROUP BY split
+          ORDER BY split"""
       ),
-      ("Size stats by City", """
-              SELECT
-                  city,
-                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                  COUNT(*) AS num_annos,
-                  COUNT(DISTINCT frame_uri) AS num_frames
-                FROM nms
-                GROUP BY city"""
+      ("Size Stats by City", """
+          SELECT
+            city,
+            AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+            AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+            COUNT(*) AS num_annos,
+            COUNT(DISTINCT frame_uri) AS num_frames
+          FROM annos
+          GROUP BY city
+          ORDER BY city"""
       ),
-      ("Size stats by Category", """
-              SELECT
-                  category_name,
-                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                  COUNT(*) AS num_annos,
-                  COUNT(DISTINCT frame_uri) AS num_frames
-                FROM nms
-                GROUP BY category_name"""
+      ("Size Stats by Category", """
+          SELECT
+            category_name,
+            AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+            AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+            COUNT(*) AS num_annos,
+            COUNT(DISTINCT frame_uri) AS num_frames
+          FROM annos
+          GROUP BY category_name
+          ORDER BY category_name"""
       ),
-      ("Size stats by Camera", """
-              SELECT
-                  camera,
-                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                  COUNT(*) AS num_annos,
-                  COUNT(DISTINCT frame_uri) AS num_frames
-                FROM nms
-                GROUP BY camera"""
+      ("Size Stats by Camera", """
+          SELECT
+            camera,
+            AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+            AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+            COUNT(*) AS num_annos,
+            COUNT(DISTINCT frame_uri) AS num_frames
+          FROM annos
+          GROUP BY camera
+          ORDER BY camera"""
+      ),
+      ("Frames Per Track by Camera", """
+          SELECT
+            camera,
+            AVG(num_frames) AS num_frames_mu,
+            STD(num_frames) AS num_frames_std,
+            SUM(num_frames) AS num_frames_total,
+            COUNT(*) AS num_tracks_total
+          FROM (
+            SELECT
+              camera, track_id, COUNT(DISTINCT frame_uri) AS num_frames
+            FROM annos
+            GROUP BY camera, track_id )
+          GROUP BY camera
+          ORDER BY camera"""
       ),
       ("Anno Counts by Camera", """
-              SELECT
-                  camera,
-                  AVG(num_annos) AS num_annos_mu,
-                  STD(num_annos) AS num_annos_std,
-                  SUM(num_annos) AS num_annos_total,
-                  COUNT(*) AS num_frames_total
-                FROM (
-                  SELECT
-                    camera, frame_uri, COUNT(*) AS num_annos
-                  FROM nms
-                  GROUP BY camera, frame_uri
-                )
-                GROUP BY camera
-                ORDER BY camera"""
+          SELECT
+            camera,
+            AVG(num_annos) AS num_annos_mu,
+            STD(num_annos) AS num_annos_std,
+            SUM(num_annos) AS num_annos_total,
+            COUNT(*) AS num_frames_total
+          FROM (
+            SELECT
+              camera, frame_uri, COUNT(*) AS num_annos
+            FROM annos
+            GROUP BY camera, frame_uri )
+          GROUP BY camera
+          ORDER BY camera"""
       ),
-      ("Pedestrian stats by Distance", """
-              SELECT
-                  camera,
-                  10 * MOD(ROUND(distance_meters), 10) AS distance_m_bucket,
-                  AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
-                  AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
-                  COUNT(*) AS num_annos,
-                  COUNT(DISTINCT frame_uri) AS num_frames
-                FROM nms
-                WHERE
-                  category_name = 'PEDESTRIAN' AND 
-                  camera in ('ring_front_center', 'stereo_front_left')
-                GROUP BY camera, distance_m_bucket
-                ORDER BY camera ASC, distance_m_bucket ASC"""
+      ("Pedestrian Stats by Distance", """
+          SELECT
+            camera,
+            10 * MOD(ROUND(distance_meters), 10) AS distance_m_bucket,
+            AVG(width) AS w_pixels_mu, STD(width) AS w_pixels_std,
+            AVG(height) AS h_pixels_mu, STD(height) AS h_pixels_std,
+            COUNT(*) AS num_annos,
+            COUNT(DISTINCT frame_uri) AS num_frames
+          FROM annos
+          WHERE
+            category_name = 'PEDESTRIAN' AND 
+            camera in ('ring_front_center', 'stereo_front_left')
+          GROUP BY camera, distance_m_bucket
+          ORDER BY camera ASC, distance_m_bucket ASC"""
       ),
-      ("Associated Bike Riders by Split", """
-              SELECT
-                  split,
-                  COUNT(DISTINCT track_id) AS num_assoc_riders
-                FROM nms
-                WHERE
-                  ridden_bike_track_id != ''
-                GROUP BY split"""
+      ("Associated & Unassociated Bike Riders by Split", """
+          SELECT
+            split,
+            SUM(IF(ridden_bike_track_id != '', 1, 0)) AS associated_rider,
+            SUM(IF(ridden_bike_track_id != '', 0, 1)) AS free_rider
+          FROM annos
+          WHERE
+            category_name in ("BICYCLIST", "MOTORCYCLIST")
+          GROUP BY split
+          ORDER BY split"""
       ),
-      ("Number of Tracks That Never Appear on Camera", """
-              select track_id, sum(if(is_visible, 1, 0)) num_invisible, count(*) total
-  from data
-  group by track_id having total - num_invisible < 10"""
+      ("Motion-Corrected Annos by Split", """
+          SELECT
+            split,
+            SUM(IF(motion_corrected, 1, 0)) AS motion_corrected,
+            SUM(IF(motion_corrected, 0, 1)) AS not_motion_corrected
+          FROM annos
+          GROUP BY split
+          ORDER BY split"""
+      ),
+
+      ## Special queries on raw annos
+      ("Tracks That Never Appear On Camera", """
+          SELECT *
+          FROM (
+            SELECT
+              FIRST(split) AS split,
+              FIRST(log_id) AS log_id,
+              track_id,
+              SUM(IF(is_visible, 1, 0)) AS num_invisible,
+              SUM(IF(is_visible, 0, 1)) AS num_visible
+            FROM raw_annos
+            GROUP BY track_id )
+          WHERE num_visible == 0
+          ORDER BY split, log_id, track_id"""
+      ),
+      ("Frames With No Annotations", """
+          SELECT
+            COUNT(DISTINCT frame_uri)
+          FROM raw_annos
+          WHERE num_bboxes == 0"""
       ),
     )
     for title, query in title_queries:
       util.log.info("Running %s ..." % title)
       yield title, spark.sql(query).toPandas()
-    
-    ## Special queries
-    title = "Number of Tracks That Never Appear on Camera"
-    frame_uri_rdd = cls.ANNO_TABLE.create_frame_uri_rdd(spark).cache()
-    
-    
 
   @classmethod
   def save_histogram_reports(cls, spark, dest_dir):
@@ -1390,7 +1472,7 @@ class AnnoReports(object):
               BASE = "/view?"
               href = BASE + parse.urlencode({'uri': row.uri})
 
-              frame = AVFrame(uri=row.uri, FIXTURES=cls.ANNO_TABLE.FIXTURES)
+              frame = cls.ANNO_TABLE.FIXTURES.get_frame(row.uri)
               debug_img = frame.get_debug_image()
               
               if row.ridden_bike_track_id:
@@ -1399,9 +1481,7 @@ class AnnoReports(object):
                 # image for the rider and blend using OpenCV
                 best_bike_uri = FrameURI.from_str(row.uri)
                 best_bike_uri.track_id = row.ridden_bike_track_id
-                dframe = AVFrame(
-                            uri=best_bike_uri,
-                            FIXTURES=cls.ANNO_TABLE.FIXTURES)
+                dframe = cls.ANNO_TABLE.FIXTURES.get_frame(best_bike_uri)
                 debug_img_bike = dframe.get_debug_image()
                 import cv2
                 debug_img[:] = cv2.addWeighted(
@@ -1467,8 +1547,12 @@ class CroppedObjectImageTable(dataset.ImageTable):
   def setup(cls, **kwargs):
     if util.missing_or_empty(cls.table_root()):
       spark = kwargs['spark']
-      cls._save_positives(spark)
-      cls._save_negatives(spark)
+      pos_df = cls._create_positives(spark)
+      neg_df = cls._create_negatives(spark)
+      df = Spark.union_dfs(pos_df, neg_df)
+        # Need to write a DF with uniform schema because pyarrow doesn't
+        # like non-uniform schemas :(
+      cls.__save_df(df)
       util.log.info(
         "Created %s total crops." % cls.as_imagerow_df(spark).count())
 
@@ -1596,7 +1680,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
       if has_offscreen:
         return None
 
-      frame = AVFrame(uri=row.uri, FIXTURES=cls.ANNOS.FIXTURES)
+      frame = cls.ANNOS.FIXTURES.get_frame(row.uri)
       cropped_frame = frame.get_cropped(cropbox)
       cropped_anno = frame.get_target_bbox()
       
@@ -1665,32 +1749,33 @@ class CroppedObjectImageTable(dataset.ImageTable):
       cls.table_root(),
       mode='append',        # Write positives and negatives in separate steps
       compression='snappy') # TODO pyarrow / lz4
+    util.log.info("Wrote to %s" % cls.table_root())
 
   @classmethod
-  def _save_positives(cls, spark):
-    util.log.info("Saving positives ....")
+  def _create_positives(cls, spark):
+    util.log.info("Creating positives ....")
     anno_df = cls._create_croppable_anno_df(spark)
     cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
-    cls.__save_df(cropped_anno_df)
+    return cropped_anno_df
   
   @classmethod
-  def _save_negatives(cls, spark):
-    util.log.info("Saving negatives ...")
+  def _create_negatives(cls, spark):
+    util.log.info("Creating negatives ...")
     # We'll mine negatives from all images, TODO even those w/out annotations ~~~~~~
     anno_df = cls.ANNOS.as_df(spark)
     frame_uris = anno_df.select('frame_uri').distinct()
     frame_uri_rdd = frame_uris.rdd.flatMap(lambda r: r)
     
     def iter_samples(uri):
-      frame = AVFrame(uri=uri, FIXTURES=cls.ANNOS.FIXTURES)
-
+      frame = cls.ANNOS.FIXTURES.get_frame(uri)
       miner = create_miner(frame)
       for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
         cropbox = miner.next_sample()
         row = cropbox.to_dict()
         row.update(
           category_name='background',
-          uri=str(uri))
+          uri=str(uri),
+          frame_uri=str(frame.uri))
         yield Row(**row)
 
     negative_annos = frame_uri_rdd.flatMap(iter_samples)
@@ -1698,7 +1783,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     
     util.log.info("... going to save %s negatives ..." % anno_df.count())
     cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
-    cls.__save_df(cropped_anno_df)
+    return cropped_anno_df
 
 
     # def anno_row_to_imagerow(crop_spec_row):

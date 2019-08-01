@@ -14,11 +14,12 @@ pandas
 pathlib2
 patool
 pscript==0.7.1
-pyarrow==0.12.0
+pyarrow==0.13.0
 pytest
 selenium==3.141.0
 six==1.11.0
 tabulate
+tensorflow-io==0.7.0
 # Use tensorflow supplied from environment
 
 # Somebody broke something :P

@@ -1,34 +1,42 @@
-Size stats by Split
+Size Stats by Split
     split  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
-0   train    98.362637    121.671373   100.313187     92.516958        182           7
-1  sample   235.500000    281.920734   214.192308    191.718339         26           2
+0  sample   235.500000    281.920734   214.192308    191.718339         26           2
+1   train    98.362637    121.671373   100.313187     92.516958        182           7
 2     val    82.342857     75.764318    81.371429     67.625737         35           2
 
-Size stats by City
+Size Stats by City
   city  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
 0  MIA   108.778846    120.021354   111.807692     84.386890        104           4
 1  PIT   112.187050    166.768935   108.244604    126.760406        139           7
 
-Size stats by Category
+Size Stats by Category
        category_name  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
-0         PEDESTRIAN    51.157143     33.853322    99.428571     61.957108         70           9
-1      LARGE_VEHICLE   136.888889    117.079508   105.222222     81.452099          9           5
+0            BICYCLE   106.538462    103.134714   107.923077     82.386752         13           4
+1          BICYCLIST    84.812500     83.740248   111.562500     91.525566         16           3
 2                BUS   209.500000     99.702056   159.000000     80.610173          2           2
-3          BICYCLIST    84.812500     83.740248   111.562500     91.525566         16           3
-4   ON_ROAD_OBSTACLE    61.343750     46.046687    72.312500     60.479502         32           8
-5  EMERGENCY_VEHICLE   262.000000     72.124892   201.500000     21.920310          2           2
-6         MOTORCYCLE   105.000000     89.095454    82.000000     83.438600          2           2
-7            VEHICLE   167.263158    208.636414   125.505263    150.780937         95          11
-8            BICYCLE   106.538462    103.134714   107.923077     82.386752         13           4
-9        OTHER_MOVER   173.000000      4.242641   228.500000    185.969083          2           2
+3  EMERGENCY_VEHICLE   262.000000     72.124892   201.500000     21.920310          2           2
+4      LARGE_VEHICLE   136.888889    117.079508   105.222222     81.452099          9           5
+5         MOTORCYCLE   105.000000     89.095454    82.000000     83.438600          2           2
+6   ON_ROAD_OBSTACLE    61.343750     46.046687    72.312500     60.479502         32           8
+7        OTHER_MOVER   173.000000      4.242641   228.500000    185.969083          2           2
+8         PEDESTRIAN    51.157143     33.853322    99.428571     61.957108         70           9
+9            VEHICLE   167.263158    208.636414   125.505263    150.780937         95          11
 
-Size stats by Camera
+Size Stats by Camera
               camera  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
-0   ring_front_right   595.000000    675.994083   422.500000    321.733585          2           1
-1    ring_rear_right   404.500000    129.400541   229.500000     17.677670          2           1
-2  ring_front_center    84.583333    102.533909    88.250000     87.243533        168           6
-3    ring_front_left   122.659574    137.059694   123.829787     88.717509         47           2
+0  ring_front_center    84.583333    102.533909    88.250000     87.243533        168           6
+1    ring_front_left   122.659574    137.059694   123.829787     88.717509         47           2
+2   ring_front_right   595.000000    675.994083   422.500000    321.733585          2           1
+3    ring_rear_right   404.500000    129.400541   229.500000     17.677670          2           1
 4  stereo_front_left   205.541667    233.125639   196.833333    177.098515         24           1
+
+Frames Per Track by Camera
+              camera  num_frames_mu  num_frames_std  num_frames_total  num_tracks_total
+0  ring_front_center            1.0             0.0               168               168
+1    ring_front_left            1.0             0.0                47                47
+2   ring_front_right            1.0             0.0                 2                 2
+3    ring_rear_right            1.0             0.0                 2                 2
+4  stereo_front_left            1.0             0.0                24                24
 
 Anno Counts by Camera
               camera  num_annos_mu  num_annos_std  num_annos_total  num_frames_total
@@ -38,7 +46,7 @@ Anno Counts by Camera
 3    ring_rear_right           2.0            NaN                2                 1
 4  stereo_front_left          24.0            NaN               24                 1
 
-Pedestrian stats by Distance
+Pedestrian Stats by Distance
                camera  distance_m_bucket  w_pixels_mu  w_pixels_std  h_pixels_mu  h_pixels_std  num_annos  num_frames
 0   ring_front_center                0.0    26.000000     14.628739    61.800000     53.625554          5           2
 1   ring_front_center               10.0    32.500000     19.122413    59.000000     31.633316          4           3
@@ -54,6 +62,21 @@ Pedestrian stats by Distance
 11  stereo_front_left               70.0    75.000000           NaN   126.000000           NaN          1           1
 12  stereo_front_left               80.0    90.500000      3.535534   167.000000      0.000000          2           1
 
-Associated Bike Riders by Split
-   split  num_assoc_riders
-0  train                13
+Associated & Unassociated Bike Riders by Split
+   split  associated_rider  free_rider
+0  train                16           0
+
+Motion-Corrected Annos by Split
+    split  motion_corrected  not_motion_corrected
+0  sample                26                     0
+1   train               182                     0
+2     val                35                     0
+
+Tracks That Never Appear On Camera
+Empty DataFrame
+Columns: [split, log_id, track_id, num_invisible, num_visible]
+Index: []
+
+Frames With No Annotations
+   count(DISTINCT frame_uri)
+0                          0

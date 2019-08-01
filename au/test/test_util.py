@@ -299,3 +299,12 @@ def test_gpu_pool_eight_k80s(monkeypatch):
   hs3 = pool.get_free_gpus()
   assert len(hs3) == 1
   assert hs3[0].index == 1
+
+def test_tf_data_session():
+  import tensorflow as tf
+  expected = [[0, 1], [2, 3], [4, 5]]
+  ds = tf.data.Dataset.from_tensor_slices(expected)
+  with util.tf_data_session(ds) as (sess, iter_dataset):
+    actual = list(v.tolist() for v in iter_dataset())
+    assert expected == actual
+
