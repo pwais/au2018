@@ -618,12 +618,13 @@ def spark_df_to_tf_dataset(
       num_reader_threads = multiprocessing.cpu_count()
 
     # Each Tensorflow reader thread will read a single Spark partition
-    from pyspark.sql.functions import spark_partition_id
-    # df = spark_df.withColumn('_spark_part_id', spark_partition_id())
-    df = spark_df
+    # from pyspark.sql.functions import spark_partition_id
+    # df = spark_df.withColumn('_spark_partition_id', spark_partition_id())
+    df = spark_df.withColumn('part', spark_df['log_id'])
+    # df = spark_df
     # pids = df.select('_spark_part_id').distinct().rdd.flatMap(lambda x: x).collect()
     pids = df.select('part').distinct().rdd.flatMap(lambda x: x).collect()
-    
+    print(len(pids), pids)    
 
     import tensorflow as tf
     pid_ds = tf.data.Dataset.from_tensor_slices(pids)
@@ -631,22 +632,31 @@ def spark_df_to_tf_dataset(
 
     def get_rows(pid):
       util.log.info("Fetching partition %s" % pid)
-      # part_df = df.filter('_spark_part_id == %s' % pid)
-      part_df = df.filter('part == %s' % pid)
+      part_df = df.filter(df['part'] == pid)
+      # part_df = df.filter('part == %s' % pid)
         # NB: this can be a linear scan :(
       rows = part_df.rdd.map(spark_row_to_tf_element).collect()
       util.log.info("Partition %s had %s rows" % (pid, len(rows)))
       for row in rows:
         yield row
     
-    ds = pid_ds.interleave(
-      lambda pid_t: \
-        tf.data.Dataset.from_generator(
-          get_rows, 
-          args=(pid_t,),
-          output_types=tf_element_types),
-      cycle_length=2,
-      num_parallel_calls=2)
+    # ds = pid_ds.interleave(
+    #   lambda pid_t: \
+    #     tf.data.Dataset.from_generator(
+    #       get_rows, 
+    #       args=(pid_t,),
+    #       output_types=tf_element_types),
+    #   cycle_length=num_reader_threads,
+    #   num_parallel_calls=num_reader_threads)
+    ds = pid_ds.apply(
+      tf.compat.v2.data.experimental.parallel_interleave(
+        lambda pid_t: 
+          tf.data.Dataset.from_generator(
+            get_rows, 
+            args=(pid_t,),
+            output_types=tf_element_types),
+      cycle_length=num_reader_threads,
+      sloppy=non_deterministic_element_order))
     return ds
 
     # gens_dss = [

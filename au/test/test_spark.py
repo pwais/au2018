@@ -172,14 +172,18 @@ def test_spark_df_to_tf_dataset():
     from au.spark import Spark
     # fixture = df.collect()
     # def gen_data(n):
-    #   for i in range(10):
-    #     y = [random.random()] * (2 ** 15)
-    #     yield Row(part=n, id=str(n) + '.' + str(i), x=1, y=y)
-    # rdd = spark.sparkContext.parallelize(range(1000), numSlices=100)
-    # udf = spark.createDataFrame(rdd.flatMap(gen_data))
+    #   import numpy as np
+    #   # for i in range(10):
+    #   y = np.random.rand(2 ** 19).tolist()
+    #   return Row(part=n % 100, id=str(n), x=1, y=y)
+    # rdd = spark.sparkContext.parallelize(range(1000))
+    # udf = spark.createDataFrame(rdd.map(gen_data)).cache()
     # udf.write.parquet('/tmp/yay_pq_test', partitionBy=['part'], mode='overwrite')
     # print('wrote')
+    # udf = spark.read.parquet('cache/tables/argoverse_image_annos')
+    # udf.write.parquet('/tmp/yay_pq_test', partitionBy=['log_id'], mode='overwrite')
     udf = spark.read.parquet('/tmp/yay_pq_test')
+
     # udf = Spark.union_dfs(*(df for _ in range(100)))
     
     print(udf.count())
@@ -187,7 +191,8 @@ def test_spark_df_to_tf_dataset():
     # udf.show()
     ds = spark_df_to_tf_dataset(
             udf,
-            spark_row_to_tf_element=lambda r: (r.x, r.id, r.y),
+            # spark_row_to_tf_element=lambda r: (r.x, r.id, r.y),
+            spark_row_to_tf_element=lambda r: (r.x, r.uri, r.length_meters),
             tf_element_types=(tf.int64, tf.string, tf.float64))
     import itertools
     iexpected = itertools.cycle(expected)
