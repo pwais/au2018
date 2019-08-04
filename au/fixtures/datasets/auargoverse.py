@@ -71,6 +71,11 @@ RIDER = ["BICYCLIST", "MOTORCYCLIST"]
 class MissingPose(ValueError):
   pass
 
+def stable_hash(x):
+  # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
+  import hashlib
+  return int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
+
 def get_image_width_height(camera):
   from argoverse.utils import camera_stats
   if camera in camera_stats.RING_CAMERA_LIST:
@@ -1090,7 +1095,7 @@ class ImageAnnoTable(object):
       # Each rider gets assigned the nearest bike.  Note that bikes may not
       # have riders.
       for rider in rider_rows:
-        if bike_rows:
+        if not len(bike_rows):
           distance, best_bike = min(
                           (l2_dist(rider, bike), bike)
                           for bike in bike_rows)
@@ -1538,6 +1543,9 @@ class CroppedObjectImageTable(dataset.ImageTable):
   # cache/data/argoverse/index/image_annos/Anno_Counts_by_Camera.html
   NEGATIVE_SAMPLES_PER_FRAME = 20
 
+  # Try to break each split into this many shards
+  N_SHARDS_PER_SPLIT = 100
+
   ANNOS = ImageAnnoTable
 
   TABLE_NAME = (
@@ -1552,6 +1560,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
       df = Spark.union_dfs(pos_df, neg_df)
         # Need to write a DF with uniform schema because pyarrow doesn't
         # like non-uniform schemas :(
+      
       cls.__save_df(df)
       util.log.info(
         "Created %s total crops." % cls.as_imagerow_df(spark).count())
@@ -1631,11 +1640,6 @@ class CroppedObjectImageTable(dataset.ImageTable):
     box_center = np.array(
       [bbox.x + .5 * bbox.width, bbox.y + .5 * bbox.height])
 
-    def stable_hash(x):
-      # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
-      import hashlib
-      return int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
-
     rand = random.Random(stable_hash(str(bbox)))
     offset = np.array([
         rand.gauss(*cls.CENTER_JITTER_MU_STD),
@@ -1696,6 +1700,9 @@ class CroppedObjectImageTable(dataset.ImageTable):
             # TODO create false annos ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       row_out.update(cropped_frame.uri.to_dict())
 
+      # Compute shard
+      row_out['shard'] = stable_hash(row_out['uri']) % cls.N_SHARDS_PER_SPLIT
+
       # Generate unformly-sized crop
       crop = cropped_frame.image
       crop = cv2.resize(crop, cls.VIEWPORT_WH, interpolation=cv2.INTER_NEAREST)
@@ -1746,8 +1753,9 @@ class CroppedObjectImageTable(dataset.ImageTable):
   @classmethod
   def __save_df(cls, crop_df):
     crop_df.write.parquet(
-      '/outer_root/media/seagates-ext4/au_datas/table_save/' + cls.TABLE_NAME,
-      # cls.table_root(),
+      # '/outer_root/media/seagates-ext4/au_datas/table_save/' + cls.TABLE_NAME,
+      cls.table_root(),
+      partitionBy=['split', 'shard'],
       compression='snappy') # TODO pyarrow / lz4
     util.log.info("Wrote to %s" % cls.table_root())
 
