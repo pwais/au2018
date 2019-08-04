@@ -147,6 +147,12 @@ class FrameURI(object):
             x=self.crop_x, y=self.crop_y,
             width=self.crop_w, height=self.crop_h)
 
+  def get_viewport(self):
+    if self.has_crop():
+      return self.get_crop_bbox()
+    else:
+      return BBox.of_size(*get_image_width_height(self.camera))
+
   @staticmethod
   def from_str(s):
     if isinstance(s, FrameURI):
@@ -378,10 +384,7 @@ class AVFrame(object):
       self.FIXTURES = Fixtures
   
     if not self.viewport:
-      if self.uri.has_crop():
-        self.viewport = self.uri.get_crop_bbox()
-      else:
-        self.viewport = BBox.of_size(*get_image_width_height(self.uri.camera))
+      self.viewport = self.uri.get_viewport()
     
   @property
   def loader(self):
@@ -510,17 +513,15 @@ class HardNegativeMiner(object):
   WIDTH_PIXELS_MU_STD = (121, 50)
   HEIGHT_PIXELS_MU_STD = (121, 50)
 
-  def __init__(self, frame):
-    self._frame = frame
+  def __init__(self, viewport, pos_boxes):
+    self._viewport = viewport
     
     # Build a binary mask where a pixel has an indicator value of 1 only if
     # one or more annotation bboxes covers that pixel
-    mask = np.zeros((self._frame.viewport.height, self._frame.viewport.width))
-    for bbox in frame.image_bboxes:
-      mask[bbox.y:bbox.y+bbox.height, bbox.x:bbox.x+bbox.width] = 1
-
-    import imageio
-    imageio.imwrite('/opt/au/mask.png', mask, format='png')
+    mask = np.zeros((viewport.im_height, viewport.im_width))
+    for bbox in pos_boxes:
+      r1, c1, r2, c2 = bbox.get_r1_c1_r2_r2()
+      mask[r1:r2+1, c1:c2+1] = 1
 
     # We'll use the integral image trick to make rejection sampling efficient
     class IntegralImage(object):
@@ -534,12 +535,15 @@ class HardNegativeMiner(object):
           + self.__ii[r1, c1])
 
     self._ii = IntegralImage(mask)
-    self._random = random.Random(self.SEED)
+    self._random = random.Random(self.SEED + stable_hash(pos_boxes))
 
   def next_sample(self, max_attempts=1000):
+    if not self._ii:
+      return None
+
     rand = self._random
     for _ in range(max_attempts):
-      v = self._frame.viewport
+      v = self._viewport
       
       # Pick a center
       c_x = rand.randint(v.x, v.x + v.width)
@@ -561,38 +565,41 @@ class HardNegativeMiner(object):
       proposal.quantize()
       sample = v.get_intersection_with(proposal)
       num_anno_pixels = self._ii.get_sum(*sample.get_r1_c1_r2_r2())
-      # sample = BBox.from_x1_y1_x2_y2(x1, y1, x2, y2)
       
       # Do we have enough non-annotated pixels to accept?
       if num_anno_pixels / sample.get_area() <= self.MAX_FRACTION_ANNOTATED:
-        # print(num_anno_pixels / sample.get_area()) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         return sample
     util.log.warn(
       "Tried %s times and could not sample an unannotated box" % max_attempts)
     return None
+  
+  @staticmethod
+  def create_miner(camera, *miner_args):
 
-class RingMiner(HardNegativeMiner):
-  # We could perhaps choose these using camera intrinsics, but instead
-  # we use the empircal distributon from existing annotations
-  # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
-  WIDTH_PIXELS_MU_STD = (111.894619, 128.690585)
-  HEIGHT_PIXELS_MU_STD = (92.435195, 119.881747)
+    class RingMiner(HardNegativeMiner):
+      # We could perhaps choose these using camera intrinsics, but instead
+      # we use the empircal distributon from existing annotations
+      # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
+      WIDTH_PIXELS_MU_STD = (111.894619, 128.690585)
+      HEIGHT_PIXELS_MU_STD = (92.435195, 119.881747)
 
-class StereoMiner(HardNegativeMiner):
-  # We could perhaps choose these using camera intrinsics, but instead
-  # we use the empircal distributon from existing annotations
-  # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
-  WIDTH_PIXELS_MU_STD = (204.346622, 192.078106)
-  HEIGHT_PIXELS_MU_STD = (204.070778, 212.397835)
+    class StereoMiner(HardNegativeMiner):
+      # We could perhaps choose these using camera intrinsics, but instead
+      # we use the empircal distributon from existing annotations
+      # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
+      WIDTH_PIXELS_MU_STD = (204.346622, 192.078106)
+      HEIGHT_PIXELS_MU_STD = (204.070778, 212.397835)
 
-def create_miner(frame):
-  from argoverse.utils import camera_stats
-  if frame.uri.camera in camera_stats.RING_CAMERA_LIST:
-    return RingMiner(frame)
-  elif frame.uri.camera in camera_stats.STEREO_CAMERA_LIST:
-    return StereoMiner(frame)
-  else:
-    raise ValueError("Unknown camera: %s" % frame.uri.camera)
+    from argoverse.utils import camera_stats
+    if camera in camera_stats.RING_CAMERA_LIST:
+      return RingMiner(*miner_args)
+    elif camera in camera_stats.STEREO_CAMERA_LIST:
+      return StereoMiner(*miner_args)
+    else:
+      raise ValueError("Unknown camera: %s" % camera)
+
+
+
 
 class AUTrackingLoader(ArgoverseTrackingLoader):
   """This class makes several modifications to `ArgoverseTrackingLoader`:
@@ -671,7 +678,9 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
 
     idx, _ = self.get_nearest_lidar_sweep_id(timestamp)
     if idx >= len(self.label_list):
-      util.log.error(
+      # This most often happens on test or val split examples where
+      # Argoverse does not yet include labels
+      util.log.debug(
         "Log %s has %s labels but %s lidar sweeps; idx %s out of range" % (
           self.current_log, len(self.label_list),
           len(self.lidar_timestamp_list), idx))
@@ -1095,18 +1104,23 @@ class ImageAnnoTable(object):
       # Each rider gets assigned the nearest bike.  Note that bikes may not
       # have riders.
       for rider in rider_rows:
-        if not len(bike_rows):
-          distance, best_bike = min(
-                          (l2_dist(rider, bike), bike)
-                          for bike in bike_rows)
-          nearest_bike = dict(
-            uri=rider.uri,
-            track_id=rider.track_id,
-            ridden_bike_track_id=best_bike.track_id,
-            ridden_bike_distance=distance,
-          )
+        try:
+          if bike_rows:
+            distance, best_bike = min(
+                            (l2_dist(rider, bike), bike)
+                            for bike in bike_rows)
+            nearest_bike = dict(
+              uri=rider.uri,
+              track_id=rider.track_id,
+              ridden_bike_track_id=best_bike.track_id,
+              ridden_bike_distance=distance,
+            )
 
-          yield Row(**nearest_bike)
+            yield Row(**nearest_bike)
+        except Exception as e:
+          # TODO: getting spurious "numpy cast to bool" exceptions here?
+          util.log.error("Bike rider assoc wat? %s" % e)
+          continue
     
     # We'll group all rows in our DF by URI, then do bike<->rider
     # for each URI (i.e. all the rows for a single URI).  The matching
@@ -1747,13 +1761,15 @@ class CroppedObjectImageTable(dataset.ImageTable):
     for cond in CONDS:
       anno_df = anno_df.filter(cond)
     
+    anno_df = anno_df.limit(10000) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
     util.log.info("Found %s eligible annos." % anno_df.count())
     return anno_df
   
   @classmethod
   def __save_df(cls, crop_df):
     crop_df.write.parquet(
-      # '/outer_root/media/seagates-ext4/au_datas/table_save/' + cls.TABLE_NAME,
+      #'/outer_root/media/seagates-ext4/au_datas/table_save/' + cls.TABLE_NAME,
       cls.table_root(),
       partitionBy=['split', 'shard'],
       compression='snappy') # TODO pyarrow / lz4
@@ -1769,24 +1785,43 @@ class CroppedObjectImageTable(dataset.ImageTable):
   @classmethod
   def _create_negatives(cls, spark):
     util.log.info("Creating negatives ...")
-    # We'll mine negatives from all images, TODO even those w/out annotations ~~~~~~
+    # We'll mine negatives from all images, TODO even those w/out annotations ? ~~~~~~
     anno_df = cls.ANNOS.as_df(spark)
-    frame_uris = anno_df.select('frame_uri').distinct()
-    frame_uri_rdd = frame_uris.rdd.flatMap(lambda r: r)
+
+    # Since `anno_df` already has all the bbox info we need, we use those
+    # bboxes since reading the raw annos again from Argoverse is expensive
+    bbox_df = anno_df.select(
+                # We'll sample negatives from each frame.  URI includes 
+                # viewport info.
+                'frame_uri',
+
+                # Get all positives (bboxes)
+                'uri', 'x', 'y', 'width', 'height')
     
-    def iter_samples(uri):
-      frame = cls.ANNOS.FIXTURES.get_frame(uri)
-      miner = create_miner(frame)
+    def iter_samples(key_rows):
+      # Unpack
+      frame_uri, rows = key_rows
+      pos_boxes = [BBox.from_row_dict(row.asDict()) for row in rows]
+
+      # Construct a negative miner
+      frame_uri = FrameURI.from_str(frame_uri)
+      viewport = frame_uri.get_viewport()
+      miner = HardNegativeMiner.create_miner(frame_uri.camera, viewport, pos_boxes)
+
+      # Mine!
       for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
         cropbox = miner.next_sample()
+        if not cropbox:
+          continue
         row = cropbox.to_dict()
         row.update(
           category_name='background',
-          uri=str(uri),
-          frame_uri=str(frame.uri))
+		  uri=str(frame_uri),
+          frame_uri=str(frame_uri))
         yield Row(**row)
-
-    negative_annos = frame_uri_rdd.flatMap(iter_samples)
+    
+    key_rows_rdd = bbox_df.rdd.groupBy(lambda r: r.frame_uri)
+    negative_annos = key_rows_rdd.flatMap(iter_samples)
     anno_df = spark.createDataFrame(negative_annos).cache()
     
     util.log.info("... going to save %s negatives ..." % anno_df.count())
