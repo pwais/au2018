@@ -1746,8 +1746,8 @@ class CroppedObjectImageTable(dataset.ImageTable):
   @classmethod
   def __save_df(cls, crop_df):
     crop_df.write.parquet(
-      cls.table_root(),
-      mode='append',        # Write positives and negatives in separate steps
+      '/outer_root/media/seagates-ext4/au_datas/table_save/' + cls.TABLE_NAME,
+      # cls.table_root(),
       compression='snappy') # TODO pyarrow / lz4
     util.log.info("Wrote to %s" % cls.table_root())
 
