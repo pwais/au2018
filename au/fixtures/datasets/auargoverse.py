@@ -1520,8 +1520,8 @@ class AnnoReports(object):
 ### Image Tables
 ###
 
-from collections import namedtuple
-cropattrs = namedtuple('cropattrs', 'anno cloud_npz viewport_annos')
+# from collections import namedtuple
+# cropattrs = namedtuple('cropattrs', 'anno cloud_npz viewport_annos')
 
 class CroppedObjectImageTable(dataset.ImageTable):
 
