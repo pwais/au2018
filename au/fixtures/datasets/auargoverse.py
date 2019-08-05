@@ -20,6 +20,7 @@ import copy
 import itertools
 import random
 import os
+import sys
 
 from au import conf
 from au import util
@@ -529,6 +530,8 @@ class HardNegativeMiner(object):
         self.__ii = img.cumsum(axis=0).cumsum(axis=1)
       
       def get_sum(self, r1, c1, r2, c2):
+        r2 -= 1 # Boundary conditions: the integral image is exclusive
+        c2 -= 1 # on the distance point, but BBox is inclusive.
         return (
           self.__ii[r2, c2]
           - self.__ii[r1, c2] - self.__ii[r2, c1]
@@ -564,6 +567,9 @@ class HardNegativeMiner(object):
       proposal = BBox.from_x1_y1_x2_y2(x1, y1, x2, y2)
       proposal.quantize()
       sample = v.get_intersection_with(proposal)
+      if sample.get_area() <= 0:
+        continue
+      
       num_anno_pixels = self._ii.get_sum(*sample.get_r1_c1_r2_r2())
       
       # Do we have enough non-annotated pixels to accept?
@@ -1566,9 +1572,11 @@ class CroppedObjectImageTable(dataset.ImageTable):
     'argoverse_cropped_object_%s_%s' % (VIEWPORT_WH[0], VIEWPORT_WH[1]))
 
   @classmethod
-  def setup(cls, **kwargs):
-    if util.missing_or_empty(cls.table_root()):
-      spark = kwargs['spark']
+  def setup(cls, spark=None):
+    if not util.missing_or_empty(cls.table_root()):
+      return
+
+    with Spark.sess(spark) as spark:
       pos_df = cls._create_positives(spark)
       neg_df = cls._create_negatives(spark)
       df = Spark.union_dfs(pos_df, neg_df)
@@ -1619,7 +1627,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
           img = imageio.imread(BytesIO(v))
           return aupl.img_to_img_tag(img)
         except Exception as e:
-          print(e)
+          util.log.error("Failed to encode image bytes %s" % (e,))
       return v
 
     COLS = [
@@ -1687,60 +1695,79 @@ class CroppedObjectImageTable(dataset.ImageTable):
      * debug_jpeg_bytes (debug image as medium-quality jpeg)
     """
 
-    def anno_row_to_crop_row(row):
-      from au import plotting as aupl
-      import cv2
+    def anno_rows_to_crop_rows(part, rows):
+      t = util.ThruputObserver(name='row_crop_%s' % part)
+      for row in rows:
+        t.start_block()
 
-      bbox = BBox.from_row_dict(row.asDict())
-      cropbox = cls.get_crop_viewport(bbox)
-      has_offscreen = (cropbox.get_num_onscreen_corners() != 4)
-      # Skip anything that is too near (or off) the edge of the image
-      if has_offscreen:
-        return None
+        from au import plotting as aupl
+        import cv2
 
-      frame = cls.ANNOS.FIXTURES.get_frame(row.uri)
-      cropped_frame = frame.get_cropped(cropbox)
-      cropped_anno = frame.get_target_bbox()
+        bbox = BBox.from_row_dict(row.asDict())
+        cropbox = cls.get_crop_viewport(bbox)
+        has_offscreen = (cropbox.get_num_onscreen_corners() != 4)
+        # Skip anything that is too near (or off) the edge of the image
+        if has_offscreen:
+          continue
+
+        frame = cls.ANNOS.FIXTURES.get_frame(row.uri)
+        cropped_frame = frame.get_cropped(cropbox)
+        cropped_anno = frame.get_target_bbox()
       
-      row_out = row.asDict()
-      if cropped_anno:
-        row_out.update(cropped_anno.to_row_dict())
-      else:
-        # For negatives, there is no real anno, but do record the
-        # crop bounds
-        row_out.update(dict(
-          (k, v) for k, v in cropbox.to_dict().items()
-          if v is not None))
-            # TODO create false annos ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-      row_out.update(cropped_frame.uri.to_dict())
+        row_out = row.asDict()
+        if cropped_anno:
+          row_out.update(cropped_anno.to_row_dict())
+        else:
+          # For negatives, there is no real anno, but do record the
+          # crop bounds
+          row_out.update(dict(
+            (k, v) for k, v in cropbox.to_dict().items()
+            if v is not None))
+              # TODO create false annos ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        row_out.update(cropped_frame.uri.to_dict())
 
-      # Compute shard
-      row_out['shard'] = stable_hash(row_out['uri']) % cls.N_SHARDS_PER_SPLIT
+        # Generate unformly-sized crop
+        crop = cropped_frame.image
+        crop = cv2.resize(crop, cls.VIEWPORT_WH, interpolation=cv2.INTER_NEAREST)
+        row_out['jpeg_bytes'] = bytearray(util.to_jpeg_bytes(crop, quality=100))
 
-      # Generate unformly-sized crop
-      crop = cropped_frame.image
-      crop = cv2.resize(crop, cls.VIEWPORT_WH, interpolation=cv2.INTER_NEAREST)
-      row_out['jpeg_bytes'] = bytearray(util.to_jpeg_bytes(crop, quality=100))
-
-      if and_debug:
-        # Rescale debug image to save space
-        crop_debug = cropped_frame.get_debug_image()
-        th, tw = aupl.get_hw_in_viewport(crop_debug.shape[:2], (300, 300))
-        crop_debug = cv2.resize(
-          crop_debug, (tw, th), interpolation=cv2.INTER_NEAREST)
-        row_out['debug_jpeg_bytes'] = bytearray(
-          util.to_jpeg_bytes(crop_debug, quality=60))
+        if and_debug:
+          # Rescale debug image to save space
+          crop_debug = cropped_frame.get_debug_image()
+          th, tw = aupl.get_hw_in_viewport(crop_debug.shape[:2], (300, 300))
+          crop_debug = cv2.resize(
+            crop_debug, (tw, th), interpolation=cv2.INTER_NEAREST)
+          row_out['debug_jpeg_bytes'] = bytearray(
+            util.to_jpeg_bytes(crop_debug, quality=60))
       
-      return Row(**row_out)
+        yield Row(**row_out)
+
+        t.stop_block(n=1, num_bytes=sys.getsizeof(row_out))
+        t.maybe_log_progress()
     
-    crop_anno_rdd = anno_df.rdd.map(anno_row_to_crop_row)
+    crop_anno_rdd = anno_df.rdd.mapPartitionsWithIndex(anno_rows_to_crop_rows)
     crop_anno_rdd = crop_anno_rdd.filter(lambda x: x is not None)
     crop_anno_df = spark.createDataFrame(crop_anno_rdd)
     return crop_anno_df
 
   @classmethod
-  def _create_croppable_anno_df(cls, spark):
+  def _get_anno_df(cls, spark):
+    # Pre-shard the annos for easier writes and better parallelism later
     anno_df = cls.ANNOS.as_df(spark)
+
+    # Skip sample set, and the test set has no labels
+    anno_df = anno_df.filter("split not in ('sample', 'test')")
+
+    from pyspark.sql import functions as F
+    anno_df = anno_df.withColumn(
+                'shard',
+                F.abs(F.hash(anno_df['frame_uri'])) % cls.N_SHARDS_PER_SPLIT)
+    anno_df = anno_df.repartition('split', 'shard').persist()
+    return anno_df
+
+  @classmethod
+  def _create_croppable_anno_df(cls, spark):
+    anno_df = cls._get_anno_df(spark)
 
     # Filter
     CONDS = (
@@ -1753,15 +1780,12 @@ class CroppedObjectImageTable(dataset.ImageTable):
       # Ignore very small things
       anno_df.height >= 50, # pixels
       anno_df.width >= 50,  # pixels
-
-      # Skip sample set, and the test set has no labels
-      anno_df.split != 'sample',
-      anno_df.split != 'test',
     )
     for cond in CONDS:
       anno_df = anno_df.filter(cond)
     
-    anno_df = anno_df.limit(10000) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(500).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    anno_df = anno_df.repartition(100)
 
     util.log.info("Found %s eligible annos." % anno_df.count())
     return anno_df
@@ -1769,8 +1793,8 @@ class CroppedObjectImageTable(dataset.ImageTable):
   @classmethod
   def __save_df(cls, crop_df):
     crop_df.write.parquet(
-      #'/outer_root/media/seagates-ext4/au_datas/table_save/' + cls.TABLE_NAME,
-      cls.table_root(),
+      '/outer_root/media/seagates-ext4/au_datas/table_save/' + cls.TABLE_NAME,
+      #cls.table_root(),
       partitionBy=['split', 'shard'],
       compression='snappy') # TODO pyarrow / lz4
     util.log.info("Wrote to %s" % cls.table_root())
@@ -1785,22 +1809,23 @@ class CroppedObjectImageTable(dataset.ImageTable):
   @classmethod
   def _create_negatives(cls, spark):
     util.log.info("Creating negatives ...")
-    # We'll mine negatives from all images, TODO even those w/out annotations ? ~~~~~~
-    anno_df = cls.ANNOS.as_df(spark)
+    # We'll mine negatives from all images, TODO even those w/out annotations ? ~~~~~~~~~~~~~~~
+    anno_df = cls._get_anno_df(spark)
+    anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(10).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     # Since `anno_df` already has all the bbox info we need, we use those
     # bboxes since reading the raw annos again from Argoverse is expensive
     bbox_df = anno_df.select(
                 # We'll sample negatives from each frame.  URI includes 
                 # viewport info.
-                'frame_uri',
+                'frame_uri', 'shard',
 
                 # Get all positives (bboxes)
                 'uri', 'x', 'y', 'width', 'height')
     
     def iter_samples(key_rows):
       # Unpack
-      frame_uri, rows = key_rows
+      (frame_uri, shard), rows = key_rows
       pos_boxes = [BBox.from_row_dict(row.asDict()) for row in rows]
 
       # Construct a negative miner
@@ -1816,15 +1841,18 @@ class CroppedObjectImageTable(dataset.ImageTable):
         row = cropbox.to_dict()
         row.update(
           category_name='background',
-		  uri=str(frame_uri),
-          frame_uri=str(frame_uri))
+          uri=str(frame_uri),
+          frame_uri=str(frame_uri),
+          split=frame_uri.split,
+          shard=shard)
         yield Row(**row)
-    
-    key_rows_rdd = bbox_df.rdd.groupBy(lambda r: r.frame_uri)
+
+    key_rows_rdd = bbox_df.rdd.groupBy(lambda r: (r.frame_uri, r.shard))
+    util.log.info("... generating negatives from %s frames ..." % key_rows_rdd.count())
     negative_annos = key_rows_rdd.flatMap(iter_samples)
-    anno_df = spark.createDataFrame(negative_annos).cache()
+    anno_df = spark.createDataFrame(negative_annos)
+    anno_df = anno_df.repartition('split', 'shard').persist()
     
-    util.log.info("... going to save %s negatives ..." % anno_df.count())
     cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
     return cropped_anno_df
 
