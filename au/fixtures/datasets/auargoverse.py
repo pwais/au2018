@@ -1689,7 +1689,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     return cropped
 
   @classmethod
-  def _to_cropped_image_anno_df(cls, spark, anno_df, and_debug=True):
+  def _to_cropped_image_anno_df(cls, spark, anno_df, and_debug=False):
     """Adjusts annos to cropped viewpoint and adds columns:
      * jpeg_bytes (cropped image encoded as max quality jpeg)
      * debug_jpeg_bytes (debug image as medium-quality jpeg)
@@ -1784,7 +1784,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     for cond in CONDS:
       anno_df = anno_df.filter(cond)
     
-    anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(500).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(5000).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     anno_df = anno_df.repartition(100)
 
     util.log.info("Found %s eligible annos." % anno_df.count())
@@ -1811,7 +1811,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     util.log.info("Creating negatives ...")
     # We'll mine negatives from all images, TODO even those w/out annotations ? ~~~~~~~~~~~~~~~
     anno_df = cls._get_anno_df(spark)
-    anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(10).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(100).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     # Since `anno_df` already has all the bbox info we need, we use those
     # bboxes since reading the raw annos again from Argoverse is expensive
