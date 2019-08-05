@@ -394,7 +394,7 @@ class AVFrame(object):
     return self._loader # type: AUTrackingLoader
   
   @staticmethod
-  @klepto.lru_cache(maxsize=1000)
+  @klepto.lru_cache(maxsize=100)
   def __load_image(path):
     return imageio.imread(path)
 
@@ -1785,7 +1785,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
       anno_df = anno_df.filter(cond)
     
     anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(5000).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    anno_df = anno_df.repartition(100)
+    #anno_df = anno_df.repartition(1000)
 
     util.log.info("Found %s eligible annos." % anno_df.count())
     return anno_df
