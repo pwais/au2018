@@ -116,14 +116,26 @@ def main():
   model_dir = '/tmp/av_mobilenet_test'
   util.mkdir(model_dir)
 
+  #import os
+  #import json
+  #os.environ['TF_CONFIG'] = json.dumps({
+  #  "cluster": {
+  #    "worker": ["localhost:1122", "localhost:1123"],
+#	  "chief": ["localhost:1120"],
+#    },
+#    'task': {'type': 'worker', 'index': 0}
+#  })
+
   config = tf.estimator.RunConfig(
-        model_dir=model_dir,
-        save_summary_steps=10,
-        save_checkpoints_secs=10,
-        session_config=tf_config,
-        log_step_count_steps=10)
-  dist = tf.contrib.distribute.MirroredStrategy()
-  config = config.replace(train_distribute=dist)
+             model_dir=model_dir,
+             save_summary_steps=10,
+             save_checkpoints_secs=10,
+             session_config=tf_config,
+             log_step_count_steps=10)
+  gpu_dist = tf.contrib.distribute.MirroredStrategy()
+  #cpu_dist = tf.contrib.distribute.MirroredStrategy(devices=['/cpu:0'])
+  
+  config = config.replace(train_distribute=gpu_dist, eval_distribute=gpu_dist)#cpu_dist)
 
   from au.fixtures.tf.mobilenet import Mobilenet
   params = Mobilenet.Medium()
@@ -163,17 +175,22 @@ def main():
       return eval_ds
 
     # Set up hook that outputs training logs every 100 steps.
-    from official.utils.logs import hooks_helper
-    train_hooks = hooks_helper.get_train_hooks(
-        ['ExamplesPerSecondHook',
-        'LoggingTensorHook'],
-        model_dir=model_dir,
-        batch_size=BATCH_SIZE)#params.BATCH_SIZE)
+    #from official.utils.logs import hooks_helper
+    #train_hooks = hooks_helper.get_train_hooks(
+    #    ['ExamplesPerSecondHook',
+    #    'LoggingTensorHook'],
+    #    model_dir=model_dir,
+    #    batch_size=BATCH_SIZE)#params.BATCH_SIZE)
 
-    # Train and evaluate model.
-    TRAIN_EPOCHS = 1000
+    TRAIN_EPOCHS = 100
+    #train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn, max_steps=TRAIN_EPOCHS)
+    #eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn, steps=100, throttle_secs=120)
+    #tf.estimator.train_and_evaluate(av_classifier, train_spec, eval_spec)
+
+    ## Train and evaluate model.
+    #TRAIN_EPOCHS = 1000
     for t in range(TRAIN_EPOCHS):
-      av_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
+      av_classifier.train(input_fn=train_input_fn)#hooks=train_hooks)
       # if t % 10 == 0 or t >= TRAIN_EPOCHS - 1:
       eval_results = av_classifier.evaluate(input_fn=eval_input_fn)
       util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
