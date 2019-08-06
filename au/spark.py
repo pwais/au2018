@@ -603,13 +603,13 @@ def spark_df_to_tf_dataset(
         row in `spark_df`.
     """
 
-    # Somewhat slower
-    import tensorflow as tf
-    tuple_rdd = spark_df.rdd.map(spark_row_to_tf_element)
-    tuple_rdd = tuple_rdd.persist(pyspark.StorageLevel.MEMORY_AND_DISK)
-    ds = tf.data.Dataset.from_generator(
-              tuple_rdd.toLocalIterator, tf_element_types)
-    return ds
+    ## Somewhat slower
+    #import tensorflow as tf
+    #tuple_rdd = spark_df.rdd.map(spark_row_to_tf_element)
+    #tuple_rdd = tuple_rdd.persist(pyspark.StorageLevel.MEMORY_AND_DISK)
+    #ds = tf.data.Dataset.from_generator(
+    #          tuple_rdd.toLocalIterator, tf_element_types)
+    #return ds
 
 
 
@@ -618,56 +618,56 @@ def spark_df_to_tf_dataset(
 
 
 
-    # if num_reader_threads < 1:
-    #   import multiprocessing
-    #   num_reader_threads = multiprocessing.cpu_count()
+    if num_reader_threads < 1:
+      import multiprocessing
+      num_reader_threads = multiprocessing.cpu_count()
+    num_reader_threads = 2
+    df = spark_df
 
+    # Each Tensorflow reader thread will read a single Spark partition
+    # from pyspark.sql.functions import spark_partition_id
+    # df = spark_df.withColumn('_spark_partition_id', spark_partition_id())
+    # df = spark_df.withColumn('part', spark_df['log_id'])
+    
+    
+    # df = df.repartition(df['part'])
     # df = spark_df
+    # pids = df.select('_spark_part_id').distinct().rdd.flatMap(lambda x: x).collect()
+    pids = df.select('shard').distinct().rdd.flatMap(lambda x: x).collect()
+    print(len(pids), pids)
 
-    # # Each Tensorflow reader thread will read a single Spark partition
-    # # from pyspark.sql.functions import spark_partition_id
-    # # df = spark_df.withColumn('_spark_partition_id', spark_partition_id())
-    # # df = spark_df.withColumn('part', spark_df['log_id'])
-    
-    
-    # # df = df.repartition(df['part'])
-    # # df = spark_df
-    # # pids = df.select('_spark_part_id').distinct().rdd.flatMap(lambda x: x).collect()
-    # pids = df.select('part').distinct().rdd.flatMap(lambda x: x).collect()
-    # print(len(pids), pids)    
-
-    # import tensorflow as tf
-    # pid_ds = tf.data.Dataset.from_tensor_slices(pids)
+    import tensorflow as tf
+    pid_ds = tf.data.Dataset.from_tensor_slices(pids)
     
 
-    # def get_rows(pid):
-    #   util.log.info("Fetching partition %s" % pid)
-    #   part_df = df.filter(df['part'] == int(pid))
-    #   # part_df = df.filter('part == %s' % pid)
-    #     # NB: this can be a linear scan :(
-    #   rows = part_df.rdd.map(spark_row_to_tf_element).collect()
-    #   util.log.info("Partition %s had %s rows" % (pid, len(rows)))
-    #   for row in rows:
-    #     yield row
+    def get_rows(pid):
+      util.log.info("Fetching partition %s" % pid)
+      part_df = df.filter(df['shard'] == int(pid))
+      # part_df = df.filter('part == %s' % pid)
+        # NB: this can be a linear scan :(
+      rows = part_df.rdd.repartition(100).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
+      util.log.info("got Partition %s " % str(pid))#had %s rows" % (pid, len(rows)))
+      for row in rows:
+        yield row
     
-    # # ds = pid_ds.interleave(
-    # #   lambda pid_t: \
-    # #     tf.data.Dataset.from_generator(
-    # #       get_rows, 
-    # #       args=(pid_t,),
-    # #       output_types=tf_element_types),
-    # #   cycle_length=num_reader_threads,
-    # #   num_parallel_calls=num_reader_threads)opcke
-    # ds = pid_ds.apply(
-    #   tf.compat.v2.data.experimental.parallel_interleave(
-    #     lambda pid_t: 
-    #       tf.data.Dataset.from_generator(
-    #         get_rows, 
-    #         args=(pid_t,),
-    #         output_types=tf_element_types),
-    #   cycle_length=num_reader_threads,
-    #   sloppy=non_deterministic_element_order))
-    # return ds
+    ds = pid_ds.interleave(
+       lambda pid_t: \
+         tf.data.Dataset.from_generator(
+           get_rows, 
+           args=(pid_t,),
+           output_types=tf_element_types),
+       cycle_length=num_reader_threads,
+       num_parallel_calls=num_reader_threads)
+    #ds = pid_ds.apply(
+    #  tf.compat.v2.data.experimental.parallel_interleave(
+    #    lambda pid_t: 
+    #      tf.data.Dataset.from_generator(
+    #        get_rows, 
+    #        args=(pid_t,),
+    #        output_types=tf_element_types),
+    #  cycle_length=num_reader_threads,
+    #  sloppy=non_deterministic_element_order))
+    return ds
 
 
 
