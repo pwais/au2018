@@ -634,6 +634,8 @@ def spark_df_to_tf_dataset(
     # df = spark_df
     # pids = df.select('_spark_part_id').distinct().rdd.flatMap(lambda x: x).collect()
     pids = df.select('shard').distinct().rdd.flatMap(lambda x: x).collect()
+    import random
+    random.shuffle(pids)
     print(len(pids), pids)
 
     import tensorflow as tf
@@ -647,8 +649,11 @@ def spark_df_to_tf_dataset(
         # NB: this can be a linear scan :(
       rows = part_df.rdd.repartition(100).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
       util.log.info("got Partition %s " % str(pid))#had %s rows" % (pid, len(rows)))
+      n = 0
       for row in rows:
         yield row
+        n += 1
+      util.log.info("Partition %s had %s rows" % (str(pid), n))
     
     ds = pid_ds.interleave(
        lambda pid_t: \

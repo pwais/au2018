@@ -149,7 +149,7 @@ def main():
       #train_ds = train_ds.cache()
       #train_ds = train_ds.repeat(3)
       train_ds = train_ds.batch(BATCH_SIZE)
-      train_ds = train_ds.shuffle(10)
+      train_ds = train_ds.shuffle(500)
       return train_ds
 
     def eval_input_fn():
