@@ -54,7 +54,7 @@ class model_fn(object):
 
       # If we are running multi-GPU, we need to wrap the optimizer.
       #if params_dict.get('multi_gpu'):
-      #  optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
+      # optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
 
       loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
       accuracy = tf.metrics.accuracy(
@@ -113,21 +113,24 @@ def main():
 
   tf_config = util.tf_create_session_config()
 
-
   model_dir = '/tmp/av_mobilenet_test'
   util.mkdir(model_dir)
+
+  config = tf.estimator.RunConfig(
+        model_dir=model_dir,
+        save_summary_steps=10,
+        save_checkpoints_secs=10,
+        session_config=tf_config,
+        log_step_count_steps=10)
+  dist = tf.contrib.distribute.MirroredStrategy()
+  config = config.replace(train_distribute=dist)
 
   from au.fixtures.tf.mobilenet import Mobilenet
   params = Mobilenet.Medium()
   av_classifier = tf.estimator.Estimator(
     model_fn=model_fn(params),
     params=None,
-    config=tf.estimator.RunConfig(
-      model_dir=model_dir,
-      save_summary_steps=10,
-      save_checkpoints_secs=10,
-      session_config=tf_config,
-      log_step_count_steps=10))
+    config=config)
 
   with Spark.getOrCreate() as spark:
     df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/gcloud_tables/gcloud_tables/argoverse_cropped_object_170_170')#'/opt/au/cache/argoverse_cropped_object_170_170')
@@ -149,7 +152,7 @@ def main():
       #train_ds = train_ds.cache()
       #train_ds = train_ds.repeat(3)
       train_ds = train_ds.batch(BATCH_SIZE)
-      train_ds = train_ds.shuffle(500)
+      train_ds = train_ds.shuffle(400)
       return train_ds
 
     def eval_input_fn():
