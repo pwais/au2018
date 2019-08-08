@@ -1762,7 +1762,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     anno_df = anno_df.withColumn(
                 'shard',
                 F.abs(F.hash(anno_df['frame_uri'])) % cls.N_SHARDS_PER_SPLIT)
-    anno_df = anno_df.repartition('split', 'shard').persist()
+    anno_df = anno_df.repartition(10, 'split', 'shard').persist()
     return anno_df
 
   @classmethod
@@ -1784,7 +1784,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     for cond in CONDS:
       anno_df = anno_df.filter(cond)
     
-    anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(5000).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(5000).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     #anno_df = anno_df.repartition(1000)
 
     util.log.info("Found %s eligible annos." % anno_df.count())
@@ -1811,7 +1811,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     util.log.info("Creating negatives ...")
     # We'll mine negatives from all images, TODO even those w/out annotations ? ~~~~~~~~~~~~~~~
     anno_df = cls._get_anno_df(spark)
-    anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(100).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # anno_df = anno_df.filter(anno_df.frame_uri.isin(anno_df.select('frame_uri').distinct().limit(100).rdd.flatMap(lambda x: x).collect())) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     # Since `anno_df` already has all the bbox info we need, we use those
     # bboxes since reading the raw annos again from Argoverse is expensive
