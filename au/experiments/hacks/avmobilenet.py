@@ -82,27 +82,30 @@ class model_fn(object):
       preds = tf.argmax(logits, axis=1)
       classes = labels
 
+      accuracy = tf.metrics.accuracy(
+          labels=labels, predictions=tf.argmax(logits, axis=1))
+      tf.summary.scalar('eval_accuracy', accuracy[1])
+
       eval_metric_ops = {
         'accuracy':
             tf.metrics.accuracy(labels=labels, predictions=preds),
       }
 
-      # # Added in au
-      # for k in range(self.au_params.TEST_TABLE.N_CLASSES):
-      #   k_name = str(k)
-      #   metric_kwargs = {
-      #     'labels': tf.cast(tf.equal(classes, k), tf.int64),
-      #     'predictions': tf.cast(tf.equal(preds, k), tf.int64),
-      #   }
-      #   name_to_ftor = {
-      #     'accuracy': tf.metrics.accuracy,
-      #     'auc': tf.metrics.auc,
-      #     'precision': tf.metrics.precision,
-      #     'recall': tf.metrics.recall,
-      #   }
-      #   for name, ftor in name_to_ftor.items():
-      #     full_name = name + '_' + k_name
-      #     eval_metric_ops[full_name] = ftor(name=full_name, **metric_kwargs)
+      # Added in au
+      for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
+        metric_kwargs = {
+          'labels': tf.cast(tf.equal(classes, class_id), tf.int64),
+          'predictions': tf.cast(tf.equal(preds, class_id), tf.int64),
+        }
+        name_to_ftor = {
+          'accuracy': tf.metrics.accuracy,
+          'auc': tf.metrics.auc,
+          'precision': tf.metrics.precision,
+          'recall': tf.metrics.recall,
+        }
+        for name, ftor in name_to_ftor.items():
+          full_name = name + '_' + class_name
+          eval_metric_ops[full_name] = ftor(name=full_name, **metric_kwargs)
 
       return tf.estimator.EstimatorSpec(
           mode=tf.estimator.ModeKeys.EVAL,
@@ -145,7 +148,7 @@ def main():
     config=config)
 
   with Spark.getOrCreate() as spark:
-    df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/gcloud_tables/gcloud_tables/argoverse_cropped_object_170_170')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
     print('num images', df.count())
     #df = df.cache()
 
@@ -157,8 +160,8 @@ def main():
       return img, label
     
     BATCH_SIZE = 300
+    tdf = df.filter(df.split == 'train').limit(3000)
     def train_input_fn():
-      tdf = df.filter(df.split == 'train')
       ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64))
       train_ds = ds
       #train_ds = train_ds.cache()
@@ -167,8 +170,8 @@ def main():
       train_ds = train_ds.shuffle(400)
       return train_ds
 
+    edf = df.filter(df.split == 'val').limit(3000)
     def eval_input_fn():
-      edf = df.filter(df.split == 'val')
       ds = spark_df_to_tf_dataset(df, to_example, (tf.uint8, tf.int64))
       eval_ds = ds
       eval_ds = eval_ds.batch(BATCH_SIZE)

@@ -1100,6 +1100,8 @@ class ImageAnnoTable(object):
       rows = list(rows) # Spark gives us a generator
       bike_rows = [r for r in rows if r.category_name in BIKE]
       rider_rows = [r for r in rows if r.category_name in RIDER]
+      if not bike_rows:
+        return
       
       # The best pair has smallest euclidean distance between centroids
       def l2_dist(r1, r2):
@@ -1111,22 +1113,24 @@ class ImageAnnoTable(object):
       # have riders.
       for rider in rider_rows:
         try:
-          if bike_rows:
-            distance, best_bike = min(
-                            (l2_dist(rider, bike), bike)
-                            for bike in bike_rows)
-            nearest_bike = dict(
-              uri=rider.uri,
-              track_id=rider.track_id,
-              ridden_bike_track_id=best_bike.track_id,
-              ridden_bike_distance=distance,
-            )
-
-            yield Row(**nearest_bike)
+          distance, best_bike = min(
+                          (l2_dist(rider, bike), bike)
+                          for bike in bike_rows)
         except Exception as e:
+          import sys
+          print(str(sys.exc_info()))
+          import pdb; pdb.set_trace()
           # TODO: getting spurious "numpy cast to bool" exceptions here?
           util.log.error("Bike rider assoc wat? %s" % e)
           continue
+        nearest_bike = dict(
+          uri=rider.uri,
+          track_id=rider.track_id,
+          ridden_bike_track_id=best_bike.track_id,
+          ridden_bike_distance=distance,
+        )
+
+        yield Row(**nearest_bike)
     
     # We'll group all rows in our DF by URI, then do bike<->rider
     # for each URI (i.e. all the rows for a single URI).  The matching
@@ -1689,7 +1693,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     return cropped
 
   @classmethod
-  def _to_cropped_image_anno_df(cls, spark, anno_df, and_debug=False):
+  def _to_cropped_image_anno_df(cls, spark, anno_df, and_debug=True):
     """Adjusts annos to cropped viewpoint and adds columns:
      * jpeg_bytes (cropped image encoded as max quality jpeg)
      * debug_jpeg_bytes (debug image as medium-quality jpeg)
@@ -1831,7 +1835,8 @@ class CroppedObjectImageTable(dataset.ImageTable):
       # Construct a negative miner
       frame_uri = FrameURI.from_str(frame_uri)
       viewport = frame_uri.get_viewport()
-      miner = HardNegativeMiner.create_miner(frame_uri.camera, viewport, pos_boxes)
+      miner = HardNegativeMiner.create_miner(
+                        frame_uri.camera, viewport, pos_boxes)
 
       # Mine!
       for n in range(cls.NEGATIVE_SAMPLES_PER_FRAME):
@@ -1848,10 +1853,10 @@ class CroppedObjectImageTable(dataset.ImageTable):
         yield Row(**row)
 
     key_rows_rdd = bbox_df.rdd.groupBy(lambda r: (r.frame_uri, r.shard))
-    util.log.info("... generating negatives from %s frames ..." % key_rows_rdd.count())
+    util.log.info(
+      "... generating negatives from %s frames ..." % key_rows_rdd.count())
     negative_annos = key_rows_rdd.flatMap(iter_samples)
     anno_df = spark.createDataFrame(negative_annos)
-    anno_df = anno_df.repartition('split', 'shard').persist()
     
     cropped_anno_df = cls._to_cropped_image_anno_df(spark, anno_df)
     return cropped_anno_df
