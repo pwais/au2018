@@ -110,12 +110,15 @@ class model_fn_vae_hybrid(object):
       eps = 1e-10
       recon_loss = tf.reduce_mean(
         -tf.reduce_sum(
-          y * tf.log(y_ + eps) + (1 - y) * tf.log(1 - y_ + eps), axis=1))
+          y * tf.log(y_ + eps) + (1. - y) * tf.log(1. - y_ + eps), axis=1))
+      tf.debugging.check_numerics(y, 'y_nan')
+      tf.debugging.check_numerics(y_, 'y_target_nan')
+      tf.debugging.check_numerics(recon_loss, 'recon_loss_nan')
       
       # Latent Loss: KL divergence between Z and N(0, 1)
       latent_loss = tf.reduce_mean(
           -0.5 * tf.reduce_sum(
-          1 + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq),
+          1. + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq),
           axis=1))
 
       total_vae_loss = recon_loss + LATENT_LOSS_WEIGHT * latent_loss
