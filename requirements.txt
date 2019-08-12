@@ -11,7 +11,6 @@ keras==2.2.2
 matplotlib
 opencv-python
 numpy==1.15.2
-markdown
 pandas
 pathlib2
 patool
@@ -21,6 +20,7 @@ pytest
 selenium==3.141.0
 six==1.11.0
 tabulate
+tabulatehelper
 tensorflow-io==0.7.0
 # Use tensorflow supplied from environment
 

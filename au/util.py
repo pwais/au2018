@@ -301,20 +301,12 @@ class ThruputObserver(object):
         n = t_shape[0]
         num_bytes = np.prod(t_shape) * self.dtype_size_bytes
         self.observer.stop_block(n=n, num_bytes=num_bytes)
-        
         self.observer.maybe_log_progress()
-        # Tensorboard wants special markdown :P
+        
+        # Tensorboard is very picky about wanting Markdown :P
+        import tabulatehelper as th
         stats = self.observer.get_stats()
-        # def to_line(stat):
-        #   k, v = stat
-        #   # return '| %s | %s |\n  ' % (k, v)
-        #   # k, v = stat
-        #   # if v is '':
-        #   #   return '| %s | |\n|----|----|' % k
-        #   # else:
-        #   return '| %s | %s |' % (k, v)
-        header = '| %s | |\n|----|----|\n' % name
-        out = header + '\n'.join('| %s | %s |' % (k, v) for k, v in stats)
+        out = th.md_table(stats, headers=[name])
 
         self.observer.start_block()
         return out

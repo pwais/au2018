@@ -566,7 +566,7 @@ class NumpyArray(object):
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and other.arr == self.arr
-partition_thruput = None
+
 def spark_df_to_tf_dataset(
       spark_df,
       spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
@@ -637,40 +637,36 @@ def spark_df_to_tf_dataset(
     # df = spark_df
     # pids = df.select('_spark_part_id').distinct().rdd.flatMap(lambda x: x).collect()
     pids = df.select('shard').distinct().rdd.flatMap(lambda x: x).collect()
-    import random
-    random.shuffle(pids)
     print(len(pids), pids)
 
-    # import pyspark.sql
-    # spark = pyspark.sql.SparkSession(df._sc)
-    global partition_thruput
-    partition_thruput = util.ThruputObserver(
-                                name=logging_name,
-                                n_total=df.count())#len(pids))  ~~~~~~~~~~~~~~~~~~~~~~
 
+    import threading
     import tensorflow as tf
     pid_ds = tf.data.Dataset.from_tensor_slices(pids)
     
-
-    def get_rows(pid):
-      util.log.info("Fetching partition %s" % pid)
-      part_df = df.filter(df['shard'] == int(pid))
-      # part_df = df.filter('part == %s' % pid)
-        # NB: this can be a linear scan :(
-      rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
-      util.log.info("got Partition %s " % str(pid))#had %s rows" % (pid, len(rows)))
-      t = util.ThruputObserver()
-      n = 0
-      t.start_block()
-      for row in rows:
-        yield row
-        n += 1
-        t.update_tallies(n=1, num_bytes=util.get_size_of_deep(row))
-      t.stop_block()
-      util.log.info("Partition %s had %s rows" % (str(pid), n))
-      global partition_thruput
-      partition_thruput += t
-      partition_thruput.maybe_log_progress(every_n=1)
+    class PartitionToRows(object):
+      def __init__(self):
+        self.overall_thruput = util.ThruputObserver(
+                                    name=logging_name,
+                                    log_on_del=True,
+                                    n_total=df.count())#len(pids))  ~~~~~~~~~~~~~~~~~~~~~~
+        self.lock = threading.Lock()
+      
+      def __call__(self, pid):
+        part_df = df.filter(df['shard'] == int(pid))
+        # part_df = df.filter('part == %s' % pid)
+          # Careful! This can be a linear scan :(
+        rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
+        util.log.info("Reading partition %s " % pid)#had %s rows" % (pid, len(rows)))
+        t = util.ThruputObserver(name='Partition %s' % pid, log_on_del=True)
+        t.start_block()
+        for row in rows:
+          yield row
+          t.update_tallies(n=1, num_bytes=util.get_size_of_deep(row))
+        t.stop_block()
+        with self.lock:
+          self.overall_thruput += t
+          self.overall_thruput.maybe_log_progress(every_n=1)
 
       # import pyspark.sql
       # part_df.createOrReplaceTempView('part_df_%s' % pid)
@@ -685,7 +681,7 @@ def spark_df_to_tf_dataset(
     ds = pid_ds.interleave(
        lambda pid_t: \
          tf.data.Dataset.from_generator(
-           get_rows, 
+           PartitionToRows(), 
            args=(pid_t,),
            output_types=tf_element_types),
        cycle_length=num_reader_threads,
