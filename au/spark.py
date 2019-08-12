@@ -650,6 +650,7 @@ def spark_df_to_tf_dataset(
                                     name=logging_name,
                                     log_on_del=True,
                                     n_total=df.count())#len(pids))  ~~~~~~~~~~~~~~~~~~~~~~
+        self.overall_thruput.start_block()
         self.lock = threading.Lock()
       
       def __call__(self, pid):
@@ -658,15 +659,19 @@ def spark_df_to_tf_dataset(
           # Careful! This can be a linear scan :(
         rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
         util.log.info("Reading partition %s " % pid)#had %s rows" % (pid, len(rows)))
-        t = util.ThruputObserver(name='Partition %s' % pid, log_on_del=True)
+        t = util.ThruputObserver(name='Partition %s' % pid)
         t.start_block()
         for row in rows:
           yield row
           t.update_tallies(n=1, num_bytes=util.get_size_of_deep(row))
         t.stop_block()
+        util.log.info("Done reading partition %s, stats:\n %s" % (pid, t))
         with self.lock:
-          self.overall_thruput += t
+          # Since partitions are read in parallel, we need to maintain
+          # independent timing stats for the main thread
+          self.overall_thruput.stop_block(n=t.n, num_bytes=t.num_bytes)
           self.overall_thruput.maybe_log_progress(every_n=1)
+          self.overall_thruput.start_block()
 
       # import pyspark.sql
       # part_df.createOrReplaceTempView('part_df_%s' % pid)
