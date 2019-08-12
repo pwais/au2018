@@ -62,6 +62,17 @@ def np_truthy(v):
   else:
     return bool(v)
 
+def get_size_of_deep(v):
+  """(Hacky) Get size of the value `v` in bytes.  Does not rely on a more
+  precise library like guppy or pympler.  Intended for values `v` that 
+  contain large binary blobs."""
+  if hasattr(v, 'nbytes'):
+    return v.nbytes
+  elif hasattr(v, '__iter__'):
+    return sum(get_size_of_deep(el) for el in v)
+  else:
+    return sys.getsizeof(v)
+
 def ichunked(seq, n):
   """Generate chunks of `seq` of size (at most) `n`.  More efficient
   and less junk than itertools recipes version using izip_longest...
@@ -204,7 +215,6 @@ class ThruputObserver(object):
       self.__log_freq = every_n
     if (self.n % self.__log_freq) == 0:
       log.info("Progress for \n" + str(self))
-
       if every_n == -1 and (self.n >= (1.7 * self.__log_freq)):
         self.__log_freq = int(1.7 * self.__log_freq)
 
@@ -214,26 +224,23 @@ class ThruputObserver(object):
     for t in thruputs:
       u += t
     return u
-  
-  def __iadd__(self, other):
-    self.n += other.n
-    self.num_bytes += other.num_bytes
-    self.ts.extend(other.ts)
-    return self
 
-  def __str__(self):
+  def get_stats(self):
     import numpy as np
-    import tabulate
+    from humanfriendly import format_size
+    from humanfriendly import format_timespan
 
-    gbytes = 1e-9 * self.num_bytes
-    total_time = sum(self.ts) or float('nan')
+    total_time = sum(self.ts)
 
     stats = [
+      ('Thruput', ''),
       ('N thru', self.n),
       ('N chunks', len(self.ts)),
-      ('total time (sec)', total_time),
-      ('total GBytes', gbytes),
-      ('overall GBytes/sec', gbytes / total_time if total_time else '-'),
+      ('total time', format_timespan(total_time) if total_time else '-'),
+      ('total thru', format_size(self.num_bytes)),
+      ('rate', 
+        format_size(self.num_bytes / total_time) + ' / sec'
+        if total_time else '-'),
       ('Hz', float(self.n) / total_time if total_time else '-'),
     ]
     if self.n_total is not None:
@@ -244,15 +251,16 @@ class ThruputObserver(object):
       stats.extend([
         ('Progress', ''),
         ('Percent complete', percent_complete),
-        ('ETA (sec)', eta_sec)
+        ('ETA', format_timespan(eta_sec)),
       ])
     if len(self.ts) >= 2:
+      format_t = lambda t: format_timespan(t, detailed=True)
       stats.extend([
         ('Latency (per chunk)', ''),
-        ('avg (sec)', np.mean(self.ts)),
-        ('p50 (sec)', np.percentile(self.ts, 50)),
-        ('p95 (sec)', np.percentile(self.ts, 95)),
-        ('p99 (sec)', np.percentile(self.ts, 99)),
+        ('avg', format_t(np.mean(self.ts))),
+        ('p50', format_t(np.percentile(self.ts, 50))),
+        ('p95', format_t(np.percentile(self.ts, 95))),
+        ('p99', format_t(np.percentile(self.ts, 99))),
       ])
     if self.only_stats:
       stats = tuple(
@@ -260,7 +268,17 @@ class ThruputObserver(object):
         for name, value in stats
         if name in self.only_stats
       )
+    return stats
 
+  def __iadd__(self, other):
+    self.n += other.n
+    self.num_bytes += other.num_bytes
+    self.ts.extend(other.ts)
+    return self
+
+  def __str__(self):
+    import tabulate
+    stats = self.get_stats()
     summary = tabulate.tabulate(stats)
     if self.name:
       summary = self.name + '\n' + summary
@@ -271,6 +289,41 @@ class ThruputObserver(object):
       self.stop_block()
       log = create_log()
       log.info('\n' + str(self) + '\n')
+  
+  @staticmethod
+  def monitoring_tensor(name, tensor, **observer_init_kwargs):
+    class Observer(object):
+      def __init__(self, dtype_size_bytes):
+        self.observer = ThruputObserver(name=name, **observer_init_kwargs)
+        self.dtype_size_bytes = dtype_size_bytes
+      def __call__(self, t_shape):
+        import numpy as np
+        n = t_shape[0]
+        num_bytes = np.prod(t_shape) * self.dtype_size_bytes
+        self.observer.stop_block(n=n, num_bytes=num_bytes)
+        
+        self.observer.maybe_log_progress()
+        # Tensorboard wants special markdown :P
+        stats = self.observer.get_stats()
+        # def to_line(stat):
+        #   k, v = stat
+        #   # return '| %s | %s |\n  ' % (k, v)
+        #   # k, v = stat
+        #   # if v is '':
+        #   #   return '| %s | |\n|----|----|' % k
+        #   # else:
+        #   return '| %s | %s |' % (k, v)
+        header = '| %s | |\n|----|----|\n' % name
+        out = header + '\n'.join('| %s | %s |' % (k, v) for k, v in stats)
+
+        self.observer.start_block()
+        return out
+    
+    import tensorflow as tf
+    obs_str_tensor = tf.compat.v1.py_func(
+              Observer(tensor.dtype.size), [tf.shape(tensor)], tf.string)
+    tf.summary.text(name + '/ThruputObserver', obs_str_tensor)
+    return obs_str_tensor
 
 
 

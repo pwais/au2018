@@ -11,6 +11,7 @@ keras==2.2.2
 matplotlib
 opencv-python
 numpy==1.15.2
+markdown
 pandas
 pathlib2
 patool

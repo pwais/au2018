@@ -566,13 +566,14 @@ class NumpyArray(object):
 
   def __eq__(self, other):
     return isinstance(other, self.__class__) and other.arr == self.arr
-
+partition_thruput = None
 def spark_df_to_tf_dataset(
       spark_df,
       spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
       tf_element_types, # E.g. [tf.int64]
       non_deterministic_element_order=True,
-      num_reader_threads=-1):
+      num_reader_threads=-1,
+      logging_name='spark_tf_dataset'):
     """Create a tf.data.Dataset that reads from the Spark Dataframe
     `spark_df`.  Executes parallel reads using the Tensorflow's internal
     (native code) threadpool.  Each thread reads a single Spark partition
@@ -597,6 +598,8 @@ def spark_df_to_tf_dataset(
       num_reader_threads (int):
         Tell Tensorflow to use this many reader threads, or use -1
         to provision one reader thread per CPU core.
+      logging_name (str):
+        Log progress under this name.
     
     Returns:
       tf.data.Dataset: The induced TF Datset with one element per
@@ -638,6 +641,13 @@ def spark_df_to_tf_dataset(
     random.shuffle(pids)
     print(len(pids), pids)
 
+    # import pyspark.sql
+    # spark = pyspark.sql.SparkSession(df._sc)
+    global partition_thruput
+    partition_thruput = util.ThruputObserver(
+                                name=logging_name,
+                                n_total=df.count())#len(pids))  ~~~~~~~~~~~~~~~~~~~~~~
+
     import tensorflow as tf
     pid_ds = tf.data.Dataset.from_tensor_slices(pids)
     
@@ -649,21 +659,28 @@ def spark_df_to_tf_dataset(
         # NB: this can be a linear scan :(
       rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
       util.log.info("got Partition %s " % str(pid))#had %s rows" % (pid, len(rows)))
+      t = util.ThruputObserver()
       n = 0
+      t.start_block()
       for row in rows:
         yield row
         n += 1
+        t.update_tallies(n=1, num_bytes=util.get_size_of_deep(row))
+      t.stop_block()
       util.log.info("Partition %s had %s rows" % (str(pid), n))
+      global partition_thruput
+      partition_thruput += t
+      partition_thruput.maybe_log_progress(every_n=1)
 
-      import pyspark.sql
-      part_df.createOrReplaceTempView('part_df_%s' % pid)
-      spark = pyspark.sql.SQLContext(part_df._sc)
-      spark.sql("""
-        SELECT split, category_name, COUNT(*) c
-        FROM part_df_%s
-        GROUP BY split, category_name
-        ORDER BY split, c DESC
-      """ % pid).show()
+      # import pyspark.sql
+      # part_df.createOrReplaceTempView('part_df_%s' % pid)
+      # spark = pyspark.sql.SQLContext(part_df._sc)
+      # spark.sql("""
+      #   SELECT split, category_name, COUNT(*) c
+      #   FROM part_df_%s
+      #   GROUP BY split, category_name
+      #   ORDER BY split, c DESC
+      # """ % pid).show()
     
     ds = pid_ds.interleave(
        lambda pid_t: \

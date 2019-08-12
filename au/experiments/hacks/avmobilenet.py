@@ -24,6 +24,8 @@ class model_fn(object):
     features.set_shape([None, 170, 170, 3])
     labels.set_shape([None,])
 
+    obs_str_tensor = util.ThruputObserver.monitoring_tensor('features', features)
+
     features = tf.cast(features, tf.float32) / 128. - 1
 
     tf.summary.histogram('labels', labels)
@@ -119,26 +121,24 @@ class model_fn(object):
       tf.summary.scalar('eval_accuracy', accuracy[1])
       tf.summary.scalar('eval_loss', loss)
 
-      import time
-      exec_t = time.time()
-      class get_diff(object):
-        def __init__(self):
-          self.exec_t = time.time()
-        def __call__(self, shape):
-          now = time.time()
-          diff = now - self.exec_t
-          self.exec_t = now
-          print('diff', diff)
-          print(shape[0] / diff)
-          print(np.prod(shape) / diff)
-          print(shape)
-          return [diff]
-      diff_tensor = tf.compat.v1.py_func(get_diff(), [tf.shape(features)], tf.float64)
-      batch_size = tf.shape(features)[0]
-      eval_ex_per_sec = tf.div(tf.cast(batch_size, tf.float64), diff_tensor)
-      tf.summary.scalar('eval_ex_per_sec', eval_ex_per_sec)
-
-      
+      # import time
+      # exec_t = time.time()
+      # class get_diff(object):
+      #   def __init__(self):
+      #     self.exec_t = time.time()
+      #   def __call__(self, shape):
+      #     now = time.time()
+      #     diff = now - self.exec_t
+      #     self.exec_t = now
+      #     print('diff', diff)
+      #     print(shape[0] / diff)
+      #     print(np.prod(shape) / diff)
+      #     print(shape)
+      #     return [diff]
+      # diff_tensor = tf.compat.v1.py_func(get_diff(), [tf.shape(features)], tf.float64)
+      # batch_size = tf.shape(features)[0]
+      # eval_ex_per_sec = tf.div(tf.cast(batch_size, tf.float64), diff_tensor)
+      # tf.summary.scalar('eval_ex_per_sec', eval_ex_per_sec)
 
       eval_metric_ops = {
         'accuracy':
@@ -169,7 +169,7 @@ class model_fn(object):
 
 
       logging_hook = tf.train.LoggingTensorHook(
-        {"eval_ex_per_sec" : eval_ex_per_sec}, every_n_iter=1)
+        {"obs_str_tensor" : obs_str_tensor}, every_n_iter=1)
       summary_hook = tf.train.SummarySaverHook(
             save_secs=3,
             output_dir='/tmp/av_mobilenet_test/eval',
