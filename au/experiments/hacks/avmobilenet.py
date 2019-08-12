@@ -48,14 +48,14 @@ class model_fn_vae_hybrid(object):
                             is_training=is_training,
                             depth_multiplier=self.params.DEPTH_MULTIPLIER,
                             finegrain_classification_mode=self.params.FINE)
-    assert False, endpoints
-    embedding = endpoints['mobilenet_layer_19']
-    preds_scores = endpoints['Predictions']
+      
+      embedding = endpoints['layer_19']
+      preds_scores = endpoints['Predictions']
     preds = tf.argmax(preds_scores, axis=1)
     with tf.name_scope('mobilenet'):
       util.tf_variable_summaries(logits)
       util.tf_variable_summaries(embedding)
-      util.tf_variable_summaries(preds)
+      util.tf_variable_summaries(tf.cast(preds, tf.float32))
       util.tf_variable_summaries(preds_scores)
     
 
@@ -67,7 +67,7 @@ class model_fn_vae_hybrid(object):
     VAE_LOSS_WEIGHT = 2.
     
     with tf.name_scope('vae'):
-      x = embedding
+      x = tf.contrib.layers.flatten(embedding)
       features_flat = tf.contrib.layers.flatten(features)
 
       ## x -> z = N(z_mu, z_sigma)
@@ -119,14 +119,13 @@ class model_fn_vae_hybrid(object):
           axis=1))
 
       total_vae_loss = recon_loss + LATENT_LOSS_WEIGHT * latent_loss
-      total_vae_loss = tf.identity(total_loss, name='total_loss')
 
       with tf.name_scope('loss'):
         tf.summary.scalar('recon_loss', recon_loss)
         tf.summary.scalar('latent_loss', latent_loss)
         tf.summary.scalar('total_vae_loss', total_vae_loss)
 
-        mse = tf.metrics.mean_squared_error(features_flat, y, name='MSE')
+        mse = tf.metrics.mean_squared_error(y_, y, name='MSE')
         tf.summary.scalar('MSE', mse[1])
 
     ### Set up total loss with supervised model
@@ -170,7 +169,9 @@ class model_fn_vae_hybrid(object):
       tf.summary.image('supervised_pred', class_pred, max_outputs=3, family=class_name)
 
       # Monitor VAE
-      y_unflat = tf.reshape(y, FEATURES_SHAPE)
+      Y_SHAPE = list(FEATURES_SHAPE)
+      Y_SHAPE[0] = -1
+      y_unflat = tf.reshape(y, Y_SHAPE)
       y_true = tf.boolean_mask(y_unflat, class_labels)
       y_pred = tf.boolean_mask(y_unflat, class_preds)
       tf.summary.image('vae_labels', y_true, max_outputs=3, family=class_name)
@@ -193,11 +194,12 @@ class model_fn_vae_hybrid(object):
       
       loss = total_loss
       optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
-      train_op = optimizer.minimize(loss, global_step)
       
       global_step = tf.train.get_or_create_global_step()
       tf.summary.scalar('global_step', global_step)
-
+      
+      train_op = optimizer.minimize(loss, global_step)
+      
       return tf.estimator.EstimatorSpec(
           mode=tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op)
 
@@ -475,7 +477,8 @@ def main():
       label = AV_OBJ_CLASS_NAME_TO_ID[row.category_name]
       return img, label
    
-    BATCH_SIZE = 300
+    # BATCH_SIZE = 300
+    BATCH_SIZE = 200
     tdf = df.filter(df.split == 'train')#spark.createDataFrame(df.filter(df.split == 'train').take(3000))
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
