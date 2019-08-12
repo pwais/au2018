@@ -981,9 +981,12 @@ def tf_create_session(config=None):
   sess = tf.compat.v1.Session(config=config)
   return sess
 
+def tf_cpu_session_config():
+  return tf_create_session_config(restrict_gpus=[])
+
 def tf_cpu_session(config=None):
   if not config:
-    config = tf_create_session_config(restrict_gpus=[])
+    config = tf_cpu_session_config()
   else:
     tf_session_config_restrict_gpus(config, restrict_gpus=[])
   return tf_create_session(config=config)

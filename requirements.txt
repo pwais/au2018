@@ -4,6 +4,7 @@ fasteners
 flask==1.0.2
 findspark==1.3.0
 gmplot
+humanfriendly
 imageio==2.4.1
 klepto
 keras==2.2.2

@@ -647,13 +647,23 @@ def spark_df_to_tf_dataset(
       part_df = df.filter(df['shard'] == int(pid))
       # part_df = df.filter('part == %s' % pid)
         # NB: this can be a linear scan :(
-      rows = part_df.rdd.repartition(100).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
+      rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
       util.log.info("got Partition %s " % str(pid))#had %s rows" % (pid, len(rows)))
       n = 0
       for row in rows:
         yield row
         n += 1
       util.log.info("Partition %s had %s rows" % (str(pid), n))
+
+      import pyspark.sql
+      part_df.createOrReplaceTempView('part_df_%s' % pid)
+      spark = pyspark.sql.SQLContext(part_df._sc)
+      spark.sql("""
+        SELECT split, category_name, COUNT(*) c
+        FROM part_df_%s
+        GROUP BY split, category_name
+        ORDER BY split, c DESC
+      """ % pid).show()
     
     ds = pid_ds.interleave(
        lambda pid_t: \
