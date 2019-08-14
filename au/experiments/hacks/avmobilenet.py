@@ -27,60 +27,73 @@ class model_fn_vae_hybrid(object):
   def __call__(self, features, labels, mode, params):
 
     FEATURES_SHAPE = [None, 170, 170, 3]
+    N_CLASSES = len(AV_OBJ_CLASS_NAME_TO_ID)
+
+    # Downweight background class
+    class_weights = np.ones(len(AV_OBJ_CLASS_NAME_TO_ID))
+    BKG_CLASS_IDX = AV_OBJ_CLASS_NAME_TO_ID['background']
+    class_weights[BKG_CLASS_IDX] *= .1
+    class_weights /= class_weights.sum()
+    CWEIGHTS = tf.gather(class_weights, labels)
+
     features.set_shape(FEATURES_SHAPE) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     labels.set_shape([None,])
 
     obs_str_tensor = util.ThruputObserver.monitoring_tensor('features', features)
 
+    # Mobilenet requires normalization
     features = tf.cast(features, tf.float32) / 128. - 1
 
-    util.tf_variable_summaries(tf.cast(labels, tf.float32), prefix='labels')
-    util.tf_variable_summaries(features, prefix='features')
+    with tf.name_scope('input'):
+      util.tf_variable_summaries(tf.cast(labels, tf.float32), prefix='labels')
+      util.tf_variable_summaries(features, prefix='features')
 
     ### Set up Mobilenet
     from nets.mobilenet import mobilenet_v2
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
     with tf.contrib.slim.arg_scope(mobilenet_v2.training_scope(is_training=is_training)):
-      # See also e.g. mobilenet_v2_035
-      logits, endpoints = mobilenet_v2.mobilenet(
+      _, endpoints = mobilenet_v2.mobilenet(
                             features,
-                            num_classes=len(AV_OBJ_CLASS_NAME_TO_ID),
+                            num_classes=N_CLASSES,
                             is_training=is_training,
                             depth_multiplier=self.params.DEPTH_MULTIPLIER,
                             finegrain_classification_mode=self.params.FINE)
       
-      embedding = endpoints['layer_19']
-      preds_scores = endpoints['Predictions']
-    preds = tf.argmax(preds_scores, axis=1)
+      embedding = endpoints['layer_19'] # (?, 170, 170, 3) -> (?, 6, 6, 1280)
     with tf.name_scope('mobilenet'):
-      util.tf_variable_summaries(logits)
       util.tf_variable_summaries(embedding)
-      util.tf_variable_summaries(tf.cast(preds, tf.float32))
-      util.tf_variable_summaries(preds_scores)
     
-
     ### Set up the VAE model
-    ENCODER_LAYERS = [512, 256, 128, 64]
-    DECODER_LAYERS = [64, 128, 256, 512]
-    Z_D = 32
-    LATENT_LOSS_WEIGHT = 50.
-    VAE_LOSS_WEIGHT = 2.
-    
-    with tf.name_scope('vae'):
-      x = tf.contrib.layers.flatten(embedding)
-      features_flat = tf.contrib.layers.flatten(features)
+    Z_D = 128
+    ENCODER_LAYERS = [10000, 1000, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 1000, 10000]
+    # LATENT_LOSS_WEIGHT = 50.
+    # VAE_LOSS_WEIGHT = 2.
+    # EPS = 1e-10
 
-      ## x -> z = N(z_mu, z_sigma)
+    tf_flatten = tf.contrib.layers.flatten
+
+    ### VAE Input
+    x = embedding
+
+    ## Encode
+    ## x -> z = N(z_mu, z_sigma)
+    with tf.name_scope('encode'):
       l = tf.keras.layers
       encode = tf.keras.Sequential([
         l.Dense(n_hidden, activation=tf.nn.relu)
         for n_hidden in ENCODER_LAYERS
       ])
-
-      encoded = encode(x, training=is_training)
-      z_mu = l.Dense(Z_D, activation=None, name='z_mu')(encoded)
-      z_log_sigma_sq = l.Dense(
-        Z_D, activation=None, name='z_log_sigma_sq')(encoded)
+      x_flat = tf_flatten(x)
+      encoded = encode(x_flat, training=is_training)
+      
+      z_mu_layer = l.Dense(Z_D, activation=None, name='z_mu')
+      z_mu = z_mu_layer(encoded)
+      
+      z_log_sigma_sq_layer = l.Dense(
+        Z_D, activation=None, name='z_log_sigma_sq')
+      z_log_sigma_sq = z_log_sigma_sq_layer(encoded)
+      
       util.tf_variable_summaries(z_mu)
       util.tf_variable_summaries(z_log_sigma_sq)
 
@@ -92,93 +105,141 @@ class model_fn_vae_hybrid(object):
       z = z_mu + tf.sqrt(tf.exp(z_log_sigma_sq)) * noise
       util.tf_variable_summaries(z, prefix='z')
 
-      ## z -> y
+    ## Latent Loss: KL divergence between Z and N(0, 1)
+    with tf.name_scope('latent_loss'):
+      latent_loss = tf.reduce_mean(
+        -0.5 * tf.reduce_sum(
+        1. + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq),
+        axis=1))
+      # tf.debugging.check_numerics(z_log_sigma_sq, 'z_log_sigma_sq_nan')
+      # tf.debugging.check_numerics(z_mu, 'z_mu_nan')
+      # tf.debugging.check_numerics(latent_loss, 'latent_loss_nan')
+
+    ## Decode
+    ## z -> y
+    with tf.name_scope('decode'):
       decode = tf.keras.Sequential([
         l.Dense(n_hidden, activation=tf.nn.relu)
         for n_hidden in DECODER_LAYERS
       ])
-      decoded = decode(z, training=is_training)
-      y_size = features_flat.shape[-1]
-      vae_logits = l.Dense(y_size, activation=None, name='logits')(decoded)
-      y = tf.sigmoid(vae_logits, name='y')
-      util.tf_variable_summaries(vae_logits, prefix='vae_logits')
-      util.tf_variable_summaries(y, prefix='y')
-
-      ### Set up losses
-      ## Reconstruction Loss: cross-entropy of y (predicted) and y_ (target)
-      y_ = features_flat
-      eps = 1e-10
-      recon_loss = tf.reduce_mean(
-        -tf.reduce_sum(
-          y * tf.log(y_ + eps) + (1. - y) * tf.log(1. - y_ + eps), axis=1))
-      tf.debugging.check_numerics(y, 'y_nan')
-      tf.debugging.check_numerics(y_, 'y_target_nan')
-      tf.debugging.check_numerics(recon_loss, 'recon_loss_nan')
-      
-      # Latent Loss: KL divergence between Z and N(0, 1)
-      latent_loss = tf.reduce_mean(
-          -0.5 * tf.reduce_sum(
-          1. + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq),
-          axis=1))
-
-      total_vae_loss = recon_loss + LATENT_LOSS_WEIGHT * latent_loss
-
-      with tf.name_scope('loss'):
-        tf.summary.scalar('recon_loss', recon_loss)
-        tf.summary.scalar('latent_loss', latent_loss)
-        tf.summary.scalar('total_vae_loss', total_vae_loss)
-
-        mse = tf.metrics.mean_squared_error(y_, y, name='MSE')
-        tf.summary.scalar('MSE', mse[1])
-
-    ### Set up total loss with supervised model
-    # Downweight background class
-    class_weights = np.ones(len(AV_OBJ_CLASS_NAME_TO_ID))
-    BKG_CLASS_IDX = AV_OBJ_CLASS_NAME_TO_ID['background']
-    class_weights[BKG_CLASS_IDX] *= .1
-    class_weights /= class_weights.sum()
-
-    weights = tf.gather(class_weights, labels)
-
-    # Get supervised loss and combine
-    with tf.name_scope('supervised'):
-      supervised_loss = tf.losses.sparse_softmax_cross_entropy(
-                            labels=labels,
-                            logits=logits,
-                            weights=weights)
-      tf.summary.scalar('supervised_loss', supervised_loss)
+      y = decode(z, training=is_training)
+      util.tf_variable_summaries(y)
     
-    total_loss = supervised_loss + VAE_LOSS_WEIGHT * total_vae_loss
+    ## Class Prediction Head
+    ## y -> class'; loss(class, class')
+    with tf.name_scope('predict_class'):
+      # TODO: consider dedicating latent vars to this head as in
+      # http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
+      predict_layer = l.Dense(N_CLASSES, activation=tf.nn.softmax)
+      logits = predict_layer(y)
+      labels_pred = tf.sigmoid(logits)
+
+      util.tf_variable_summaries(logits)
+      multiclass_loss = tf.losses.sparse_softmax_cross_entropy(
+                          labels=labels,
+                          logits=logits,
+                          weights=CWEIGHTS)
+      tf.summary.scalar('loss', multiclass_loss)
+
+      preds = tf.argmax(labels_pred, axis=-1)
+      tf.summary.histogram('preds', preds)
+      accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
+      tf.summary.scalar('accuracy', accuracy[1])
+
+    ## Reconstruction Head: Embedding
+    ## y -> x'; loss(x, x')
+    with tf.name_scope('reconstruct_embedding'):
+      x_shape = list(x.shape[1:])
+      x_size = int(np.prod(x_shape))
+      x_decoder = l.Dense(x_size, activation=None)
+      x_hat_flat = x_decoder(y)
+      x_hat = tf.reshape(x_hat_flat, [-1] + x_shape)
+      util.tf_variable_summaries(x_hat)
+
+      recon_embed_loss = tf.keras.losses.MSE(tf_flatten(x), tf_flatten(x_hat))
+      tf.summary.scalar('loss', recon_embed_loss)
+
+      # # TODO: keras.losses.binary_crossentropy ? TODO try L1 loss?
+      # # http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
+      # loss = tf.reduce_mean(
+      #   -tf.reduce_sum(
+      #     y * tf.log(y_ + EPS) + (1 - y) * tf.log(1. - y_ + EPS), axis=1))
+      # tf.debugging.check_numerics(y, 'y_nan')
+      # tf.debugging.check_numerics(y_, 'y_target_nan')
+      # tf.debugging.check_numerics(loss, 'loss_nan')
+
+    ## Reconstruction Head: Embedding
+    ## x' -> image'; loss(image, image')
+    with tf.name_scope('reconstruct_image'):
+      image = features
+
+      # For now, borrow x_hat, as having two losses in the reconstruction
+      # head may afford better stability.  Future work: consider removing
+      # the embedding head loss, or deconv-ing straight from y.
+      x_depth = int(x_shape[-1])
+      filters = [x_depth // 4, x_depth // 16, x_depth // 64]
+      decode_image = tf.keras.Sequential([
+        l.Convolution2DTranspose(
+          filters=f, kernel_size=3, activation='relu',
+          strides=2, padding='same')
+        for f in filters
+      ])
+      decoded_image_base = decode_image(x_hat, training=is_training)
+      
+      # Upsample trick for perfect fit
+      # https://github.com/SimonKohl/probabilistic_unet/blob/master/model/probabilistic_unet.py#L60
+      image_hw = (int(image.shape[1]), int(image.shape[2]))
+      image_c = int(image.shape[-1])
+      upsampled = tf.image.resize_images(
+                      decoded_image_base,
+                      image_hw,
+                      method=tf.image.ResizeMethod.BILINEAR,
+                      align_corners=True)
+      image_hat_layer = tf.keras.layers.Conv2D(
+                          filters=3, kernel_size=5,
+                          activation='sigmoid',
+                          padding='same')
+      image_hat = image_hat_layer(upsampled)
+      util.tf_variable_summaries(image_hat)
+      tf.summary.image('image', image, max_outputs=10)
+      tf.summary.image('image_hat', image_hat, max_outputs=10)
+      
+      recon_image_loss = tf.keras.losses.MSE(
+                              tf_flatten(image), tf_flatten(image_hat))
+      tf.summary.scalar('loss', recon_image_loss)
+    
+    ## Total Loss
+    total_loss = (
+      0.001 * latent_loss +
+      0.020 * multiclass_loss +
+      0.010 * recon_embed_loss +
+      0.010 * recon_image_loss)
     tf.summary.scalar('total_loss', total_loss)
+    
+    # ### Extra summaries
+    # for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
+    #   class_labels = tf.cast(tf.equal(labels, class_id), tf.int64)
+    #   class_preds = tf.cast(tf.equal(preds, class_id), tf.int64)
 
-  
+    #   tf.summary.scalar('train_labels_support/' + class_name, tf.reduce_sum(class_labels))
+    #   tf.summary.scalar('train_preds_support/' + class_name, tf.reduce_sum(class_preds))
+    #   tf.summary.histogram('train_labels_support_dist/' + class_name, class_labels)
+    #   tf.summary.histogram('train_preds_support_dist/' + class_name, class_preds)
 
-    ### Extra summaries
-    accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
-    tf.summary.scalar('accuracy', accuracy[1])
-    for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
-      class_labels = tf.cast(tf.equal(labels, class_id), tf.int64)
-      class_preds = tf.cast(tf.equal(preds, class_id), tf.int64)
+    #   # Monitor Supervised
+    #   class_true = tf.boolean_mask(features, class_labels)
+    #   class_pred = tf.boolean_mask(features, class_preds)
+    #   tf.summary.image('supervised_labels', class_true, max_outputs=3, family=class_name)
+    #   tf.summary.image('supervised_pred', class_pred, max_outputs=3, family=class_name)
 
-      tf.summary.scalar('train_labels_support/' + class_name, tf.reduce_sum(class_labels))
-      tf.summary.scalar('train_preds_support/' + class_name, tf.reduce_sum(class_preds))
-      tf.summary.histogram('train_labels_support_dist/' + class_name, class_labels)
-      tf.summary.histogram('train_preds_support_dist/' + class_name, class_preds)
-
-      # Monitor Supervised
-      class_true = tf.boolean_mask(features, class_labels)
-      class_pred = tf.boolean_mask(features, class_preds)
-      tf.summary.image('supervised_labels', class_true, max_outputs=3, family=class_name)
-      tf.summary.image('supervised_pred', class_pred, max_outputs=3, family=class_name)
-
-      # Monitor VAE
-      Y_SHAPE = list(FEATURES_SHAPE)
-      Y_SHAPE[0] = -1
-      y_unflat = tf.reshape(y, Y_SHAPE)
-      y_true = tf.boolean_mask(y_unflat, class_labels)
-      y_pred = tf.boolean_mask(y_unflat, class_preds)
-      tf.summary.image('vae_labels', y_true, max_outputs=3, family=class_name)
-      tf.summary.image('vae_pred', y_pred, max_outputs=3, family=class_name)
+    #   # Monitor VAE
+    #   Y_SHAPE = list(FEATURES_SHAPE)
+    #   Y_SHAPE[0] = -1
+    #   y_unflat = tf.reshape(y, Y_SHAPE)
+    #   y_true = tf.boolean_mask(y_unflat, class_labels)
+    #   y_pred = tf.boolean_mask(y_unflat, class_preds)
+    #   tf.summary.image('vae_labels', y_true, max_outputs=3, family=class_name)
+    #   tf.summary.image('vae_pred', y_pred, max_outputs=3, family=class_name)
 
 
     if mode == tf.estimator.ModeKeys.PREDICT:
@@ -469,7 +530,7 @@ def main():
     config=config)
 
   with Spark.getOrCreate() as spark:
-    df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small/')#/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
     print('num images', df.count())
     #df = df.cache()
 
@@ -491,7 +552,7 @@ def main():
 
       # train_ds = train_ds.take(5)
 
-      train_ds = train_ds.shuffle(400)
+      # train_ds = train_ds.shuffle(400)
       # train_ds = add_stats(train_ds)
       return train_ds
 
