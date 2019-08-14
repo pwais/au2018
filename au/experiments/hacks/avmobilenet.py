@@ -68,8 +68,8 @@ class model_fn_vae_hybrid(object):
     
     ### Set up the VAE model
     Z_D = 256
-    ENCODER_LAYERS = [5000, 1000, 2 * Z_D]
-    DECODER_LAYERS = [2 * Z_D, 1000, 5000]
+    ENCODER_LAYERS = [1000, 750, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 750, 1000]
     # LATENT_LOSS_WEIGHT = 50.
     # VAE_LOSS_WEIGHT = 2.
     # EPS = 1e-10
@@ -178,8 +178,11 @@ class model_fn_vae_hybrid(object):
         strides=2, padding='same')
       for f in filters
     ])
-    
-    y_expanded = tf.reshape(y, [-1, 10, 10, 10])
+    y_expanded_shape = [-1, 10, 10, 10]
+    assert np.prod(y_expanded_shape[1:]) == int(y.shape[-1])
+    y_expanded = tf.reshape(y, y_expanded_shape)
+      # For GANs, it seems people just randomly reshape noise into
+      # some dimensions that are plausibly deconv-able.
     decoded_image_base = decode_image(y_expanded, training=is_training)
     
     # Upsample trick for perfect fit
@@ -192,7 +195,7 @@ class model_fn_vae_hybrid(object):
                     method=tf.image.ResizeMethod.BILINEAR,
                     align_corners=True)
     image_hat_layer = tf.keras.layers.Conv2D(
-                          filters=3, kernel_size=5,
+                          filters=image_c, kernel_size=5,
                           activation='tanh',
                             # Need to be in [-1, 1] to match image domain
                           padding='same')
@@ -202,7 +205,6 @@ class model_fn_vae_hybrid(object):
       'reconstruct_image', image, max_outputs=10, family='image')
     tf.summary.image(
       'reconstruct_image', image_hat, max_outputs=10, family='image_hat')
-    
     recon_image_loss = tf.losses.mean_squared_error(image, image_hat)
     tf.summary.scalar('recon_image_loss', recon_image_loss)
     
@@ -215,16 +217,15 @@ class model_fn_vae_hybrid(object):
     tf.summary.scalar('total_loss', total_loss)
     
     ### Extra summaries
-    for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
-      class_rows = tf.equal(labels, class_id)
-      class_labels = tf.boolean_mask(labels, class_rows)
-      class_preds = tf.boolean_mask(preds, class_rows)
+    # for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
+    #   class_rows = tf.equal(labels, class_id)
+    #   class_labels = tf.boolean_mask(labels, class_rows)
+    #   class_preds = tf.boolean_mask(preds, class_rows)
 
-      with tf.name_scope('class_recall'):
-        class_recall = tf.metrics.accuracy(
-                            labels=tf.equal(class_labels, class_id),
-                            predictions=tf.equal(class_preds, class_id))
-        tf.summary.scalar(class_name, class_recall)
+    #   class_recall = tf.metrics.accuracy(
+    #                       labels=tf.equal(class_labels, class_id),
+    #                       predictions=tf.equal(class_preds, class_id))
+    #   tf.summary.scalar('class_recall/' + class_name, class_recall)
 
       # tf.summary.scalar('train_labels_support/' + class_name, tf.reduce_sum(class_labels))
       # tf.summary.scalar('train_preds_support/' + class_name, tf.reduce_sum(class_preds))
@@ -548,7 +549,7 @@ def main():
       return img, label
    
     # BATCH_SIZE = 300
-    BATCH_SIZE = 100
+    BATCH_SIZE = 1
     tdf = df.filter(df.split == 'train')#spark.createDataFrame(df.filter(df.split == 'train').take(3000))
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
