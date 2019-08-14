@@ -44,6 +44,8 @@ class model_fn_vae_hybrid(object):
     # Mobilenet requires normalization
     features = tf.cast(features, tf.float32) / 128. - 1
 
+    features = tf.debugging.check_numerics(features, 'features_nan')
+
     with tf.name_scope('input'):
       util.tf_variable_summaries(tf.cast(labels, tf.float32), prefix='labels')
       util.tf_variable_summaries(features, prefix='features')
@@ -53,21 +55,21 @@ class model_fn_vae_hybrid(object):
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
     scope = mobilenet_v2.training_scope(is_training=is_training)
     with tf.contrib.slim.arg_scope(scope):
-      embedding, endpoints = mobilenet_v2.mobilenet(
+      # image (?, 170, 170, 3) -> embedding (?, 6, 6, 1280)
+      _, endpoints = mobilenet_v2.mobilenet(
                               features,
-                              base_only=True,
                               num_classes=N_CLASSES,
+                              base_only=True,
                               is_training=is_training,
                               depth_multiplier=self.params.DEPTH_MULTIPLIER,
                               finegrain_classification_mode=self.params.FINE)
       
-      # embedding = endpoints['layer_19'] # (?, 170, 170, 3) -> (?, 6, 6, 1280)
-    util.tf_variable_summaries(embedding)
+      embedding = endpoints['layer_19']
     
     ### Set up the VAE model
-    Z_D = 128
-    ENCODER_LAYERS = [1000, 500, 2 * Z_D]
-    DECODER_LAYERS = [2 * Z_D, 500, 1000]
+    Z_D = 256
+    ENCODER_LAYERS = [5000, 1000, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 1000, 5000]
     # LATENT_LOSS_WEIGHT = 50.
     # VAE_LOSS_WEIGHT = 2.
     # EPS = 1e-10
@@ -75,165 +77,165 @@ class model_fn_vae_hybrid(object):
     ### VAE Input
     # Mobilenet uses tf.nn.relu6
     x = embedding / 3 - 1
+    util.tf_variable_summaries(x)
 
     ## Encode
     ## x -> z = N(z_mu, z_sigma)
-    with tf.name_scope('encode'):
-      l = tf.keras.layers
-      encode = tf.keras.Sequential([
-        l.Dense(n_hidden, activation=tf.nn.relu)
-        for n_hidden in ENCODER_LAYERS
-      ])
-      x_flat = tf.contrib.layers.flatten(x)
-      encoded = encode(x_flat, training=is_training)
-      
-      z_mu_layer = l.Dense(Z_D, activation=None, name='z_mu')
-      z_mu = z_mu_layer(encoded)
-      
-      z_log_sigma_sq_layer = l.Dense(
-        Z_D, activation=None, name='z_log_sigma_sq')
-      z_log_sigma_sq = z_log_sigma_sq_layer(encoded)
-      
-      util.tf_variable_summaries(z_mu)
-      util.tf_variable_summaries(z_log_sigma_sq)
+    l = tf.keras.layers
+    encode = tf.keras.Sequential([
+      l.Dense(n_hidden, activation=tf.nn.relu, kernel_initializer='uniform')
+      for n_hidden in ENCODER_LAYERS
+    ])
+    x_flat = tf.contrib.layers.flatten(x)
+    encoded = encode(x_flat, training=is_training)
+    
+    z_mu_layer = l.Dense(Z_D, activation=None, kernel_initializer='uniform')
+    z_mu = z_mu_layer(encoded)
+    
+    z_log_sigma_sq_layer = l.Dense(Z_D, activation=None, kernel_initializer='uniform')
+    z_log_sigma_sq = z_log_sigma_sq_layer(encoded)
 
-      noise = tf.keras.backend.random_normal(
-                shape=tf.shape(z_log_sigma_sq),
-                mean=0,
-                stddev=1,
-                dtype=tf.float32)
-      z = z_mu + tf.sqrt(tf.exp(z_log_sigma_sq)) * noise
-      util.tf_variable_summaries(z)
+    util.tf_variable_summaries(z_mu)
+    util.tf_variable_summaries(z_log_sigma_sq)
+
+    noise = tf.keras.backend.random_normal(
+              shape=tf.shape(z_log_sigma_sq),
+              mean=0,
+              stddev=1,
+              dtype=tf.float32)
+    z = z_mu + tf.sqrt(tf.exp(z_log_sigma_sq)) * noise
+    util.tf_variable_summaries(z)
 
     ## Latent Loss: KL divergence between Z and N(0, 1)
-    with tf.name_scope('latent_loss'):
-      latent_loss = tf.reduce_mean(
-        -0.5 * tf.reduce_sum(
-        1. + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq),
-        axis=1))
-      tf.summary.scalar('latent_loss', latent_loss)
-      # tf.debugging.check_numerics(z_log_sigma_sq, 'z_log_sigma_sq_nan')
-      # tf.debugging.check_numerics(z_mu, 'z_mu_nan')
-      # tf.debugging.check_numerics(latent_loss, 'latent_loss_nan')
+    # latent_loss = tf.reduce_mean(
+    #   -0.5 * tf.reduce_sum(
+    #     1. + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq),
+    #     axis=1))
+    latent_loss = -0.5 * tf.reduce_sum(
+              1. + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq))
+    tf.summary.scalar('latent_loss', latent_loss)
 
     ## Decode
     ## z -> y
-    with tf.name_scope('decode'):
-      decode = tf.keras.Sequential([
-        l.Dense(n_hidden, activation=tf.nn.relu)
-        for n_hidden in DECODER_LAYERS
-      ])
-      y = decode(z, training=is_training)
-      util.tf_variable_summaries(y)
+    decode = tf.keras.Sequential([
+      l.Dense(n_hidden, activation=tf.nn.relu)
+      for n_hidden in DECODER_LAYERS
+    ])
+    y = decode(z, training=is_training)
+    util.tf_variable_summaries(y)
     
     ## Class Prediction Head
     ## y -> class'; loss(class, class')
-    with tf.name_scope('predict_class'):
-      # TODO: consider dedicating latent vars to this head as in
-      # http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
-      predict_layer = l.Dense(N_CLASSES, activation=tf.nn.softmax)
-      logits = predict_layer(y)
-      labels_pred = tf.sigmoid(logits)
+    # TODO: consider dedicating latent vars to this head as in
+    # http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
+    predict_layer = l.Dense(N_CLASSES, activation=tf.nn.softmax)
+    logits = predict_layer(y)
+    labels_pred = tf.sigmoid(logits)
 
-      util.tf_variable_summaries(logits)
-      multiclass_loss = tf.losses.sparse_softmax_cross_entropy(
-                          labels=labels,
-                          logits=logits,
-                          weights=CWEIGHTS)
-      tf.summary.scalar('multiclass_loss', multiclass_loss)
+    util.tf_variable_summaries(logits)
+    multiclass_loss = tf.losses.sparse_softmax_cross_entropy(
+                        labels=labels,
+                        logits=logits,
+                        weights=CWEIGHTS)
+    tf.summary.scalar('multiclass_loss', multiclass_loss)
 
-      preds = tf.argmax(labels_pred, axis=-1)
-      tf.summary.histogram('logits', logits)
-      tf.summary.histogram('preds', preds)
-      accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
-      tf.summary.scalar('accuracy', accuracy[1])
+    preds = tf.argmax(labels_pred, axis=-1)
+    tf.summary.histogram('logits', logits)
+    tf.summary.histogram('preds', preds)
+    accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
+    tf.summary.scalar('accuracy', accuracy[1])
 
     ## Reconstruction Head: Embedding
     ## y -> x'; loss(x, x')
-    with tf.name_scope('reconstruct_embedding'):
-      x_shape = list(x.shape[1:])
-      x_size = int(np.prod(x_shape))
-      x_decoder = l.Dense(x_size, activation=None)
-      x_hat_flat = x_decoder(y)
-      x_hat = tf.reshape(x_hat_flat, [-1] + x_shape)
-      util.tf_variable_summaries(x_hat)
+    x_shape = list(x.shape[1:])
+    x_size = int(np.prod(x_shape))
+    x_decoder = l.Dense(x_size, activation=None)
+    x_hat_flat = x_decoder(y)
+    x_hat = tf.reshape(x_hat_flat, [-1] + x_shape)
+    util.tf_variable_summaries(x_hat)
 
-      recon_embed_loss = tf.losses.mean_squared_error(x, x_hat)
-      tf.summary.scalar('recon_embed_loss', recon_embed_loss)
+    #   # recon_embed_loss = tf.losses.absolute_difference(x, x_hat)
+    recon_embed_loss = tf.losses.mean_squared_error(x, x_hat)
+    tf.summary.scalar('recon_embed_loss', recon_embed_loss)
 
-      # # TODO: keras.losses.binary_crossentropy ? TODO try L1 loss?
-      # # http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
-      # loss = tf.reduce_mean(
-      #   -tf.reduce_sum(
-      #     y * tf.log(y_ + EPS) + (1 - y) * tf.log(1. - y_ + EPS), axis=1))
-      # tf.debugging.check_numerics(y, 'y_nan')
-      # tf.debugging.check_numerics(y_, 'y_target_nan')
-      # tf.debugging.check_numerics(loss, 'loss_nan')
+    #   # # TODO: keras.losses.binary_crossentropy ? TODO try L1 loss?
+    #   # # http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
+    #   # loss = tf.reduce_mean(
+    #   #   -tf.reduce_sum(
+    #   #     y * tf.log(y_ + EPS) + (1 - y) * tf.log(1. - y_ + EPS), axis=1))
+    #   # tf.debugging.check_numerics(y, 'y_nan')
+    #   # tf.debugging.check_numerics(y_, 'y_target_nan')
+    #   # tf.debugging.check_numerics(loss, 'loss_nan')
 
-    ## Reconstruction Head: Embedding
-    ## x' -> image'; loss(image, image')
-    with tf.name_scope('reconstruct_image'):
-      image = features
-
-      # For now, borrow x_hat, as having two losses in the reconstruction
-      # head may afford better stability.  Future work: consider removing
-      # the embedding head loss, or deconv-ing straight from y.
-      x_depth = int(x_shape[-1])
-      filters = [x_depth // 4, x_depth // 16, x_depth // 64]
-      decode_image = tf.keras.Sequential([
-        l.Convolution2DTranspose(
-          filters=f, kernel_size=3, activation='relu',
-          strides=2, padding='same')
-        for f in filters
-      ])
-      decoded_image_base = decode_image(x_hat, training=is_training)
-      
-      # Upsample trick for perfect fit
-      # https://github.com/SimonKohl/probabilistic_unet/blob/master/model/probabilistic_unet.py#L60
-      image_hw = (int(image.shape[1]), int(image.shape[2]))
-      image_c = int(image.shape[-1])
-      upsampled = tf.image.resize_images(
-                      decoded_image_base,
-                      image_hw,
-                      method=tf.image.ResizeMethod.BILINEAR,
-                      align_corners=True)
-      image_hat_layer = tf.keras.layers.Conv2D(
+    ## Reconstruction Head: Image
+    ## y -> image'; loss(image, image')
+    image = features
+    x_depth = int(x_shape[-1])
+    filters = [x_depth // 4, x_depth // 16, x_depth // 64, x_depth // 128]
+    decode_image = tf.keras.Sequential([
+      l.Convolution2DTranspose(
+        filters=f, kernel_size=3, activation=None,
+        strides=2, padding='same')
+      for f in filters
+    ])
+    
+    y_expanded = tf.reshape(y, [-1, 10, 10, 10])
+    decoded_image_base = decode_image(y_expanded, training=is_training)
+    
+    # Upsample trick for perfect fit
+    # https://github.com/SimonKohl/probabilistic_unet/blob/master/model/probabilistic_unet.py#L60
+    image_hw = (int(image.shape[1]), int(image.shape[2]))
+    image_c = int(image.shape[-1])
+    upsampled = tf.image.resize_images(
+                    decoded_image_base,
+                    image_hw,
+                    method=tf.image.ResizeMethod.BILINEAR,
+                    align_corners=True)
+    image_hat_layer = tf.keras.layers.Conv2D(
                           filters=3, kernel_size=5,
-                          activation='sigmoid',
+                          activation='tanh',
+                            # Need to be in [-1, 1] to match image domain
                           padding='same')
-      image_hat = image_hat_layer(upsampled)
-      util.tf_variable_summaries(image_hat)
-      tf.summary.image(
-        'reconstruct_image', image, max_outputs=10, family='image')
-      tf.summary.image(
-        'reconstruct_image', image_hat, max_outputs=10, family='image_hat')
-      
-      recon_image_loss = tf.losses.mean_squared_error(image, image_hat)
-      tf.summary.scalar('recon_image_loss', recon_image_loss)
+    image_hat = image_hat_layer(upsampled)
+    util.tf_variable_summaries(image_hat)
+    tf.summary.image(
+      'reconstruct_image', image, max_outputs=10, family='image')
+    tf.summary.image(
+      'reconstruct_image', image_hat, max_outputs=10, family='image_hat')
+    
+    recon_image_loss = tf.losses.mean_squared_error(image, image_hat)
+    tf.summary.scalar('recon_image_loss', recon_image_loss)
     
     ## Total Loss
     total_loss = (
-      0.001 * latent_loss +
-      0.020 * multiclass_loss +
-      0.010 * recon_embed_loss +
-      0.010 * recon_image_loss)
+      0.01 * latent_loss +
+      0.30 * N_CLASSES * multiclass_loss +
+      0.30 * int(np.prod(embedding.shape[1:])) * recon_embed_loss +
+      0.30 * int(np.prod(image.shape[1:])) * recon_image_loss)
     tf.summary.scalar('total_loss', total_loss)
     
-    # ### Extra summaries
-    # for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
-    #   class_labels = tf.cast(tf.equal(labels, class_id), tf.int64)
-    #   class_preds = tf.cast(tf.equal(preds, class_id), tf.int64)
+    ### Extra summaries
+    for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
+      class_rows = tf.equal(labels, class_id)
+      class_labels = tf.boolean_mask(labels, class_rows)
+      class_preds = tf.boolean_mask(preds, class_rows)
 
-    #   tf.summary.scalar('train_labels_support/' + class_name, tf.reduce_sum(class_labels))
-    #   tf.summary.scalar('train_preds_support/' + class_name, tf.reduce_sum(class_preds))
-    #   tf.summary.histogram('train_labels_support_dist/' + class_name, class_labels)
-    #   tf.summary.histogram('train_preds_support_dist/' + class_name, class_preds)
+      with tf.name_scope('class_recall'):
+        class_recall = tf.metrics.accuracy(
+                            labels=tf.equal(class_labels, class_id),
+                            predictions=tf.equal(class_preds, class_id))
+        tf.summary.scalar(class_name, class_recall)
 
-    #   # Monitor Supervised
-    #   class_true = tf.boolean_mask(features, class_labels)
-    #   class_pred = tf.boolean_mask(features, class_preds)
-    #   tf.summary.image('supervised_labels', class_true, max_outputs=3, family=class_name)
-    #   tf.summary.image('supervised_pred', class_pred, max_outputs=3, family=class_name)
+      # tf.summary.scalar('train_labels_support/' + class_name, tf.reduce_sum(class_labels))
+      # tf.summary.scalar('train_preds_support/' + class_name, tf.reduce_sum(class_preds))
+      # tf.summary.histogram('train_labels_support_dist/' + class_name, class_labels)
+      # tf.summary.histogram('train_preds_support_dist/' + class_name, class_preds)
+
+      # Monitor Supervised
+      # class_true = tf.boolean_mask(features, class_labels)
+      # class_pred = tf.boolean_mask(features, class_preds)
+      # tf.summary.image('supervised_labels', class_true, max_outputs=3, family=class_name)
+      # tf.summary.image('supervised_pred', class_pred, max_outputs=3, family=class_name)
 
     #   # Monitor VAE
     #   Y_SHAPE = list(FEATURES_SHAPE)
@@ -260,13 +262,14 @@ class model_fn_vae_hybrid(object):
       LEARNING_RATE = 1e-3
       
       loss = total_loss
-      optimizer = tf.train.RMSPropOptimizer(learning_rate=LEARNING_RATE)
+      # optimizer = tf.train.RMSPropOptimizer(learning_rate=LEARNING_RATE)
+      optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
       
       global_step = tf.train.get_or_create_global_step()
-      tf.summary.scalar('global_step', global_step)
+      # tf.summary.scalar('global_step', global_step)
       
       train_op = optimizer.minimize(loss, global_step)
-      
+
       return tf.estimator.EstimatorSpec(
           mode=tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op)
 
@@ -533,9 +536,9 @@ def main():
     config=config)
 
   with Spark.getOrCreate() as spark:
-    df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
+    # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
     print('num images', df.count())
-    #df = df.cache()
 
     def to_example(row):
       import imageio
