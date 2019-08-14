@@ -549,7 +549,7 @@ def main():
       return img, label
    
     # BATCH_SIZE = 300
-    BATCH_SIZE = 1
+    BATCH_SIZE = 10
     tdf = df.filter(df.split == 'train')#spark.createDataFrame(df.filter(df.split == 'train').take(3000))
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
@@ -559,7 +559,7 @@ def main():
 
       # train_ds = train_ds.take(5)
 
-      train_ds = train_ds.shuffle(1000)
+      train_ds = train_ds.shuffle(100)
       # train_ds = add_stats(train_ds)
       return train_ds
 
