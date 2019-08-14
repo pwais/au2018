@@ -65,13 +65,11 @@ class model_fn_vae_hybrid(object):
     
     ### Set up the VAE model
     Z_D = 128
-    ENCODER_LAYERS = [10000, 1000, 2 * Z_D]
-    DECODER_LAYERS = [2 * Z_D, 1000, 10000]
+    ENCODER_LAYERS = [1000, 500, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 500, 1000]
     # LATENT_LOSS_WEIGHT = 50.
     # VAE_LOSS_WEIGHT = 2.
     # EPS = 1e-10
-
-    tf_flatten = tf.contrib.layers.flatten
 
     ### VAE Input
     x = embedding
@@ -84,7 +82,7 @@ class model_fn_vae_hybrid(object):
         l.Dense(n_hidden, activation=tf.nn.relu)
         for n_hidden in ENCODER_LAYERS
       ])
-      x_flat = tf_flatten(x)
+      x_flat = tf.contrib.layers.flatten(x)
       encoded = encode(x_flat, training=is_training)
       
       z_mu_layer = l.Dense(Z_D, activation=None, name='z_mu')
@@ -111,6 +109,7 @@ class model_fn_vae_hybrid(object):
         -0.5 * tf.reduce_sum(
         1. + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq),
         axis=1))
+      tf.summary.histogram('latent_loss', latent_loss)
       # tf.debugging.check_numerics(z_log_sigma_sq, 'z_log_sigma_sq_nan')
       # tf.debugging.check_numerics(z_mu, 'z_mu_nan')
       # tf.debugging.check_numerics(latent_loss, 'latent_loss_nan')
@@ -139,7 +138,7 @@ class model_fn_vae_hybrid(object):
                           labels=labels,
                           logits=logits,
                           weights=CWEIGHTS)
-      tf.summary.scalar('loss', multiclass_loss)
+      tf.summary.scalar('multiclass_loss', multiclass_loss)
 
       preds = tf.argmax(labels_pred, axis=-1)
       tf.summary.histogram('preds', preds)
@@ -156,8 +155,8 @@ class model_fn_vae_hybrid(object):
       x_hat = tf.reshape(x_hat_flat, [-1] + x_shape)
       util.tf_variable_summaries(x_hat)
 
-      recon_embed_loss = tf.keras.losses.MSE(tf_flatten(x), tf_flatten(x_hat))
-      tf.summary.scalar('loss', recon_embed_loss)
+      recon_embed_loss = tf.losses.mean_squared_error(x, x_hat)
+      tf.summary.scalar('recon_embed_loss', recon_embed_loss)
 
       # # TODO: keras.losses.binary_crossentropy ? TODO try L1 loss?
       # # http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
@@ -201,12 +200,11 @@ class model_fn_vae_hybrid(object):
                           padding='same')
       image_hat = image_hat_layer(upsampled)
       util.tf_variable_summaries(image_hat)
-      tf.summary.image('image', image, max_outputs=10)
-      tf.summary.image('image_hat', image_hat, max_outputs=10)
+      tf.summary.image('reconstruct_image/image', image, max_outputs=10)
+      tf.summary.image('reconstruct_image/image_hat', image_hat, max_outputs=10)
       
-      recon_image_loss = tf.keras.losses.MSE(
-                              tf_flatten(image), tf_flatten(image_hat))
-      tf.summary.scalar('loss', recon_image_loss)
+      recon_image_loss = tf.losses.mean_squared_error(image, image_hat)
+      tf.summary.scalar('recon_image_loss', recon_image_loss)
     
     ## Total Loss
     total_loss = (
@@ -542,7 +540,7 @@ def main():
       return img, label
    
     # BATCH_SIZE = 300
-    BATCH_SIZE = 200
+    BATCH_SIZE = 50
     tdf = df.filter(df.split == 'train')#spark.createDataFrame(df.filter(df.split == 'train').take(3000))
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
