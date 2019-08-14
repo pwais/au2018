@@ -67,9 +67,9 @@ class model_fn_vae_hybrid(object):
       embedding = endpoints['layer_19']
     
     ### Set up the VAE model
-    Z_D = 256
-    ENCODER_LAYERS = [1000, 750, 2 * Z_D]
-    DECODER_LAYERS = [2 * Z_D, 750, 1000]
+    Z_D = 32
+    ENCODER_LAYERS = [1000, 256, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 256, 1000]
     # LATENT_LOSS_WEIGHT = 50.
     # VAE_LOSS_WEIGHT = 2.
     # EPS = 1e-10
@@ -537,8 +537,8 @@ def main():
     config=config)
 
   with Spark.getOrCreate() as spark:
-    df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
-    # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    # df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
+    df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
     print('num images', df.count())
 
     def to_example(row):
@@ -559,7 +559,7 @@ def main():
 
       # train_ds = train_ds.take(5)
 
-      train_ds = train_ds.shuffle(100)
+      train_ds = train_ds.shuffle(1000)
       # train_ds = add_stats(train_ds)
       return train_ds
 
