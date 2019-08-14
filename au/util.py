@@ -1123,13 +1123,27 @@ def tf_variable_summaries(var, prefix=''):
   if prefix:
     prefix = prefix + '/'
   else:
-    prefix = str(var.name)
-    prefix = prefix[:prefix.find('/')] # Exclude slashes in var name
-    prefix = prefix[:prefix.find(':')] # Exclude : too
-    prefix = prefix + '/'
+    def var_name(v):
+      """Magic: get the name of the variable that the caller passed to 
+      `tf_variable_summaries()`"""
+      import inspect
+      lcls = inspect.stack()[2][0].f_locals
+      for name in lcls:
+        if id(v) == id(lcls[name]):
+          return name
+      return None
+    prefix = var_name(var)
+    if not prefix:
+      prefix = str(var.name)
+      idx = prefix.find('/')
+      if idx >= 0:
+        prefix = prefix[:prefix.find('/')] # Exclude slashes in var name
+      idx = prefix.find(':')
+      if idx >= 0:
+        prefix = prefix[:prefix.find(':')] # Exclude : too
     print(prefix, var.name) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   
-  with tf.name_scope(prefix + 'summaries'):
+  with tf.name_scope(prefix):
     mean = tf.reduce_mean(var)
     tf.summary.scalar('mean', mean)
     with tf.name_scope('stddev'):

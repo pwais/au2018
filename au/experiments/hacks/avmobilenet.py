@@ -51,17 +51,18 @@ class model_fn_vae_hybrid(object):
     ### Set up Mobilenet
     from nets.mobilenet import mobilenet_v2
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
-    with tf.contrib.slim.arg_scope(mobilenet_v2.training_scope(is_training=is_training)):
-      _, endpoints = mobilenet_v2.mobilenet(
-                            features,
-                            num_classes=N_CLASSES,
-                            is_training=is_training,
-                            depth_multiplier=self.params.DEPTH_MULTIPLIER,
-                            finegrain_classification_mode=self.params.FINE)
+    scope = mobilenet_v2.training_scope(is_training=is_training)
+    with tf.contrib.slim.arg_scope(scope):
+      embedding, endpoints = mobilenet_v2.mobilenet(
+                              features,
+                              base_only=True,
+                              num_classes=N_CLASSES,
+                              is_training=is_training,
+                              depth_multiplier=self.params.DEPTH_MULTIPLIER,
+                              finegrain_classification_mode=self.params.FINE)
       
-      embedding = endpoints['layer_19'] # (?, 170, 170, 3) -> (?, 6, 6, 1280)
-    with tf.name_scope('mobilenet'):
-      util.tf_variable_summaries(embedding)
+      # embedding = endpoints['layer_19'] # (?, 170, 170, 3) -> (?, 6, 6, 1280)
+    util.tf_variable_summaries(embedding)
     
     ### Set up the VAE model
     Z_D = 128
@@ -72,7 +73,8 @@ class model_fn_vae_hybrid(object):
     # EPS = 1e-10
 
     ### VAE Input
-    x = embedding
+    # Mobilenet uses tf.nn.relu6
+    x = embedding / 3 - 1
 
     ## Encode
     ## x -> z = N(z_mu, z_sigma)
@@ -101,7 +103,7 @@ class model_fn_vae_hybrid(object):
                 stddev=1,
                 dtype=tf.float32)
       z = z_mu + tf.sqrt(tf.exp(z_log_sigma_sq)) * noise
-      util.tf_variable_summaries(z, prefix='z')
+      util.tf_variable_summaries(z)
 
     ## Latent Loss: KL divergence between Z and N(0, 1)
     with tf.name_scope('latent_loss'):
@@ -109,7 +111,7 @@ class model_fn_vae_hybrid(object):
         -0.5 * tf.reduce_sum(
         1. + z_log_sigma_sq - tf.square(z_mu) - tf.exp(z_log_sigma_sq),
         axis=1))
-      tf.summary.histogram('latent_loss', latent_loss)
+      tf.summary.scalar('latent_loss', latent_loss)
       # tf.debugging.check_numerics(z_log_sigma_sq, 'z_log_sigma_sq_nan')
       # tf.debugging.check_numerics(z_mu, 'z_mu_nan')
       # tf.debugging.check_numerics(latent_loss, 'latent_loss_nan')
@@ -141,6 +143,7 @@ class model_fn_vae_hybrid(object):
       tf.summary.scalar('multiclass_loss', multiclass_loss)
 
       preds = tf.argmax(labels_pred, axis=-1)
+      tf.summary.histogram('logits', logits)
       tf.summary.histogram('preds', preds)
       accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
       tf.summary.scalar('accuracy', accuracy[1])
@@ -200,8 +203,10 @@ class model_fn_vae_hybrid(object):
                           padding='same')
       image_hat = image_hat_layer(upsampled)
       util.tf_variable_summaries(image_hat)
-      tf.summary.image('reconstruct_image/image', image, max_outputs=10)
-      tf.summary.image('reconstruct_image/image_hat', image_hat, max_outputs=10)
+      tf.summary.image(
+        'reconstruct_image', image, max_outputs=10, family='image')
+      tf.summary.image(
+        'reconstruct_image', image_hat, max_outputs=10, family='image_hat')
       
       recon_image_loss = tf.losses.mean_squared_error(image, image_hat)
       tf.summary.scalar('recon_image_loss', recon_image_loss)
@@ -252,10 +257,10 @@ class model_fn_vae_hybrid(object):
               'classify': tf.estimator.export.PredictOutput(predictions)
           })
     elif mode == tf.estimator.ModeKeys.TRAIN:
-      LEARNING_RATE = 1e-4
+      LEARNING_RATE = 1e-3
       
       loss = total_loss
-      optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
+      optimizer = tf.train.RMSPropOptimizer(learning_rate=LEARNING_RATE)
       
       global_step = tf.train.get_or_create_global_step()
       tf.summary.scalar('global_step', global_step)
@@ -528,7 +533,7 @@ def main():
     config=config)
 
   with Spark.getOrCreate() as spark:
-    df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small/')#/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
     print('num images', df.count())
     #df = df.cache()
 
@@ -540,7 +545,7 @@ def main():
       return img, label
    
     # BATCH_SIZE = 300
-    BATCH_SIZE = 50
+    BATCH_SIZE = 100
     tdf = df.filter(df.split == 'train')#spark.createDataFrame(df.filter(df.split == 'train').take(3000))
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
@@ -550,7 +555,7 @@ def main():
 
       # train_ds = train_ds.take(5)
 
-      # train_ds = train_ds.shuffle(400)
+      train_ds = train_ds.shuffle(1000)
       # train_ds = add_stats(train_ds)
       return train_ds
 
