@@ -32,7 +32,7 @@ class model_fn_vae_hybrid(object):
     # Downweight background class
     class_weights = np.ones(len(AV_OBJ_CLASS_NAME_TO_ID))
     BKG_CLASS_IDX = AV_OBJ_CLASS_NAME_TO_ID['background']
-    class_weights[BKG_CLASS_IDX] *= .1
+    # class_weights[BKG_CLASS_IDX] *= .1
     class_weights /= class_weights.sum()
     CWEIGHTS = tf.gather(class_weights, labels)
 
@@ -68,8 +68,8 @@ class model_fn_vae_hybrid(object):
     
     ### Set up the VAE model
     Z_D = 32
-    ENCODER_LAYERS = [1000, 256, 2 * Z_D]
-    DECODER_LAYERS = [2 * Z_D, 256, 1000]
+    ENCODER_LAYERS = [1000, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 1000]
     # LATENT_LOSS_WEIGHT = 50.
     # VAE_LOSS_WEIGHT = 2.
     # EPS = 1e-10
@@ -83,16 +83,16 @@ class model_fn_vae_hybrid(object):
     ## x -> z = N(z_mu, z_sigma)
     l = tf.keras.layers
     encode = tf.keras.Sequential([
-      l.Dense(n_hidden, activation=tf.nn.relu, kernel_initializer='uniform')
+      l.Dense(n_hidden, activation=tf.nn.relu)
       for n_hidden in ENCODER_LAYERS
     ])
     x_flat = tf.contrib.layers.flatten(x)
     encoded = encode(x_flat, training=is_training)
     
-    z_mu_layer = l.Dense(Z_D, activation=None, kernel_initializer='uniform')
+    z_mu_layer = l.Dense(Z_D)
     z_mu = z_mu_layer(encoded)
     
-    z_log_sigma_sq_layer = l.Dense(Z_D, activation=None, kernel_initializer='uniform')
+    z_log_sigma_sq_layer = l.Dense(Z_D)
     z_log_sigma_sq = z_log_sigma_sq_layer(encoded)
 
     util.tf_variable_summaries(z_mu)
@@ -145,18 +145,18 @@ class model_fn_vae_hybrid(object):
     accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
     tf.summary.scalar('accuracy', accuracy[1])
 
-    ## Reconstruction Head: Embedding
-    ## y -> x'; loss(x, x')
-    x_shape = list(x.shape[1:])
-    x_size = int(np.prod(x_shape))
-    x_decoder = l.Dense(x_size, activation=None)
-    x_hat_flat = x_decoder(y)
-    x_hat = tf.reshape(x_hat_flat, [-1] + x_shape)
-    util.tf_variable_summaries(x_hat)
+    # ## Reconstruction Head: Embedding
+    # ## y -> x'; loss(x, x')
+    # x_shape = list(x.shape[1:])
+    # x_size = int(np.prod(x_shape))
+    # x_decoder = l.Dense(x_size, activation=tf.nn.tanh) # x is in [-1, 1]
+    # x_hat_flat = x_decoder(y)
+    # x_hat = tf.reshape(x_hat_flat, [-1] + x_shape)
+    # util.tf_variable_summaries(x_hat)
 
-    #   # recon_embed_loss = tf.losses.absolute_difference(x, x_hat)
-    recon_embed_loss = tf.losses.mean_squared_error(x, x_hat)
-    tf.summary.scalar('recon_embed_loss', recon_embed_loss)
+    # #recon_embed_loss = tf.losses.absolute_difference(x, x_hat)
+    # recon_embed_loss = tf.losses.mean_squared_error(x, x_hat)
+    # tf.summary.scalar('recon_embed_loss', recon_embed_loss)
 
     #   # # TODO: keras.losses.binary_crossentropy ? TODO try L1 loss?
     #   # # http://people.csail.mit.edu/rosman/papers/iros-2018-variational.pdf
@@ -170,8 +170,7 @@ class model_fn_vae_hybrid(object):
     ## Reconstruction Head: Image
     ## y -> image'; loss(image, image')
     image = features
-    x_depth = int(x_shape[-1])
-    filters = [x_depth // 4, x_depth // 16, x_depth // 64, x_depth // 128]
+    filters = [512, 256, 128, 64]
     decode_image = tf.keras.Sequential([
       l.Convolution2DTranspose(
         filters=f, kernel_size=3, activation=None,
@@ -205,14 +204,15 @@ class model_fn_vae_hybrid(object):
       'reconstruct_image', image, max_outputs=10, family='image')
     tf.summary.image(
       'reconstruct_image', image_hat, max_outputs=10, family='image_hat')
-    recon_image_loss = tf.losses.mean_squared_error(image, image_hat)
+    # recon_image_loss = tf.losses.mean_squared_error(image, image_hat)
+    recon_image_loss = tf.losses.absolute_difference(image, image_hat)
     tf.summary.scalar('recon_image_loss', recon_image_loss)
     
     ## Total Loss
     total_loss = (
       0.01 * latent_loss +
-      0.30 * N_CLASSES * multiclass_loss +
-      0.30 * int(np.prod(embedding.shape[1:])) * recon_embed_loss +
+      0.30 * N_CLASSES * N_CLASSES * multiclass_loss +
+      # 0.30 * int(np.prod(embedding.shape[1:])) * recon_embed_loss +
       0.30 * int(np.prod(image.shape[1:])) * recon_image_loss)
     tf.summary.scalar('total_loss', total_loss)
     
@@ -260,11 +260,11 @@ class model_fn_vae_hybrid(object):
               'classify': tf.estimator.export.PredictOutput(predictions)
           })
     elif mode == tf.estimator.ModeKeys.TRAIN:
-      LEARNING_RATE = 1e-3
+      LEARNING_RATE = 1e-5
       
       loss = total_loss
-      # optimizer = tf.train.RMSPropOptimizer(learning_rate=LEARNING_RATE)
-      optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
+      optimizer = tf.train.RMSPropOptimizer(learning_rate=LEARNING_RATE)
+      # optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
       
       global_step = tf.train.get_or_create_global_step()
       # tf.summary.scalar('global_step', global_step)
@@ -537,10 +537,10 @@ def main():
     config=config)
 
   with Spark.getOrCreate() as spark:
-    df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
-    # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
-
+    
     if util.missing_or_empty('/tmp/balanced_sample'):
+      df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
+    # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
       from au.spark import get_balanced_sample
       categories = [
         "background",
@@ -548,11 +548,20 @@ def main():
         "PEDESTRIAN",
       ]
       df = df.filter(df.category_name.isin(categories))
-      fair_df = get_balanced_sample(df, 'category_name', n_per_category=1000)
-      fair_df.write.parquet('/tmp/balanced_sample')
-    else:
-      df = spark.read.parquet('/tmp/balanced_sample')
+      fair_df = get_balanced_sample(df, 'category_name', n_per_category=10000)
+      
+      # Re-shard
+      import pyspark.sql.functions as F
+      fair_df = fair_df.withColumn(
+                'fair_shard',
+                F.abs(F.hash(fair_df['uri'])) % 10)
+      fair_df = fair_df.select(*list(set(fair_df.columns) - set(['shard'])))
+      fair_df = fair_df.withColumn('shard', fair_df['fair_shard'])
 
+      fair_df.write.parquet('/tmp/balanced_sample', partitionBy=['split', 'shard'])
+      print("wrote to ", '/tmp/balanced_sample')
+    
+    df = spark.read.parquet('/tmp/balanced_sample')
     print('num images', df.count())
 
     def to_example(row):
@@ -563,17 +572,20 @@ def main():
       return img, label
    
     # BATCH_SIZE = 300
-    BATCH_SIZE = 10
-    tdf = df.filter(df.split == 'train')#spark.createDataFrame(df.filter(df.split == 'train').take(3000))
+    BATCH_SIZE = 50
+    tdf = df.filter(df.split == 'train')
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
-      #train_ds = train_ds.cache()
-      #train_ds = train_ds.repeat(3)
+      
+      train_ds = train_ds.cache()
+      train_ds = train_ds.repeat(10)
+      train_ds = train_ds.shuffle(1000)
       train_ds = train_ds.batch(BATCH_SIZE)
+      
 
       # train_ds = train_ds.take(5)
 
-      train_ds = train_ds.shuffle(1000)
+      
       # train_ds = add_stats(train_ds)
       return train_ds
 
