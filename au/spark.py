@@ -567,6 +567,30 @@ class NumpyArray(object):
   def __eq__(self, other):
     return isinstance(other, self.__class__) and other.arr == self.arr
 
+
+
+def get_balanced_sample(spark_df, col, n_per_category=None, seed=1337):
+  """Given a column `col` in `spark_df`, return a *balanced* sample
+  (countering class imbalances in `spark_df[col]`).  Optionally limit the
+  sample to having up to `n_per_category` examples for every distinct
+  categorical value of `spark_df[col]`."""
+  from pyspark.sql import functions as F
+  category_to_count_df = spark_df.groupBy(col).agg(F.count('*'))
+  category_to_count = category_to_count_df.rdd.collectAsMap()
+  assert category_to_count
+
+  # We will only sample as many as the rarest category
+  numerator = min(category_to_count.values())
+  if n_per_category is not None:
+    numerator = min(numerator, n_per_category)
+  fractions = dict(
+    (category, float(numerator) / count)
+    for category, count in category_to_count.items()
+  )
+  return spark_df.sampleBy(col, fractions=fractions, seed=seed)
+  
+
+
 def spark_df_to_tf_dataset(
       spark_df,
       spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),

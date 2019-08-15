@@ -537,8 +537,22 @@ def main():
     config=config)
 
   with Spark.getOrCreate() as spark:
-    # df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
-    df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
+    # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+
+    if util.missing_or_empty('/tmp/balanced_sample'):
+      from au.spark import get_balanced_sample
+      categories = [
+        "background",
+        "VEHICLE",
+        "PEDESTRIAN",
+      ]
+      df = df.filter(df.category_name.isin(categories))
+      fair_df = get_balanced_sample(df, 'category_name', n_per_category=1000)
+      fair_df.write.parquet('/tmp/balanced_sample')
+    else:
+      df = spark.read.parquet('/tmp/balanced_sample')
+
     print('num images', df.count())
 
     def to_example(row):

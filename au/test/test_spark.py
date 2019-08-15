@@ -224,3 +224,67 @@ def test_spark_df_to_tf_dataset():
     #     np.testing.assert_array_equal(actual[i], exp[i])
 
 # TODO test run_callables
+
+@pytest.mark.slow
+def test_get_balanced_sample():
+  from au.spark import get_balanced_sample
+  from pyspark.sql import Row
+  
+  VAL_TO_COUNT = {
+    'a': 10,
+    'b': 100,
+    'c': 1000,
+  }
+  rows = []
+  for val, count in VAL_TO_COUNT.items():
+    for _ in range(count):
+      i = len(rows)
+      rows.append(Row(id=i, val=val))
+  
+  def _get_category_to_count(df):
+    from collections import defaultdict
+    rows = df.collect()
+
+    category_to_count = defaultdict(int)
+    for row in rows:
+      category_to_count[row.val] += 1
+    return category_to_count
+
+  def check_sample_in_expectation(df, n_per_category, expected):
+    import numpy as np
+    import pandas as pd
+    N_SEEDS = 10
+    rows = [
+      _get_category_to_count(
+        get_balanced_sample(
+          df, 'val',
+          n_per_category=n_per_category,
+          seed=100*s))
+      for s in range(N_SEEDS)
+    ]
+    pdf = pd.DataFrame(rows)
+    pdf = pdf.fillna(0)
+
+    ks = sorted(expected.keys())
+    mu = pdf.mean()
+    actual_arr = np.array([mu[k] for k in ks])
+    expected_arr = np.array([expected[k] for k in ks])
+    
+    import numpy.testing as npt
+    npt.assert_allclose(actual_arr, expected_arr, rtol=0.2)
+      # NB: We can only test to about 20% accuracy with this few samples
+
+  with testutils.LocalSpark.sess() as spark:
+    df = spark.createDataFrame(rows)
+
+    check_sample_in_expectation(
+      df, n_per_category=1, expected={'a': 1, 'b': 1, 'c': 1})
+
+    check_sample_in_expectation(
+      df, n_per_category=10, expected={'a': 10, 'b': 10, 'c': 10})
+
+    check_sample_in_expectation(
+      df, n_per_category=20, expected={'a': 10, 'b': 10, 'c': 10})
+
+    check_sample_in_expectation(
+      df, n_per_category=None, expected={'a': 10, 'b': 10, 'c': 10})
