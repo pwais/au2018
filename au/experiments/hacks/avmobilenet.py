@@ -23,6 +23,51 @@ class model_fn_vae_hybrid(object):
 
   def __init__(self, au_params):
     self.params = au_params
+
+    # from keras import backend as K
+    # K.set_learning_phase(0)
+    tf.keras.backend.set_learning_phase(0)
+    with util.tf_cpu_session() as sess:
+      import keras.applications.resnet50 as resnet50
+      resnet50 = resnet50.ResNet50(weights='imagenet', include_top=False)
+      graph = sess.graph
+
+
+      # # fix batch norm nodes
+      # for node in sess.graph_def.node:
+      #   if node.op == 'RefEnter':
+      #     node.op = 'Enter'
+      #     for index in range(len(node.input)):
+      #       if 'moving_' in node.input[index]:
+      #         node.input[index] = node.input[index] + '/read'
+      #   if node.op == 'RefSwitch':
+      #     node.op = 'Switch'
+      #     for index in range(len(node.input)):
+      #       if 'moving_' in node.input[index]:
+      #         node.input[index] = node.input[index] + '/read'
+      #   elif node.op == 'AssignSub':
+      #     node.op = 'Sub'
+      #     if 'use_locking' in node.attr: del node.attr['use_locking']
+      #   elif node.op == 'AssignAdd':
+      #     node.op = 'Add'
+      #     if 'use_locking' in node.attr: del node.attr['use_locking']
+      
+      # import pdb; pdb.set_trace()
+      self.resnet_50_in_layers = ['input_1']
+      self.resnet_50_out_layers = ['conv1/BiasAdd'] + [
+        'activation_%s/Relu' % a
+        for a in (10, 20, 30, 48, 48)
+      ]
+      layers = self.resnet_50_in_layers + self.resnet_50_out_layers
+      frozen_graph = tf.graph_util.convert_variables_to_constants(
+          sess,
+          graph.as_graph_def(),
+          layers)
+      self.resnet50_graph = tf.graph_util.remove_training_nodes(frozen_graph)
+      print('saved graph')
+
+    tf.keras.backend.clear_session()
+    # K.clear_session()
   
   def __call__(self, features, labels, mode, params):
 
@@ -32,7 +77,7 @@ class model_fn_vae_hybrid(object):
     # Downweight background class
     class_weights = np.ones(len(AV_OBJ_CLASS_NAME_TO_ID))
     BKG_CLASS_IDX = AV_OBJ_CLASS_NAME_TO_ID['background']
-    # class_weights[BKG_CLASS_IDX] *= .1
+    class_weights[BKG_CLASS_IDX] *= .1
     class_weights /= class_weights.sum()
     CWEIGHTS = tf.gather(class_weights, labels)
 
@@ -42,13 +87,11 @@ class model_fn_vae_hybrid(object):
     obs_str_tensor = util.ThruputObserver.monitoring_tensor('features', features)
 
     # Mobilenet requires normalization
-    features = tf.cast(features, tf.float32) / 128. - 1
-
-    features = tf.debugging.check_numerics(features, 'features_nan')
+    features_norm = tf.cast(features, tf.float32) / 128. - 1
 
     with tf.name_scope('input'):
       util.tf_variable_summaries(tf.cast(labels, tf.float32), prefix='labels')
-      util.tf_variable_summaries(features, prefix='features')
+      util.tf_variable_summaries(features_norm, prefix='features_norm')
 
     ### Set up Mobilenet
     from nets.mobilenet import mobilenet_v2
@@ -57,7 +100,7 @@ class model_fn_vae_hybrid(object):
     with tf.contrib.slim.arg_scope(scope):
       # image (?, 170, 170, 3) -> embedding (?, 6, 6, 1280)
       _, endpoints = mobilenet_v2.mobilenet(
-                              features,
+                              features_norm,
                               num_classes=N_CLASSES,
                               base_only=True,
                               is_training=is_training,
@@ -68,8 +111,8 @@ class model_fn_vae_hybrid(object):
     
     ### Set up the VAE model
     Z_D = 32
-    ENCODER_LAYERS = [1000, 2 * Z_D]
-    DECODER_LAYERS = [2 * Z_D, 1000]
+    ENCODER_LAYERS = [1000, 500, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 500, 1000]
     # LATENT_LOSS_WEIGHT = 50.
     # VAE_LOSS_WEIGHT = 2.
     # EPS = 1e-10
@@ -169,7 +212,7 @@ class model_fn_vae_hybrid(object):
 
     ## Reconstruction Head: Image
     ## y -> image'; loss(image, image')
-    image = features
+    image = features_norm
     filters = [512, 256, 128, 64]
     decode_image = tf.keras.Sequential([
       l.Convolution2DTranspose(
@@ -205,7 +248,42 @@ class model_fn_vae_hybrid(object):
     tf.summary.image(
       'reconstruct_image', image_hat, max_outputs=10, family='image_hat')
     # recon_image_loss = tf.losses.mean_squared_error(image, image_hat)
-    recon_image_loss = tf.losses.absolute_difference(image, image_hat)
+    # recon_image_loss = tf.losses.absolute_difference(image, image_hat)
+
+    # Perceptual Loss
+    # with self.resnet50_graph.as_default():
+    with tf.name_scope('perceptual_loss'):
+      def preprocess(x):
+        x = 255 * (x + 1)
+        x = tf.image.resize_images(
+                        x, (224, 224),
+                        method=tf.image.ResizeMethod.BICUBIC,
+                        align_corners=True)
+        from keras.applications import resnet50
+        x = resnet50.preprocess_input(x)
+        return x
+      image_pre = preprocess(image)
+      image_hat_pre = preprocess(image_hat)
+
+      in_layer = self.resnet_50_in_layers[0]
+      out_layers = [l + ':0' for l in self.resnet_50_out_layers]
+      image_activations = tf.graph_util.import_graph_def(
+                            self.resnet50_graph,
+                            return_elements=out_layers,
+                            input_map={in_layer: image_pre})
+      image_hat_activations = tf.graph_util.import_graph_def(
+                            self.resnet50_graph,
+                            return_elements=out_layers,
+                            input_map={in_layer: image_hat_pre})
+      
+      import pdb; pdb.set_trace()
+      image_inf = self.resnet50()
+      image_hat_inf = self.resnet50()
+      
+
+
+
+
     tf.summary.scalar('recon_image_loss', recon_image_loss)
     
     ## Total Loss
@@ -562,6 +640,8 @@ def main():
       print("wrote to ", '/tmp/balanced_sample')
     
     df = spark.read.parquet('/tmp/balanced_sample')
+    
+    # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
     print('num images', df.count())
 
     def to_example(row):
@@ -572,14 +652,14 @@ def main():
       return img, label
    
     # BATCH_SIZE = 300
-    BATCH_SIZE = 50
+    BATCH_SIZE = 10
     tdf = df.filter(df.split == 'train')
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
       
-      train_ds = train_ds.cache()
+      # train_ds = train_ds.cache()
       train_ds = train_ds.repeat(10)
-      train_ds = train_ds.shuffle(1000)
+      train_ds = train_ds.shuffle(100)
       train_ds = train_ds.batch(BATCH_SIZE)
       
 
