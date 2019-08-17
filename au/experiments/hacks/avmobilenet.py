@@ -52,16 +52,20 @@ class model_fn_vae_hybrid(object):
       #     node.op = 'Add'
       #     if 'use_locking' in node.attr: del node.attr['use_locking']
       
-      # import pdb; pdb.set_trace()
+      # Clear devices
+      graph_def = graph.as_graph_def()
+      for node in graph_def.node:
+        node.device = ""
+
       self.resnet_50_in_layers = ['input_1']
-      self.resnet_50_out_layers = ['conv1/BiasAdd'] + [
+      self.resnet_50_out_layers = ['activation/Relu'] + [ # ~~~~~['conv1/BiasAdd'] + [
         'activation_%s/Relu' % a
-        for a in (10, 20, 30, 48, 48)
+        for a in (10, 20, 30, 48)
       ]
       layers = self.resnet_50_in_layers + self.resnet_50_out_layers
       frozen_graph = tf.graph_util.convert_variables_to_constants(
           sess,
-          graph.as_graph_def(),
+          graph_def,
           layers)
       self.resnet50_graph = tf.graph_util.remove_training_nodes(frozen_graph)
       print('saved graph')
@@ -111,8 +115,8 @@ class model_fn_vae_hybrid(object):
     
     ### Set up the VAE model
     Z_D = 32
-    ENCODER_LAYERS = [1000, 500, 2 * Z_D]
-    DECODER_LAYERS = [2 * Z_D, 500, 1000]
+    ENCODER_LAYERS = [1000, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 1000]
     # LATENT_LOSS_WEIGHT = 50.
     # VAE_LOSS_WEIGHT = 2.
     # EPS = 1e-10
@@ -262,36 +266,44 @@ class model_fn_vae_hybrid(object):
         from keras.applications import resnet50
         x = resnet50.preprocess_input(x)
         return x
-      image_pre = preprocess(image)
-      image_hat_pre = preprocess(image_hat)
+      image_processed = preprocess(image)
+      image_hat_processed = preprocess(image_hat)
+      # tf.summary.image('image_processed', image_processed)
+      # tf.summary.image('image_hat_processed', image_hat_processed)
 
       in_layer = self.resnet_50_in_layers[0]
       out_layers = [l + ':0' for l in self.resnet_50_out_layers]
       image_activations = tf.graph_util.import_graph_def(
-                            self.resnet50_graph,
-                            return_elements=out_layers,
-                            input_map={in_layer: image_pre})
+                                self.resnet50_graph,
+                                return_elements=out_layers,
+                                input_map={in_layer: image_processed})
       image_hat_activations = tf.graph_util.import_graph_def(
-                            self.resnet50_graph,
-                            return_elements=out_layers,
-                            input_map={in_layer: image_hat_pre})
+                                self.resnet50_graph,
+                                return_elements=out_layers,
+                                input_map={in_layer: image_hat_processed})
       
-      import pdb; pdb.set_trace()
-      image_inf = self.resnet50()
-      image_hat_inf = self.resnet50()
-      
+      recon_image_loss = tf.to_float(0.0)
+      for im_t, im_h_t in zip(image_activations, image_hat_activations):
+        def to_name(t):
+          return t.name.replace('/', '_').replace(':', '_')
+        
+        print(im_t, im_t.name, int(np.prod(im_t.shape[1:])))
+        t_loss = (
+          # int(np.prod(im_t.shape[1:])) * 
+          tf.losses.absolute_difference(im_t, im_h_t))
+        tf.summary.scalar('loss/' + to_name(im_t), t_loss)
+        recon_image_loss += t_loss
 
-
-
+        tf.summary.histogram('image/' + to_name(im_t), im_t)
+        tf.summary.histogram('image_hat/' + to_name(im_h_t), im_h_t)
 
     tf.summary.scalar('recon_image_loss', recon_image_loss)
     
     ## Total Loss
     total_loss = (
-      0.01 * latent_loss +
-      0.30 * N_CLASSES * N_CLASSES * multiclass_loss +
-      # 0.30 * int(np.prod(embedding.shape[1:])) * recon_embed_loss +
-      0.30 * int(np.prod(image.shape[1:])) * recon_image_loss)
+      0.00001 * latent_loss +
+      0.01000 * N_CLASSES * N_CLASSES * multiclass_loss +
+      1.00000 * recon_image_loss)
     tf.summary.scalar('total_loss', total_loss)
     
     ### Extra summaries
@@ -341,8 +353,8 @@ class model_fn_vae_hybrid(object):
       LEARNING_RATE = 1e-5
       
       loss = total_loss
-      optimizer = tf.train.RMSPropOptimizer(learning_rate=LEARNING_RATE)
-      # optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
+      # optimizer = tf.train.RMSPropOptimizer(learning_rate=LEARNING_RATE)
+      optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
       
       global_step = tf.train.get_or_create_global_step()
       # tf.summary.scalar('global_step', global_step)
@@ -616,32 +628,32 @@ def main():
 
   with Spark.getOrCreate() as spark:
     
-    if util.missing_or_empty('/tmp/balanced_sample'):
-      df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
-    # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
-      from au.spark import get_balanced_sample
-      categories = [
-        "background",
-        "VEHICLE",
-        "PEDESTRIAN",
-      ]
-      df = df.filter(df.category_name.isin(categories))
-      fair_df = get_balanced_sample(df, 'category_name', n_per_category=10000)
+    # if util.missing_or_empty('/tmp/balanced_sample'):
+    #   df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
+    # # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    #   from au.spark import get_balanced_sample
+    #   categories = [
+    #     "background",
+    #     "VEHICLE",
+    #     "PEDESTRIAN",
+    #   ]
+    #   df = df.filter(df.category_name.isin(categories))
+    #   fair_df = get_balanced_sample(df, 'category_name', n_per_category=10000)
       
-      # Re-shard
-      import pyspark.sql.functions as F
-      fair_df = fair_df.withColumn(
-                'fair_shard',
-                F.abs(F.hash(fair_df['uri'])) % 10)
-      fair_df = fair_df.select(*list(set(fair_df.columns) - set(['shard'])))
-      fair_df = fair_df.withColumn('shard', fair_df['fair_shard'])
+    #   # Re-shard
+    #   import pyspark.sql.functions as F
+    #   fair_df = fair_df.withColumn(
+    #             'fair_shard',
+    #             F.abs(F.hash(fair_df['uri'])) % 10)
+    #   fair_df = fair_df.select(*list(set(fair_df.columns) - set(['shard'])))
+    #   fair_df = fair_df.withColumn('shard', fair_df['fair_shard'])
 
-      fair_df.write.parquet('/tmp/balanced_sample', partitionBy=['split', 'shard'])
-      print("wrote to ", '/tmp/balanced_sample')
+    #   fair_df.write.parquet('/tmp/balanced_sample', partitionBy=['split', 'shard'])
+    #   print("wrote to ", '/tmp/balanced_sample')
     
-    df = spark.read.parquet('/tmp/balanced_sample')
+    # df = spark.read.parquet('/tmp/balanced_sample')
     
-    # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
     print('num images', df.count())
 
     def to_example(row):
@@ -652,12 +664,12 @@ def main():
       return img, label
    
     # BATCH_SIZE = 300
-    BATCH_SIZE = 10
+    BATCH_SIZE = 30
     tdf = df.filter(df.split == 'train')
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
       
-      # train_ds = train_ds.cache()
+      train_ds = train_ds.cache()
       train_ds = train_ds.repeat(10)
       train_ds = train_ds.shuffle(100)
       train_ds = train_ds.batch(BATCH_SIZE)
