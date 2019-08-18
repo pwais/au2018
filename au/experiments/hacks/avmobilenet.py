@@ -239,8 +239,7 @@ class model_fn_vae_hybrid(object):
     decode_image = tf.keras.Sequential([
       l.Convolution2DTranspose(
         filters=f, kernel_size=3, activation=tf.nn.relu6,
-        strides=2, padding='same',
-        kernel_initializer='orthogonal')
+        strides=2, padding='same')
       for f in filters
     ])
     y_expanded_shape = [-1, 10, 10, 10]
@@ -263,8 +262,7 @@ class model_fn_vae_hybrid(object):
                           filters=image_c, kernel_size=5,
                           activation='tanh',
                             # Need to be in [-1, 1] to match image domain
-                          padding='same',
-                          kernel_initializer='orthogonal')
+                          padding='same')
     image_hat = image_hat_layer(upsampled)
     util.tf_variable_summaries(image_hat)
     tf.summary.image(
@@ -274,8 +272,8 @@ class model_fn_vae_hybrid(object):
     
     # Base loss: try to reconstruct the input image.  
     base_recon_loss = tf.losses.absolute_difference(
-                          tf.contrib.layers.flatten(im_t), 
-                          tf.contrib.layers.flatten(im_h_t),
+                          tf.contrib.layers.flatten(image), 
+                          tf.contrib.layers.flatten(image_hat),
                           weights=tf.expand_dims(cweights, axis=-1))
     tf.summary.scalar('base_recon_loss', base_recon_loss)
     recon_image_loss = 1.0 * base_recon_loss
@@ -380,7 +378,7 @@ class model_fn_vae_hybrid(object):
               'classify': tf.estimator.export.PredictOutput(predictions)
           })
     elif mode == tf.estimator.ModeKeys.TRAIN:
-      LEARNING_RATE = 1e-3
+      LEARNING_RATE = 1e-4
       
       loss = total_loss
       # optimizer = tf.train.RMSPropOptimizer(learning_rate=LEARNING_RATE)
