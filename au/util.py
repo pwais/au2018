@@ -179,6 +179,7 @@ class ThruputObserver(object):
     self.n_total = n_total
     self._start = None
     self.__log_freq = log_freq
+    self.__last_log = 0
   
   @contextmanager
   def observe(self, n=0, num_bytes=0):
@@ -213,10 +214,14 @@ class ThruputObserver(object):
   def maybe_log_progress(self, every_n=-1):
     if every_n >= 0:
       self.__log_freq = every_n
-    if (self.n % self.__log_freq) == 0:
+    if self.n >= self.__last_log + self.__log_freq:
       log.info("Progress for \n" + str(self))
+      self.__last_log = self.n
+        # Track last log because `n` may increase inconsistently
       if every_n == -1 and (self.n >= (1.7 * self.__log_freq)):
         self.__log_freq = int(1.7 * self.__log_freq)
+          # Exponentially decay logging frequency. Don't decay quite as
+          # fast as Vowpal Wabbit did, though.
 
   @staticmethod
   def union(thruputs):

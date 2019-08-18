@@ -47,23 +47,23 @@ from argoverse.data_loading.argoverse_tracking_loader import \
 ###
 
 AV_OBJ_CLASS_TO_COARSE = {
-  "VEHICLE":            'car',
-  "PEDESTRIAN":         'ped',
-  "ON_ROAD_OBSTACLE":   'other',
-  "LARGE_VEHICLE":      'car',
+  "ANIMAL":             'ped',
   "BICYCLE":            'bike',
   "BICYCLIST":          'ped',
   "BUS":                'car',
-  "OTHER_MOVER":        'other',
-  "TRAILER":            'car',
-  "MOTORCYCLIST":       'ped',
+  "EMERGENCY_VEHICLE":  'car',
+  "LARGE_VEHICLE":      'car',
   "MOPED":              'bike',
   "MOTORCYCLE":         'bike',
-  "STROLLER":           'other',
-  "EMERGENCY_VEHICLE":  'car',
-  "ANIMAL":             'ped',
-  "WHEELCHAIR":         'ped',
+  "MOTORCYCLIST":       'ped',
+  "ON_ROAD_OBSTACLE":   'other',
+  "OTHER_MOVER":        'other',
+  "PEDESTRIAN":         'ped',
   "SCHOOL_BUS":         'car',
+  "STROLLER":           'other',
+  "TRAILER":            'car',
+  "VEHICLE":            'car',
+  "WHEELCHAIR":         'ped',
 }
 
 BIKE = ["BICYCLE", "MOPED", "MOTORCYCLE"]
