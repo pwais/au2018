@@ -60,7 +60,7 @@ class model_fn_vae_hybrid(object):
       self.resnet_50_in_layers = ['input_1']
       self.resnet_50_out_layers = ['activation/Relu'] + [ # ~~~~~['conv1/BiasAdd'] + [
         'activation_%s/Relu' % a
-        for a in (2, 3, 4, 5, 10, 15, 20, 30, 48)
+        for a in (2, 5, 10, 20, 30, 48)
       ]
       layers = self.resnet_50_in_layers + self.resnet_50_out_layers
       frozen_graph = tf.graph_util.convert_variables_to_constants(
@@ -144,8 +144,8 @@ class model_fn_vae_hybrid(object):
 
     ### Set up the VAE model
     Z_D = 64
-    ENCODER_LAYERS = [1000, 500, 2 * Z_D]
-    DECODER_LAYERS = [2 * Z_D, 1000]
+    ENCODER_LAYERS = [990, 500, 2 * Z_D]
+    DECODER_LAYERS = [2 * Z_D, 990]
     # LATENT_LOSS_WEIGHT = 50.
     # VAE_LOSS_WEIGHT = 2.
     # EPS = 1e-10
@@ -235,36 +235,84 @@ class model_fn_vae_hybrid(object):
     ## Reconstruction Head: Image
     ## y -> image'; loss(image, image')
     image = features_norm
-    filters = [128, 128, 128, 64]
-    decode_image = tf.keras.Sequential([
-      l.Convolution2DTranspose(
-        filters=f, kernel_size=3, activation=tf.nn.relu6,
-        strides=2, padding='same')
-      for f in filters
-    ])
-    y_expanded_shape = [-1, 10, 10, 10]
-    assert np.prod(y_expanded_shape[1:]) == int(y.shape[-1])
-    y_expanded = tf.reshape(y, y_expanded_shape)
-      # For GANs, it seems people just randomly reshape noise into
-      # some dimensions that are plausibly deconv-able.
-    decoded_image_base = decode_image(y_expanded, training=is_training)
-    
-    # Upsample trick for perfect fit
-    # https://github.com/SimonKohl/probabilistic_unet/blob/master/model/probabilistic_unet.py#L60
-    image_hw = (int(image.shape[1]), int(image.shape[2]))
-    image_c = int(image.shape[-1])
-    upsampled = tf.image.resize_images(
-                    decoded_image_base,
-                    image_hw,
+    with tf.name_scope('decode_image'):
+      n_y = int(y.shape[-1])
+
+      # Like StyleGAN we start from a learnable constant and let `y` steer
+      # the conv filters applied to this constant.
+      base = tf.get_variable(
+                'base',
+                shape=[1, 4, 4, n_y],
+                initializer=tf.initializers.ones())
+      base_batched = tf.tile(base, [tf.shape(image)[0], 1, 1, 1])
+
+      image_h, image_w = (int(image.shape[1]), int(image.shape[2]))
+      filters = [n_y,  64,  64,  64,  64]
+      scales =  [0.1, 0.2, 0.4, 0.6, 0.8]
+      assert len(filters) == len(scales)
+      x = base_batched
+      for s, f in zip(scales, filters):
+        x = l.Conv2D(
+              filters=f, kernel_size=3, activation=tf.nn.relu6,
+              strides=1, padding='same', input_shape=x.shape[1:])(x)
+
+        # AdaIN: Instance Norm, convert `current` to z-scores
+        x -= tf.reduce_mean(x, axis=[1, 2], keepdims=True)
+        x_ss = tf.reduce_mean(tf.square(x), axis=[1, 2], keepdims=True)
+        x *= (tf.rsqrt(x_ss) + 1e-10)
+        
+        # AdaIn: Adaptive Scaling (with learned scaling factors ...)...
+        # Based upon https://github.com/NVlabs/stylegan/blob/f3a044621e2ab802d40940c16cc86042ae87e100/training/networks_stylegan.py#L259
+        x_scale = l.Dense(f, activation=None, use_bias=False)(y)
+        x_bias = l.Dense(f, activation=None, use_bias=False)(y)
+        x_scale = tf.reshape(x_scale, [-1, 1, 1, x_scale.shape[-1]])
+        x_bias = tf.reshape(x_bias, [-1, 1, 1, x_bias.shape[-1]])
+        x = (x_scale + 1) * x + x_bias
+        x = tf.nn.relu6(x)
+
+        # Use a bilinear resize instead of a deconv; it's visibly much
+        # smoother and the upscaling is much easier to control.
+        h_out, w_out = int(s * image_h), int(s * image_w)
+        x = tf.image.resize_images(
+                    x, [h_out, w_out],
                     method=tf.image.ResizeMethod.BILINEAR,
                     align_corners=True)
-    image_hat_layer = tf.keras.layers.Conv2D(
-                          filters=image_c, kernel_size=5,
-                          activation='tanh',
-                            # Need to be in [-1, 1] to match image domain
-                          padding='same')
-    image_hat = image_hat_layer(upsampled)
-    util.tf_variable_summaries(image_hat)
+      image_hat_decoded = x
+      
+
+      # decode_image = tf.keras.Sequential([
+      #   l.Convolution2DTranspose(
+      #     filters=f, kernel_size=3, activation=tf.nn.relu6,
+      #     strides=2, padding='same')
+      #   for f in filters
+      # ])
+      
+      # # For GANs, it seems people just randomly reshape noise into
+      # # some dimensions that are plausibly deconv-able.  Here, we try to
+      # # amplify `y` such that every conv kernel can sample *every* value
+      # # of `y`; something simple like tf.reshape(y) will arbitrarily
+      # # restrict the receptive field of each kernel.
+      # tile_h, tile_w = (3, 3)
+      # row = tf.stack([y] * tile_w, axis=1)
+      # y_expanded = tf.stack([row] * tile_h, axis=2)
+
+      # decoded_image_base = decode_image(y_expanded, training=is_training)
+    
+      # Finally, apply upsample trick for perfect fit
+      # https://github.com/SimonKohl/probabilistic_unet/blob/master/model/probabilistic_unet.py#L60
+      image_c = int(image.shape[-1])
+      upsampled = tf.image.resize_images(
+                      image_hat_decoded, [image_h, image_w],
+                      method=tf.image.ResizeMethod.BILINEAR,
+                      align_corners=True)
+      image_hat_layer = tf.keras.layers.Conv2D(
+                            filters=image_c, kernel_size=5,
+                            activation='tanh',
+                              # Need to be in [-1, 1] to match image domain
+                            padding='same')
+      image_hat = image_hat_layer(upsampled)
+      util.tf_variable_summaries(image_hat)
+    
     tf.summary.image(
       'reconstruct_image', image, max_outputs=10)
     tf.summary.image(
@@ -276,54 +324,69 @@ class model_fn_vae_hybrid(object):
                           tf.contrib.layers.flatten(image_hat),
                           weights=tf.expand_dims(cweights, axis=-1))
     tf.summary.scalar('base_recon_loss', base_recon_loss)
-    recon_image_loss = 1.0 * base_recon_loss
+    recon_image_loss = 100.0 * base_recon_loss
       # But this is not enough for convergence, though, so we add ...
 
     # ... Perceptual Loss
     with tf.name_scope('perceptual_loss'):
-      def preprocess(x):
-        x = 255 * (x + 1)
-        x = tf.image.resize_images(
-                        x, (224, 224),
-                        method=tf.image.ResizeMethod.BICUBIC,
-                        align_corners=True)
-        from keras.applications import resnet50
-        x = resnet50.preprocess_input(x)
-        return x
-      image_processed = preprocess(image)
-      image_hat_processed = preprocess(image_hat)
+      PL_SCALES = (1.0, )#0.5, 0.1)
+      for scale in PL_SCALES:
+        with tf.name_scope('scale_%s' % scale):
+          def downsize(im):
+            if scale == 1:
+              return im
+            h_out, w_out = int(scale * image_h), int(scale * image_w)
+            return tf.image.resize_images(
+                              im, [h_out, w_out],
+                              method=tf.image.ResizeMethod.BICUBIC,
+                              align_corners=True)
+          
+          image_s = downsize(image)
+          image_hat_s = downsize(image_hat)
 
-      in_layer = self.resnet_50_in_layers[0]
-      out_layers = [l + ':0' for l in self.resnet_50_out_layers]
-      image_activations = tf.graph_util.import_graph_def(
-                                self.resnet50_graph,
-                                return_elements=out_layers,
-                                input_map={in_layer: image_processed})
-      image_hat_activations = tf.graph_util.import_graph_def(
-                                self.resnet50_graph,
-                                return_elements=out_layers,
-                                input_map={in_layer: image_hat_processed})
-      
-      act_pairs = list(zip(image_activations, image_hat_activations))
-        # Ordered from lower to higher in the resnet50 network
-      for i, (im_t, im_h_t) in enumerate(act_pairs):
-        def to_name(t):
-          return t.name.replace('/', '_').replace(':', '_')
-        
-        t_loss = tf.losses.absolute_difference(
-                    tf.contrib.layers.flatten(im_t), 
-                    tf.contrib.layers.flatten(im_h_t),
-                    weights=tf.expand_dims(cweights, axis=-1))
+          def preprocess(x):
+            x = 255 * (x + 1)
+            x = tf.image.resize_images(
+                            x, (224, 224),
+                            method=tf.image.ResizeMethod.BICUBIC,
+                            align_corners=True)
+            from keras.applications import resnet50
+            x = resnet50.preprocess_input(x)
+            return x
+          image_processed = preprocess(image_s)
+          image_hat_processed = preprocess(image_hat_s)
 
-        # Give lower layers higher loss to put preference on more basic
-        # image statistics
-        t_loss *= (1.5 ** (len(act_pairs) - i))
+          in_layer = self.resnet_50_in_layers[0]
+          out_layers = [l + ':0' for l in self.resnet_50_out_layers]
+          image_activations = tf.graph_util.import_graph_def(
+                                    self.resnet50_graph,
+                                    return_elements=out_layers,
+                                    input_map={in_layer: image_processed})
+          image_hat_activations = tf.graph_util.import_graph_def(
+                                    self.resnet50_graph,
+                                    return_elements=out_layers,
+                                    input_map={in_layer: image_hat_processed})
+          
+          act_pairs = list(zip(image_activations, image_hat_activations))
+            # Ordered from lower to higher in the resnet50 network
+          for i, (im_t, im_h_t) in enumerate(act_pairs):
+            def to_name(t):
+              return t.name.replace('/', '_').replace(':', '_')
+            
+            t_loss = tf.losses.absolute_difference(
+                        tf.contrib.layers.flatten(im_t), 
+                        tf.contrib.layers.flatten(im_h_t),
+                        weights=tf.expand_dims(cweights, axis=-1))
 
-        tf.summary.scalar('loss/' + to_name(im_t), t_loss)
-        recon_image_loss += t_loss
+            # Give lower layers higher loss to put preference on more basic
+            # image statistics
+            t_loss *= scale * (1.8 ** (len(act_pairs) - i))
 
-        tf.summary.histogram('image/' + to_name(im_t), im_t)
-        tf.summary.histogram('image_hat/' + to_name(im_h_t), im_h_t)
+            tf.summary.scalar('loss/' + to_name(im_t), t_loss)
+            recon_image_loss += t_loss
+
+            tf.summary.histogram('image/' + to_name(im_t), im_t)
+            tf.summary.histogram('image_hat/' + to_name(im_h_t), im_h_t)
 
     tf.summary.scalar('recon_image_loss', recon_image_loss)
     
@@ -657,8 +720,8 @@ def main():
   with Spark.getOrCreate() as spark:
     
     # if util.missing_or_empty('/tmp/balanced_sample'):
-    #   #df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
-    #   df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
+    #   df = spark.read.parquet('/opt/au/cache/argoverse_cropped_object_170_170_small')
+    #   # df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/outer_root/media/seagates-ext4/au_datas/crops_full/argoverse_cropped_object_170_170/')#'/opt/au/cache/argoverse_cropped_object_170_170')
     #   from au.spark import get_balanced_sample
     #   categories = [
     #     "background",
@@ -666,7 +729,7 @@ def main():
     #     "PEDESTRIAN",
     #   ]
     #   df = df.filter(df.category_name.isin(categories))
-    #   fair_df = get_balanced_sample(df, 'category_name', n_per_category=50000)
+    #   fair_df = get_balanced_sample(df, 'category_name', n_per_category=1000)
       
     #   # Re-shard
     #   import pyspark.sql.functions as F
@@ -695,7 +758,7 @@ def main():
       return img, label
    
     # BATCH_SIZE = 300
-    BATCH_SIZE = 30
+    BATCH_SIZE = 20
     tdf = df.filter(df.split == 'train')
     def train_input_fn():
       train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
