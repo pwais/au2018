@@ -620,6 +620,174 @@ class model_fn_vae_hybrid(object):
 
 
 
+class model_fn_simple_ff_tpu(object):
+
+  def __init__(self, au_params):
+    self.params = au_params
+  
+  def __call__(self, features, labels, mode, params):
+
+    # features.set_shape([None, 170, 170, 3]) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # labels.set_shape([None,])
+
+    # with tf.device('/cpu:0'):
+    obs_str_tensor = util.ThruputObserver.monitoring_tensor('features', features)
+
+    features = tf.cast(features, tf.float32) / 128. - 1
+
+    tf.contrib.summary.histogram('labels', labels)
+    tf.contrib.summary.histogram('features', features)
+
+    from nets.mobilenet import mobilenet_v2
+    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    with tf.contrib.slim.arg_scope(mobilenet_v2.training_scope(is_training=is_training)):
+      # See also e.g. mobilenet_v2_035
+      logits, endpoints = mobilenet_v2.mobilenet(
+                            features,
+                            num_classes=len(AV_OBJ_CLASS_NAME_TO_ID),
+                            is_training=is_training,
+                            depth_multiplier=self.params.DEPTH_MULTIPLIER,
+                            finegrain_classification_mode=self.params.FINE)
+    
+    # Downweight background class
+    class_weights = np.ones(len(AV_OBJ_CLASS_NAME_TO_ID))
+    class_weights[0] *= .1
+    class_weights /= class_weights.sum()
+
+    weights = tf.gather(class_weights, labels)
+
+    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits, weights=weights)
+    preds_scores = endpoints['Predictions']
+    preds = tf.argmax(preds_scores, axis=1)
+
+    for k, v in endpoints.items():
+      KS = ('layer_19', 'Predictions', 'Logits')
+      if any(kval in k for kval in KS):
+        tf.contrib.summary.histogram('mobilenet_' + k, v)
+
+    if mode == tf.estimator.ModeKeys.PREDICT:
+      predictions = {
+          'classes': preds, #tf.argmax(logits, axis=1),
+          'probabilities': tf.nn.softmax(logits),
+      }
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.PREDICT,
+          predictions=predictions,
+          export_outputs={
+              'classify': tf.estimator.export.PredictOutput(predictions)
+          })
+    elif mode == tf.estimator.ModeKeys.TRAIN:
+      LEARNING_RATE = 1e-4
+      
+      optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
+
+      # If we are running multi-GPU, we need to wrap the optimizer.
+      #if params_dict.get('multi_gpu'):
+      # optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
+
+      
+      accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
+
+      # Name tensors to be logged with LoggingTensorHook.
+      tf.identity(LEARNING_RATE, 'learning_rate')
+      tf.identity(loss, 'cross_entropy')
+      tf.identity(accuracy[1], name='train_accuracy')
+
+      # Save accuracy scalar to Tensorboard output.
+      tf.contrib.summary.scalar('train_accuracy', accuracy[1])
+      
+      global_step = tf.train.get_or_create_global_step()
+      tf.contrib.summary.scalar('global_step', global_step)
+
+      tf.contrib.summary.histogram('train_loss', loss)
+      tf.contrib.summary.histogram('logits', logits)
+
+      for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
+        class_labels = tf.cast(tf.equal(labels, class_id), tf.int32) # ~~~~~~~~~~~
+        class_preds = tf.cast(tf.equal(preds, class_id), tf.int32)
+
+        tf.contrib.summary.scalar('train_labels_support/' + class_name, tf.reduce_sum(class_labels))
+        tf.contrib.summary.scalar('train_preds_support/' + class_name, tf.reduce_sum(class_preds))
+        tf.contrib.summary.histogram('train_labels_support_dist/' + class_name, class_labels)
+        tf.contrib.summary.histogram('train_preds_support_dist/' + class_name, class_preds)
+
+        class_true = tf.boolean_mask(features, class_labels)
+        class_pred = tf.boolean_mask(features, class_preds)
+        tf.contrib.summary.image('train_true/' + class_name, class_true, max_images=10)
+        tf.contrib.summary.image('train_pred/' + class_name, class_pred, max_images=10)
+
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.TRAIN,
+          loss=loss,
+          train_op=optimizer.minimize(loss, global_step))
+
+    elif mode == tf.estimator.ModeKeys.EVAL:
+      
+      # preds = tf.argmax(logits, axis=1)
+      classes = labels
+
+      tf.contrib.summary.histogram('eval_preds', preds)
+      tf.contrib.summary.histogram('logits', logits)
+
+      accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
+      tf.contrib.summary.scalar('eval_accuracy', accuracy[1])
+      tf.contrib.summary.scalar('eval_loss', loss)
+
+      eval_metric_ops = {
+        'accuracy':
+            tf.metrics.accuracy(labels=labels, predictions=preds),
+      }
+      for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
+        class_labels = tf.cast(tf.equal(classes, class_id), tf.int64)
+        class_preds = tf.cast(tf.equal(preds, class_id), tf.int64)
+
+        tf.contrib.summary.scalar('labels_support/' + class_name, tf.reduce_sum(class_labels))
+        tf.contrib.summary.scalar('preds_support/' + class_name, tf.reduce_sum(class_preds))
+        tf.contrib.summary.histogram('labels_support_dist/' + class_name, class_labels)
+        tf.contrib.summary.histogram('preds_support_dist/' + class_name, class_preds)
+
+        metric_kwargs = {
+          'labels': class_labels,
+          'predictions': class_preds,
+        }
+        name_to_ftor = {
+          'accuracy': tf.metrics.accuracy,
+          'auc': tf.metrics.auc,
+          'precision': tf.metrics.precision,
+          'recall': tf.metrics.recall,
+        }
+        for name, ftor in name_to_ftor.items():
+          full_name = name + '/' + class_name
+          eval_metric_ops[full_name] = ftor(name=full_name, **metric_kwargs)
+
+
+      logging_hook = tf.train.LoggingTensorHook(
+        {"obs_str_tensor" : obs_str_tensor}, every_n_iter=1)
+      # summary_hook = tf.train.SummarySaverHook(
+      #       save_secs=3,
+      #       output_dir='/tmp/av_mobilenet_test/eval',
+      #       scaffold=tf.train.Scaffold(summary_op=tf.contrib.summary.merge_all()))
+      hooks = [logging_hook]#, summary_hook]
+
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.EVAL,
+          loss=loss,
+          eval_metric_ops=eval_metric_ops,
+          evaluation_hooks=hooks)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -791,6 +959,142 @@ class model_fn_simple_ff(object):
           eval_metric_ops=eval_metric_ops,
           evaluation_hooks=hooks)
 
+
+
+
+
+
+def main_tpu():
+
+  import os
+  assert 'TPU_NAME' in os.environ
+
+  import time
+  model_dir = 'gs://au2018-3/avmobilenet_tpu_test/test_%s' % time.time()
+
+
+  tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
+    os.environ['TPU_NAME'])
+  
+  TPU_ITERATIONS = 100
+  BATCH_SIZE = 64
+  TPU_CORES = 8
+  train_distribution = tf.contrib.distribute.TPUStrategy(
+      tpu_cluster_resolver, steps_per_run=BATCH_SIZE * TPU_CORES)
+  config = tf.contrib.tpu.RunConfig(
+      model_dir=model_dir,
+      save_summary_steps=10,
+      save_checkpoints_secs=10,
+      log_step_count_steps=10,
+      cluster=tpu_cluster_resolver,
+      session_config=tf.ConfigProto(
+          allow_soft_placement=True, log_device_placement=True),
+      train_distribute=train_distribution,
+      eval_distribute=train_distribution)
+      # tpu_config=tf.contrib.tpu.TPUConfig(TPU_ITERATIONS))
+
+
+  from au.fixtures.tf.mobilenet import Mobilenet
+  params = Mobilenet.Medium()
+  # params.BATCH_SIZE = BATCH_SIZE
+  av_classifier = tf.estimator.Estimator(
+    model_fn=model_fn_simple_ff_tpu(params),
+    params=None,
+    config=config)
+
+  with Spark.getOrCreate() as spark:
+    
+    df = spark.read.parquet('cache/data/argoverse_cropped_object_170_170/')
+    # print('num images', df.count())
+
+    def to_example(row):
+      import imageio
+      from io import BytesIO
+      img = imageio.imread(BytesIO(row.jpeg_bytes))
+      label = AV_OBJ_CLASS_NAME_TO_ID[row.category_name]
+      # For tpu
+      img = img.astype(float)
+      return img, label
+    
+    # TPU Estimator needs static shapes :P
+    def set_shapes(ds):
+      def _set_shapes(images, labels):
+        images.set_shape(images.get_shape().merge_with(
+            tf.TensorShape([BATCH_SIZE, 170, 170, 3])))
+        labels.set_shape(labels.get_shape().merge_with(
+            tf.TensorShape([BATCH_SIZE])))
+        return images, labels
+      
+      ds = ds.map(_set_shapes)
+      return ds
+      
+
+    tdf = df.filter(df.split == 'train')
+    def train_input_fn():
+      train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.float32, tf.int32), logging_name='train')
+      
+      # train_ds = train_ds.cache()
+      
+      train_ds = train_ds.shuffle(100)
+      train_ds = train_ds.batch(BATCH_SIZE)
+      train_ds = set_shapes(train_ds)
+      
+      return train_ds
+
+    edf = df.filter(df.split == 'val')
+    def eval_input_fn():
+      eval_ds = spark_df_to_tf_dataset(edf, to_example, (tf.float32, tf.int32), logging_name='test')
+      
+      eval_ds = eval_ds.batch(BATCH_SIZE)
+      traieval_dsn_ds = set_shapes(eval_ds)
+
+      eval_ds = eval_ds.take(100)
+
+      return eval_ds
+
+
+    TRAIN_EPOCHS = 100
+
+    is_training = [True]
+    def run_eval():
+      import time
+      time.sleep(120)
+      while is_training[0]:
+        util.log.info("Running eval ...")
+        eval_config = config.replace(session_config=util.tf_cpu_session_config())
+        eval_av_classifier = tf.estimator.Estimator(
+                                model_fn=model_fn(params),
+                                params=None,
+                                config=eval_config)
+        eval_results = eval_av_classifier.evaluate(input_fn=eval_input_fn)#, hooks=[summary_hook])
+        util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+    
+    import threading
+    eval_thread = threading.Thread(target=run_eval)
+    # eval_thread.start()
+
+    for t in range(TRAIN_EPOCHS):
+      av_classifier.train(input_fn=train_input_fn)
+      
+      #, hooks=train_hooks)
+      # if t % 10 == 0 or t >= TRAIN_EPOCHS - 1:
+      # summary_hook = tf.train.SummarySaverHook(
+      #       save_secs=3,
+      #       output_dir='/tmp/av_mobilenet_test/eval',
+      #       scaffold=tf.train.Scaffold(summary_op=tf.summary.merge_all()))
+      # eval_results = av_classifier.evaluate(input_fn=eval_input_fn)#, hooks=[summary_hook])
+      # util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+    is_training[0] = False
+    # eval_thread.join()
+
+
+
+
+
+
+
+
+
 def main():
 
   tf_config = util.tf_create_session_config()
@@ -947,4 +1251,4 @@ def main():
 
 
 if __name__ == '__main__':
-  main()
+  main_tpu()

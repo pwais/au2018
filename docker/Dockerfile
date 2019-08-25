@@ -48,7 +48,7 @@ RUN \
 
 
 ## Spark & Hadoop
-ENV HADOOP_VERSION 3.1.1
+ENV HADOOP_VERSION 3.1.2
 ENV HADOOP_HOME /opt/hadoop
 ENV HADOOP_CONF_DIR $HADOOP_HOME/etc/hadoop
 ENV PATH $PATH:$HADOOP_HOME/bin
@@ -185,7 +185,9 @@ ENV PATH $PATH:/opt/au/kubespray/inventory/default/artifacts/
 ## Gcloud
 RUN \
   curl https://sdk.cloud.google.com | bash && \
-  pip3 install -U crcmod 
+  pip3 install -U crcmod && \
+  pip3 install --upgrade google-api-python-client && \
+  pip3 install --upgrade oauth2client
 ENV PATH $PATH:/root/google-cloud-sdk/bin/
 
 # gcsfuse does NOT support read cache :P

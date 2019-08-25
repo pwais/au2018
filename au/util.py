@@ -324,7 +324,8 @@ class ThruputObserver(object):
     import tensorflow as tf
     obs_str_tensor = tf.compat.v1.py_func(
               Observer(tensor.dtype.size), [tf.shape(tensor)], tf.string)
-    tf.summary.text(name + '/ThruputObserver', obs_str_tensor)
+    # tf.summary.text(name + '/ThruputObserver', obs_str_tensor)
+    # not supported in tf.contrib.summary / TPU land ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     return obs_str_tensor
 
 
