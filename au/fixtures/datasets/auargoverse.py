@@ -72,10 +72,10 @@ RIDER = ["BICYCLIST", "MOTORCYCLIST"]
 class MissingPose(ValueError):
   pass
 
-def stable_hash(x):
-  # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
-  import hashlib
-  return int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
+# def stable_hash(x):
+#   # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
+#   import hashlib
+#   return int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
 
 def get_image_width_height(camera):
   from argoverse.utils import camera_stats
@@ -538,7 +538,7 @@ class HardNegativeMiner(object):
           + self.__ii[r1, c1])
 
     self._ii = IntegralImage(mask)
-    self._random = random.Random(self.SEED + stable_hash(pos_boxes))
+    self._random = random.Random(self.SEED + util.stable_hash(pos_boxes))
 
   def next_sample(self, max_attempts=1000):
     if not self._ii:
@@ -1666,7 +1666,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     box_center = np.array(
       [bbox.x + .5 * bbox.width, bbox.y + .5 * bbox.height])
 
-    rand = random.Random(stable_hash(str(bbox)))
+    rand = random.Random(util.stable_hash(str(bbox)))
     offset = np.array([
         rand.gauss(*cls.CENTER_JITTER_MU_STD),
         rand.gauss(*cls.CENTER_JITTER_MU_STD)

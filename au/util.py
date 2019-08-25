@@ -73,6 +73,11 @@ def get_size_of_deep(v):
   else:
     return sys.getsizeof(v)
 
+def stable_hash(x):
+  # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
+  import hashlib
+  return int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
+
 def ichunked(seq, n):
   """Generate chunks of `seq` of size (at most) `n`.  More efficient
   and less junk than itertools recipes version using izip_longest...
@@ -1146,9 +1151,9 @@ def tf_variable_summaries(var, prefix=''):
       idx = prefix.find(':')
       if idx >= 0:
         prefix = prefix[:prefix.find(':')] # Exclude : too
-    print(prefix, var.name) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # print(prefix, var.name) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   
-  with tf.name_scope(prefix):
+  with tf.variable_scope(prefix):
     mean = tf.reduce_mean(var)
     tf.summary.scalar('mean', mean)
     with tf.name_scope('stddev'):
