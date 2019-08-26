@@ -187,7 +187,10 @@ RUN \
   curl https://sdk.cloud.google.com | bash && \
   pip3 install -U crcmod && \
   pip3 install --upgrade google-api-python-client && \
-  pip3 install --upgrade oauth2client
+  pip3 install --upgrade oauth2client && \
+    cd /opt/hadoop/share/hadoop/common/lib && \
+    wget https://storage.googleapis.com/hadoop-lib/gcs/gcs-connector-hadoop3-latest.jar && \
+    cd -
 ENV PATH $PATH:/root/google-cloud-sdk/bin/
 
 # gcsfuse does NOT support read cache :P

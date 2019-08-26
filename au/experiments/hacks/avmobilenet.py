@@ -1005,6 +1005,8 @@ def main_tpu():
   with Spark.getOrCreate() as spark:
     
     df = spark.read.parquet('cache/data/argoverse_cropped_object_170_170/')
+    # df = spark.read.parquet('gs://au2018-3/crops_full/argoverse_cropped_object_170_170')
+    # partition discovery is quite slow!!!!!!! :( ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # print('num images', df.count())
 
     def to_example(row):

@@ -660,6 +660,7 @@ def spark_df_to_tf_dataset(
     # df = df.repartition(df['part'])
     # df = spark_df
     # pids = df.select('_spark_part_id').distinct().rdd.flatMap(lambda x: x).collect()
+    print('getting shards')
     pids = df.select('shard').distinct().rdd.flatMap(lambda x: x).collect()
     print(len(pids), pids)
 
