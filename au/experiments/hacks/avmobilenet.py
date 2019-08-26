@@ -1260,6 +1260,30 @@ def main_tpu():
       p99                  12 minutes, 10 seconds and 253.85 milliseconds
       -------------------  ----------------------------------------------
 
+
+      launch is slower with gs:// (instead of local) read, but thruput is same:
+      INFO:tensorflow:loss = 0.027581474, step = 200 (411.267 sec)
+      INFO:tensorflow:global_step/sec: 0.121576
+      INFO:tensorflow:examples/sec: 497.974
+      2019-08-26 10:49:12,658 au   16962 : Progress for 
+      train
+      -------------------  ---------------------------------------------
+      Thruput
+      N thru               793686
+      N chunks             16
+      total time           21 minutes and 53.8 seconds
+      total thru           68.83 GB
+      rate                 52.39 MB / sec
+      Hz                   604.1145149510429
+      Progress
+      Percent complete     16.094837312940097
+      ETA                  1 hour, 54 minutes and 9.07 seconds
+      Latency (per chunk)
+      avg                  1 minute, 22 seconds and 112.54 milliseconds
+      p50                  5 seconds and 573.17 milliseconds
+      p95                  9 minutes, 28 seconds and 113.97 milliseconds
+      p99                  11 minutes, 17 seconds and 522.4 milliseconds
+      -------------------  ---------------------------------------------
       """
 
 
