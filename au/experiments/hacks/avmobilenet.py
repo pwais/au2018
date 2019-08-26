@@ -630,14 +630,28 @@ class model_fn_simple_ff_tpu(object):
     # features.set_shape([None, 170, 170, 3]) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # labels.set_shape([None,])
 
-    
+    tensors_to_summarize = {}
+    def reg_to_summarize(v):
+      def var_name(vv):
+        """Magic: get the name of the variable that the caller passed to 
+        `tf_variable_summaries()`"""
+        import inspect
+        lcls = inspect.stack()[2][0].f_locals
+        for name in lcls:
+          if id(vv) == id(lcls[name]):
+            return name
+        return None
+      tensors_to_summarize[var_name(v)] = v
+
     # obs_str_tensor = util.ThruputObserver.monitoring_tensor('features', features)
     # just not supported on TPU ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     features = tf.cast(features, tf.float32) / 128. - 1
 
-    tf.contrib.summary.histogram('labels', labels)
-    tf.contrib.summary.histogram('features', features)
+    # tf.contrib.summary.histogram('labels', labels)
+    reg_to_summarize(labels)
+    # tf.contrib.summary.histogram('features', features)
+    # reg_to_summarize(features)
 
     from nets.mobilenet import mobilenet_v2
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
@@ -661,11 +675,13 @@ class model_fn_simple_ff_tpu(object):
     loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits, weights=weights)
     preds_scores = endpoints['Predictions']
     preds = tf.argmax(preds_scores, axis=1)
+    reg_to_summarize(preds)
 
     for k, v in endpoints.items():
       KS = ('layer_19', 'Predictions', 'Logits')
       if any(kval in k for kval in KS):
-        tf.contrib.summary.histogram('mobilenet_' + k, v)
+        # tf.contrib.summary.histogram('mobilenet_' + k, v)
+        tensors_to_summarize['mobilenet_' + k] = v
 
     if mode == tf.estimator.ModeKeys.PREDICT:
       predictions = {
@@ -689,40 +705,74 @@ class model_fn_simple_ff_tpu(object):
       # optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
 
       
-      accuracy = tf.metrics.accuracy(labels=labels, predictions=preds)
+      accuracy_metric = tf.metrics.accuracy(labels=labels, predictions=preds)
 
       # Name tensors to be logged with LoggingTensorHook.
       tf.identity(LEARNING_RATE, 'learning_rate')
       tf.identity(loss, 'cross_entropy')
-      tf.identity(accuracy[1], name='train_accuracy')
+      accuracy = tf.identity(accuracy_metric[1], name='train_accuracy')
+      reg_to_summarize(accuracy)
 
-      # Save accuracy scalar to Tensorboard output.
-      tf.contrib.summary.scalar('train_accuracy', accuracy[1])
       
       global_step = tf.train.get_or_create_global_step()
-      tf.contrib.summary.scalar('global_step', global_step)
+      # tf.contrib.summary.scalar('global_step', global_step)
 
       tf.contrib.summary.histogram('train_loss', loss)
-      tf.contrib.summary.histogram('logits', logits)
+      reg_to_summarize(loss)
+      # tf.contrib.summary.histogram('logits', logits)
 
-      for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
-        class_labels = tf.cast(tf.equal(labels, class_id), tf.int32) # ~~~~~~~~~~~
-        class_preds = tf.cast(tf.equal(preds, class_id), tf.int32)
+      # for class_name, class_id in AV_OBJ_CLASS_NAME_TO_ID.items():
+      #   class_labels = tf.cast(tf.equal(labels, class_id), tf.int32) # ~~~~~~~~~~~
+      #   class_preds = tf.cast(tf.equal(preds, class_id), tf.int32)
 
-        tf.contrib.summary.scalar('train_labels_support/' + class_name, tf.reduce_sum(class_labels))
-        tf.contrib.summary.scalar('train_preds_support/' + class_name, tf.reduce_sum(class_preds))
-        tf.contrib.summary.histogram('train_labels_support_dist/' + class_name, class_labels)
-        tf.contrib.summary.histogram('train_preds_support_dist/' + class_name, class_preds)
+      #   tf.contrib.summary.scalar('train_labels_support/' + class_name, tf.reduce_sum(class_labels))
+      #   tf.contrib.summary.scalar('train_preds_support/' + class_name, tf.reduce_sum(class_preds))
+      #   tf.contrib.summary.histogram('train_labels_support_dist/' + class_name, class_labels)
+      #   tf.contrib.summary.histogram('train_preds_support_dist/' + class_name, class_preds)
 
-        class_true = tf.boolean_mask(features, class_labels)
-        class_pred = tf.boolean_mask(features, class_preds)
-        tf.contrib.summary.image('train_true/' + class_name, class_true, max_images=10)
-        tf.contrib.summary.image('train_pred/' + class_name, class_pred, max_images=10)
+      #   class_true = tf.boolean_mask(features, class_labels)
+      #   class_pred = tf.boolean_mask(features, class_preds)
+      #   tf.contrib.summary.image('train_true/' + class_name, class_true, max_images=10)
+      #   tf.contrib.summary.image('train_pred/' + class_name, class_pred, max_images=10)
+
+      summ_name_tensor = sorted(tensors_to_summarize.items())
+      summ_names = [n for n, t in summ_name_tensor]
+      def host_call_fn(*args):
+        # Host call fns are executed FLAGS.iterations_per_loop times after one
+        # TPU loop is finished, setting max_queue value to the same as number of
+        # iterations will make the summary writer only flush the data to storage
+        # once per loop.
+        with (tf.contrib.summary.create_file_writer(
+            self.params.GS_MODEL_DIR,
+            max_queue=10).as_default()):
+          with tf.contrib.summary.always_record_summaries():
+            for prefix, v in zip(summ_names, args):
+              # Hack of `util.tf_variable_summaries()` for TPUs
+              with tf.variable_scope(prefix):
+                mean = tf.reduce_mean(v)
+                tf.contrib.summary.scalar('mean', mean)
+                with tf.name_scope('stddev'):
+                  stddev = tf.sqrt(tf.reduce_mean(tf.square(v - mean)))
+                tf.contrib.summary.scalar('stddev', stddev)
+                tf.contrib.summary.scalar('max', tf.reduce_max(v))
+                tf.contrib.summary.scalar('min', tf.reduce_min(v))
+                tf.contrib.summary.histogram('histogram', v)
+            return tf.contrib.summary.all_summary_ops()
+
+      # To log the loss, current learning rate, and epoch for Tensorboard, the
+      # summary op needs to be run on the host CPU via host_call. host_call
+      # expects [batch_size, ...] Tensors, thus reshape to introduce a batch
+      # dimension. These Tensors are implicitly concatenated to
+      # [params['batch_size']].
+      tensors_to_summarize = [
+        tf.cast(tf.reshape(t, [1, -1]), tf.float32) for _, t in summ_name_tensor
+      ]
 
       return tf.contrib.tpu.TPUEstimatorSpec(
       # return tf.estimator.EstimatorSpec(
           mode=tf.estimator.ModeKeys.TRAIN,
           loss=loss,
+          host_call=(host_call_fn, tensors_to_summarize),
           train_op=optimizer.minimize(loss, global_step))
 
     elif mode == tf.estimator.ModeKeys.EVAL:
@@ -816,6 +866,8 @@ class model_fn_simple_ff(object):
     self.params = au_params
   
   def __call__(self, features, labels, mode, params):
+
+    tf.contrib.summary.always_record_summaries()
 
     features.set_shape([None, 170, 170, 3]) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     labels.set_shape([None,])
@@ -977,7 +1029,7 @@ def main_tpu():
   import time
   model_dir = 'gs://au2018-3/avmobilenet_tpu_test/test_%s' % time.time()
 
-  tf.logging.set_verbosity(tf.logging.DEBUG)
+  tf.logging.set_verbosity(tf.logging.INFO)
 
   tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
     coordinator_name='coordinator')
@@ -990,9 +1042,9 @@ def main_tpu():
 
   # import pdb; pdb.set_trace()
 
-  TPU_ITERATIONS = 100
-  BATCH_SIZE = 256
-  TPU_CORES = 8
+  TPU_ITERATIONS = 10
+  BATCH_SIZE = 4096
+  # TPU_CORES = 8
   # train_distribution = tf.contrib.distribute.TPUStrategy(
   #     tpu_cluster_resolver, steps_per_run=BATCH_SIZE * TPU_CORES)
   config = tf.contrib.tpu.RunConfig(
@@ -1010,6 +1062,7 @@ def main_tpu():
 
   from au.fixtures.tf.mobilenet import Mobilenet
   params = Mobilenet.Medium()
+  params.GS_MODEL_DIR = model_dir
   # params.BATCH_SIZE = BATCH_SIZE
   av_classifier = tf.contrib.tpu.TPUEstimator(
     model_fn=model_fn_simple_ff_tpu(params),
@@ -1064,10 +1117,10 @@ def main_tpu():
         
         # train_ds = train_ds.cache()
         
-        train_ds = train_ds.shuffle(4000)
+        train_ds = train_ds.shuffle(8000)
         train_ds = train_ds.batch(BATCH_SIZE)
         train_ds = set_shapes(train_ds)
-        train_ds = train_ds.prefetch(tf.contrib.data.AUTOTUNE)
+        train_ds = train_ds.prefetch(10)#tf.contrib.data.AUTOTUNE)
         
         source_dataset = train_ds
         source_iterator = train_ds.make_one_shot_iterator()
