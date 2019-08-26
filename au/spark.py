@@ -648,7 +648,7 @@ def spark_df_to_tf_dataset(
     if num_reader_threads < 1:
       import multiprocessing
       num_reader_threads = multiprocessing.cpu_count()
-    num_reader_threads = 2
+    num_reader_threads = 4
     df = spark_df
 
     # Each Tensorflow reader thread will read a single Spark partition

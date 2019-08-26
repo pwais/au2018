@@ -991,7 +991,7 @@ def main_tpu():
   # import pdb; pdb.set_trace()
 
   TPU_ITERATIONS = 100
-  BATCH_SIZE = 8
+  BATCH_SIZE = 256
   TPU_CORES = 8
   # train_distribution = tf.contrib.distribute.TPUStrategy(
   #     tpu_cluster_resolver, steps_per_run=BATCH_SIZE * TPU_CORES)
@@ -1064,10 +1064,10 @@ def main_tpu():
         
         # train_ds = train_ds.cache()
         
-        train_ds = train_ds.shuffle(BATCH_SIZE * 8 * 10)
+        train_ds = train_ds.shuffle(4000)
         train_ds = train_ds.batch(BATCH_SIZE)
         train_ds = set_shapes(train_ds)
-        train_ds = train_ds.prefetch(10)#tf.contrib.data.AUTOTUNE)
+        train_ds = train_ds.prefetch(tf.contrib.data.AUTOTUNE)
         
         source_dataset = train_ds
         source_iterator = train_ds.make_one_shot_iterator()
