@@ -974,7 +974,7 @@ def main_tpu():
 
 
   tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
-    os.environ['TPU_NAME'])
+    tpu=os.environ['TPU_NAME'])
   
   TPU_ITERATIONS = 100
   BATCH_SIZE = 64
@@ -997,10 +997,13 @@ def main_tpu():
   from au.fixtures.tf.mobilenet import Mobilenet
   params = Mobilenet.Medium()
   # params.BATCH_SIZE = BATCH_SIZE
-  av_classifier = tf.estimator.Estimator(
+  av_classifier = tf.contrib.tpu.TPUEstimator(
     model_fn=model_fn_simple_ff_tpu(params),
     params=None,
-    config=config)
+    config=config,
+    train_batch_size=BATCH_SIZE,
+    eval_batch_size=BATCH_SIZE,
+    predict_batch_size=BATCH_SIZE)
 
   with Spark.getOrCreate() as spark:
     
@@ -1048,7 +1051,7 @@ def main_tpu():
       eval_ds = spark_df_to_tf_dataset(edf, to_example, (tf.float32, tf.int32), logging_name='test')
       
       eval_ds = eval_ds.batch(BATCH_SIZE)
-      traieval_dsn_ds = set_shapes(eval_ds)
+      eval_ds = set_shapes(eval_ds)
 
       eval_ds = eval_ds.take(100)
 
@@ -1063,20 +1066,20 @@ def main_tpu():
       time.sleep(120)
       while is_training[0]:
         util.log.info("Running eval ...")
-        eval_config = config.replace(session_config=util.tf_cpu_session_config())
-        eval_av_classifier = tf.estimator.Estimator(
-                                model_fn=model_fn(params),
-                                params=None,
-                                config=eval_config)
-        eval_results = eval_av_classifier.evaluate(input_fn=eval_input_fn)#, hooks=[summary_hook])
-        util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+        # eval_config = config.replace(session_config=util.tf_cpu_session_config())
+        # eval_av_classifier = tf.estimator.Estimator(
+        #                         model_fn=model_fn(params),
+        #                         params=None,
+        #                         config=eval_config)
+        # eval_results = eval_av_classifier.evaluate(input_fn=eval_input_fn)#, hooks=[summary_hook])
+        # util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
     
     import threading
     eval_thread = threading.Thread(target=run_eval)
     # eval_thread.start()
 
     for t in range(TRAIN_EPOCHS):
-      av_classifier.train(input_fn=train_input_fn)
+      av_classifier.train(input_fn=train_input_fn, max_steps=int(1e7))
       
       #, hooks=train_hooks)
       # if t % 10 == 0 or t >= TRAIN_EPOCHS - 1:
