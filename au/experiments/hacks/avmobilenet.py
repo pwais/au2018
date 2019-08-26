@@ -663,6 +663,28 @@ class model_fn_simple_ff_tpu(object):
                             is_training=is_training,
                             depth_multiplier=self.params.DEPTH_MULTIPLIER,
                             finegrain_classification_mode=self.params.FINE)
+      
+      # TODO: use keras or be picky about variables to restore
+      # def scaffold_fn():
+      #   """Loads pretrained model through scaffold function."""
+        
+      #   # Per authors: Restore using exponential moving average since it produces
+      #   # (1.5-2%) higher accuracy
+      #   ema = tf.train.ExponentialMovingAverage(0.999)
+      #   vs = ema.variables_to_restore()
+
+      #   import os
+      #   util.download(
+      #     self.params.CHECKPOINT_TARBALL_URI,
+      #     self.params.MODEL_BASEDIR)
+      #   checkpoint = os.path.join(
+      #     self.params.MODEL_BASEDIR,
+      #     self.params.CHECKPOINT + '.ckpt')
+        
+      #   tf.train.init_from_checkpoint(
+      #     checkpoint, {'MobilenetV2/' : 'MobilenetV2/'})
+      #   return tf.train.Scaffold()
+      scaffold_fn = None
     
     # Downweight background class
     class_weights = np.ones(len(AV_OBJ_CLASS_NAME_TO_ID))
@@ -773,7 +795,8 @@ class model_fn_simple_ff_tpu(object):
           mode=tf.estimator.ModeKeys.TRAIN,
           loss=loss,
           host_call=(host_call_fn, tensors_to_summarize),
-          train_op=optimizer.minimize(loss, global_step))
+          train_op=optimizer.minimize(loss, global_step),
+          scaffold_fn=scaffold_fn)
 
     elif mode == tf.estimator.ModeKeys.EVAL:
       
@@ -1042,7 +1065,7 @@ def main_tpu():
 
   # import pdb; pdb.set_trace()
 
-  TPU_ITERATIONS = 10
+  TPU_ITERATIONS = 50
   BATCH_SIZE = 4096
   # TPU_CORES = 8
   # train_distribution = tf.contrib.distribute.TPUStrategy(
@@ -1083,8 +1106,8 @@ def main_tpu():
 
   with Spark.getOrCreate() as spark:
     
-    df = spark.read.parquet('cache/data/argoverse_cropped_object_170_170/')
-    # df = spark.read.parquet('gs://au2018-3/crops_full/argoverse_cropped_object_170_170')
+    # df = spark.read.parquet('cache/data/argoverse_cropped_object_170_170/')
+    df = spark.read.parquet('gs://au2018-3/crops_full/argoverse_cropped_object_170_170')
     # partition discovery is quite slow!!!!!!! :( ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # print('num images', df.count())
 
@@ -1093,8 +1116,8 @@ def main_tpu():
       from io import BytesIO
       img = imageio.imread(BytesIO(row.jpeg_bytes))
       label = AV_OBJ_CLASS_NAME_TO_ID[row.category_name]
-      # For tpu
-      img = img.astype(float)
+      # # For tpu
+      # img = img.astype(float)
       return img, label
     
     # TPU Estimator needs static shapes :P
@@ -1113,14 +1136,18 @@ def main_tpu():
     tdf = df.filter(df.split == 'train')
     def train_input_fn(params=None):
       with tf.device('/job:coordinator/task:0'):
-        train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.float32, tf.int32), logging_name='train')
+        train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int32), logging_name='train')
         
+        def to_bfloat(images, labels):
+          images = tf.cast(images, tf.bfloat16)
+          return images, labels
+        train_ds = train_ds.map(to_bfloat)
         # train_ds = train_ds.cache()
         
         train_ds = train_ds.shuffle(8000)
         train_ds = train_ds.batch(BATCH_SIZE)
         train_ds = set_shapes(train_ds)
-        train_ds = train_ds.prefetch(10)#tf.contrib.data.AUTOTUNE)
+        train_ds = train_ds.prefetch(tf.contrib.data.AUTOTUNE)
         
         source_dataset = train_ds
         source_iterator = train_ds.make_one_shot_iterator()
@@ -1175,6 +1202,65 @@ def main_tpu():
         output_dataset = set_shapes(output_dataset)
 
       return output_dataset
+
+
+      """
+      Thruput from code above looks to use about 50% of network capacity ?
+      https://blog.serverdensity.com/network-performance-aws-google-rackspace-softlayer/
+      estimated 3gigbit in us-central-1a
+
+      Could be bottlnecked on TPU RPC endpoint; Tensorflow reports
+      350-415 examples per second no matter how we tune Spark parallelism.
+
+      To get max I/O, likely need to use ops that can run on worker machine.
+
+      with float32 images batch size 4096
+      2019-08-26 07:52:19,800 au   29574 : Progress for 
+      train
+      -------------------  ----------------------------------------------
+      Thruput
+      N thru               2762966
+      N chunks             56
+      total time           2 hours and 3.02 seconds
+      total thru           1.92 TB
+      rate                 266.06 MB / sec
+      Hz                   383.58443542574645
+      Progress
+      Percent complete     56.02906977215781
+      ETA                  1 hour, 34 minutes and 12.84 seconds
+      Latency (per chunk)
+      avg                  2 minutes, 8 seconds and 625.34 milliseconds
+      p50                  18 seconds and 211.27 milliseconds
+      p95                  14 minutes, 32 seconds and 33.23 milliseconds
+      p99                  17 minutes, 13 seconds and 954.11 milliseconds
+      -------------------  ----------------------------------------------
+
+
+      with bfloat16 images; looks tpu bound! CPU sits idle sometimes on 
+      coodinator.  batch size 4096
+      INFO:tensorflow:global_step/sec: 0.124113
+      INFO:tensorflow:examples/sec: 508.366
+      2019-08-26 09:23:34,392 au   6879 : Progress for
+      train
+      -------------------  ----------------------------------------------
+      Thruput
+      N thru               2368435
+      N chunks             48
+      total time           1 hour, 14 minutes and 11.86 seconds
+      total thru           205.4 GB
+      rate                 46.14 MB / sec
+      Hz                   532.0107497600044
+      Progress
+      Percent complete     48.0285352283816
+      ETA                  1 hour, 20 minutes and 17.33 seconds
+      Latency (per chunk)
+      avg                  1 minute, 32 seconds and 746.99 milliseconds
+      p50                  7 seconds and 331.97 milliseconds
+      p95                  11 minutes, 10 seconds and 406.4 milliseconds
+      p99                  12 minutes, 10 seconds and 253.85 milliseconds
+      -------------------  ----------------------------------------------
+
+      """
 
 
         # tf.add_to_collection(tf.GraphKeys.TABLE_INITIALIZERS,

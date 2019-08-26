@@ -684,7 +684,7 @@ def spark_df_to_tf_dataset(
           # Careful! This can be a linear scan :(
         rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
         util.log.info("Reading partition %s " % pid)#had %s rows" % (pid, len(rows)))
-        t = util.ThruputObserver(name='Partition %s' % pid)
+        t = util.ThruputObserver(name='Partition %s' % pid, log_on_del=True)
         t.start_block()
         for row in rows:
           yield row
