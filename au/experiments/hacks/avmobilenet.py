@@ -630,8 +630,9 @@ class model_fn_simple_ff_tpu(object):
     # features.set_shape([None, 170, 170, 3]) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # labels.set_shape([None,])
 
-    # with tf.device('/cpu:0'):
-    obs_str_tensor = util.ThruputObserver.monitoring_tensor('features', features)
+    
+    # obs_str_tensor = util.ThruputObserver.monitoring_tensor('features', features)
+    # just not supported on TPU ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     features = tf.cast(features, tf.float32) / 128. - 1
 
@@ -653,6 +654,7 @@ class model_fn_simple_ff_tpu(object):
     class_weights = np.ones(len(AV_OBJ_CLASS_NAME_TO_ID))
     class_weights[0] *= .1
     class_weights /= class_weights.sum()
+    class_weights = tf.cast(class_weights, tf.float32)
 
     weights = tf.gather(class_weights, labels)
 
@@ -670,7 +672,8 @@ class model_fn_simple_ff_tpu(object):
           'classes': preds, #tf.argmax(logits, axis=1),
           'probabilities': tf.nn.softmax(logits),
       }
-      return tf.estimator.EstimatorSpec(
+      return tf.contrib.tpu.TPUEstimatorSpec(
+      # return tf.estimator.EstimatorSpec(
           mode=tf.estimator.ModeKeys.PREDICT,
           predictions=predictions,
           export_outputs={
@@ -680,7 +683,7 @@ class model_fn_simple_ff_tpu(object):
       LEARNING_RATE = 1e-4
       
       optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
-
+      optimizer = tf.contrib.tpu.CrossShardOptimizer(optimizer)
       # If we are running multi-GPU, we need to wrap the optimizer.
       #if params_dict.get('multi_gpu'):
       # optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
@@ -716,7 +719,8 @@ class model_fn_simple_ff_tpu(object):
         tf.contrib.summary.image('train_true/' + class_name, class_true, max_images=10)
         tf.contrib.summary.image('train_pred/' + class_name, class_pred, max_images=10)
 
-      return tf.estimator.EstimatorSpec(
+      return tf.contrib.tpu.TPUEstimatorSpec(
+      # return tf.estimator.EstimatorSpec(
           mode=tf.estimator.ModeKeys.TRAIN,
           loss=loss,
           train_op=optimizer.minimize(loss, global_step))
@@ -769,7 +773,8 @@ class model_fn_simple_ff_tpu(object):
       #       scaffold=tf.train.Scaffold(summary_op=tf.contrib.summary.merge_all()))
       hooks = [logging_hook]#, summary_hook]
 
-      return tf.estimator.EstimatorSpec(
+      return tf.contrib.tpu.TPUEstimatorSpec(
+      # return tf.estimator.EstimatorSpec(
           mode=tf.estimator.ModeKeys.EVAL,
           loss=loss,
           eval_metric_ops=eval_metric_ops,
@@ -972,15 +977,24 @@ def main_tpu():
   import time
   model_dir = 'gs://au2018-3/avmobilenet_tpu_test/test_%s' % time.time()
 
+  tf.logging.set_verbosity(tf.logging.DEBUG)
 
   tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
-    tpu=os.environ['TPU_NAME'])
+    coordinator_name='coordinator')
+    # tpu=str(os.environ['TPU_NAME']))
   
+  # from tensorflow.python.training import server_lib
+  # coord = server_lib.Server.create_local_server()
+  # coord = tf.train.ClusterSpec({
+  #   "coordinator": ["localhost:2222", "localhost:2223"]})
+
+  # import pdb; pdb.set_trace()
+
   TPU_ITERATIONS = 100
-  BATCH_SIZE = 64
+  BATCH_SIZE = 8
   TPU_CORES = 8
-  train_distribution = tf.contrib.distribute.TPUStrategy(
-      tpu_cluster_resolver, steps_per_run=BATCH_SIZE * TPU_CORES)
+  # train_distribution = tf.contrib.distribute.TPUStrategy(
+  #     tpu_cluster_resolver, steps_per_run=BATCH_SIZE * TPU_CORES)
   config = tf.contrib.tpu.RunConfig(
       model_dir=model_dir,
       save_summary_steps=10,
@@ -989,9 +1003,9 @@ def main_tpu():
       cluster=tpu_cluster_resolver,
       session_config=tf.ConfigProto(
           allow_soft_placement=True, log_device_placement=True),
-      train_distribute=train_distribution,
-      eval_distribute=train_distribution)
-      # tpu_config=tf.contrib.tpu.TPUConfig(TPU_ITERATIONS))
+      # train_distribute=train_distribution,
+      # eval_distribute=train_distribution)
+      tpu_config=tf.contrib.tpu.TPUConfig(TPU_ITERATIONS))
 
 
   from au.fixtures.tf.mobilenet import Mobilenet
@@ -999,11 +1013,20 @@ def main_tpu():
   # params.BATCH_SIZE = BATCH_SIZE
   av_classifier = tf.contrib.tpu.TPUEstimator(
     model_fn=model_fn_simple_ff_tpu(params),
+    use_tpu=True,
     params=None,
     config=config,
     train_batch_size=BATCH_SIZE,
     eval_batch_size=BATCH_SIZE,
     predict_batch_size=BATCH_SIZE)
+  # av_classifier = tf.estimator.Estimator(
+  #   model_fn=model_fn_simple_ff_tpu(params),
+  #   # use_tpu=True,
+  #   params=None,
+  #   config=config)
+  #   # train_batch_size=BATCH_SIZE,
+  #   # eval_batch_size=BATCH_SIZE,
+  #   # predict_batch_size=BATCH_SIZE)
 
   with Spark.getOrCreate() as spark:
     
@@ -1035,19 +1058,81 @@ def main_tpu():
       
 
     tdf = df.filter(df.split == 'train')
-    def train_input_fn():
-      train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.float32, tf.int32), logging_name='train')
-      
-      # train_ds = train_ds.cache()
-      
-      train_ds = train_ds.shuffle(100)
-      train_ds = train_ds.batch(BATCH_SIZE)
-      train_ds = set_shapes(train_ds)
-      
-      return train_ds
+    def train_input_fn(params=None):
+      with tf.device('/job:coordinator/task:0'):
+        train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.float32, tf.int32), logging_name='train')
+        
+        # train_ds = train_ds.cache()
+        
+        train_ds = train_ds.shuffle(BATCH_SIZE * 8 * 10)
+        train_ds = train_ds.batch(BATCH_SIZE)
+        train_ds = set_shapes(train_ds)
+        train_ds = train_ds.prefetch(10)#tf.contrib.data.AUTOTUNE)
+        
+        source_dataset = train_ds
+        source_iterator = train_ds.make_one_shot_iterator()
+        source_handle = source_iterator.string_handle()
+
+
+      # https://github.com/tensorflow/tensorflow/blob/76f23b3b751150a2a81012925100bb08e406ab47/tensorflow/python/tpu/datasets.py#L51
+      from tensorflow.python.data.experimental.ops import batching
+      from tensorflow.python.data.experimental.ops import interleave_ops
+      from tensorflow.python.data.ops import dataset_ops
+      from tensorflow.python.data.ops import iterator_ops
+      from tensorflow.python.data.ops import readers
+      from tensorflow.python.framework import dtypes
+      from tensorflow.python.framework import function
+      from tensorflow.python.framework import ops
+      from tensorflow.python.ops import functional_ops
+      @function.Defun(dtypes.string)
+      def LoadingFunc(h):
+        remote_iterator = iterator_ops.Iterator.from_string_handle(
+            h, dataset_ops.get_legacy_output_types(source_dataset),
+            dataset_ops.get_legacy_output_shapes(source_dataset))
+        return remote_iterator.get_next()
+
+      def MapFn(unused_input):
+        source_dataset_output_types = dataset_ops.get_legacy_output_types(
+            source_dataset)
+        if isinstance(source_dataset_output_types, dtypes.DType):
+          output_types = [source_dataset_output_types]
+        elif isinstance(source_dataset_output_types, (list, tuple)):
+          output_types = source_dataset_output_types
+        else:
+          raise ValueError('source dataset has invalid output types')
+        remote_calls = functional_ops.remote_call(
+            args=[source_handle],
+            Tout=output_types,
+            f=LoadingFunc,
+            target='/job:%s/replica:0/task:0/cpu:0' % 'coordinator')
+        if len(remote_calls) == 1:
+          return remote_calls[0]
+        else:
+          return remote_calls
+
+      with ops.device('/job:%s' % 'worker'):
+        output_dataset = dataset_ops.Dataset.range(2).repeat().map(
+            MapFn, num_parallel_calls=4)
+        output_dataset = output_dataset.prefetch(1)
+
+        
+        # Undo the batching used during the transfer.
+        # output_dataset = output_dataset.apply(batching.unbatch()).prefetch(1)
+        
+        output_dataset = set_shapes(output_dataset)
+
+      return output_dataset
+
+
+        # tf.add_to_collection(tf.GraphKeys.TABLE_INITIALIZERS,
+        #                      iterator.initializer)
+        # batch = iterator.get_next()
+        # return batch
+
+        # return train_ds
 
     edf = df.filter(df.split == 'val')
-    def eval_input_fn():
+    def eval_input_fn(params=None):
       eval_ds = spark_df_to_tf_dataset(edf, to_example, (tf.float32, tf.int32), logging_name='test')
       
       eval_ds = eval_ds.batch(BATCH_SIZE)
