@@ -4,6 +4,15 @@ import numpy as np
 
 from au.plotting import hash_to_rbg
 
+class Transform(object):
+  """An SE(3) / ROS Transform-like object"""
+
+  __slots__ = ('rotation', 'translation')
+  
+  def __init__(self, **kwargs):
+    for k in self.__slots__:
+      setattr(self, k, kwargs.get(k))
+
 class BBox(object):
   """An object in an image; in particular, an (ideally amodal) bounding box
   surrounding the object.  May include additional context."""

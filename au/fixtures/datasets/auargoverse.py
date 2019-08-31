@@ -72,11 +72,6 @@ RIDER = ["BICYCLIST", "MOTORCYCLIST"]
 class MissingPose(ValueError):
   pass
 
-# def stable_hash(x):
-#   # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
-#   import hashlib
-#   return int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
-
 def get_image_width_height(camera):
   from argoverse.utils import camera_stats
   if camera in camera_stats.RING_CAMERA_LIST:
@@ -188,6 +183,7 @@ class BBox(common.BBox):
       'cuboid_pts',         # In robot ego frame
       'cuboid_pts_image',   # In image space
       'ego_to_obj',         # Translation vector in ego frame
+      'city_to_ego',        # Transform of car / pose in city frame
     ]
   )
 
@@ -321,6 +317,10 @@ class BBox(common.BBox):
         bbox.relative_yaw_radians + camera_yaw) % (2. * math.pi)
 
       bbox.ego_to_obj = object_label_record.translation
+      city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
+      bbox.city_to_ego = common.Transform(
+                            rotation=city_to_ego_se3.rotation,
+                            translation=city_to_ego_se3.translation)
 
     def fill_bbox_core(bbox):
       bbox.category_name = object_label_record.label_class
@@ -582,14 +582,14 @@ class HardNegativeMiner(object):
   @staticmethod
   def create_miner(camera, *miner_args):
 
-    class RingMiner(HardNegativeMiner):
+    class RingCameraMiner(HardNegativeMiner):
       # We could perhaps choose these using camera intrinsics, but instead
       # we use the empircal distributon from existing annotations
       # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
       WIDTH_PIXELS_MU_STD = (111.894619, 128.690585)
       HEIGHT_PIXELS_MU_STD = (92.435195, 119.881747)
 
-    class StereoMiner(HardNegativeMiner):
+    class StereoCameraMiner(HardNegativeMiner):
       # We could perhaps choose these using camera intrinsics, but instead
       # we use the empircal distributon from existing annotations
       # See cache/data/argoverse/index/image_annos/Size_stats_by_Camera.html
@@ -598,9 +598,9 @@ class HardNegativeMiner(object):
 
     from argoverse.utils import camera_stats
     if camera in camera_stats.RING_CAMERA_LIST:
-      return RingMiner(*miner_args)
+      return RingCameraMiner(*miner_args)
     elif camera in camera_stats.STEREO_CAMERA_LIST:
-      return StereoMiner(*miner_args)
+      return StereoCameraMiner(*miner_args)
     else:
       raise ValueError("Unknown camera: %s" % camera)
 
@@ -740,6 +740,13 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     except MissingPose:
       return cloud, False
 
+  def get_city_to_ego(self, timestamp):
+    city_to_ego = get_city_SE3_egovehicle_at_sensor_t(
+      timestamp, self.root_dir, self.current_log)
+    if city_to_ego is None:
+      raise MissingPose
+    return city_to_ego
+
   def get_motion_corrected_pts(self, pts, pts_timestamp, dest_timestamp):
     """Similar to project_lidar_to_img_motion_compensated(), but:
       * do not project to image
@@ -757,7 +764,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
                               self.root_dir,
                               self.current_log)
     if city_SE3_ego_dest_t is None:
-      raise MissingPose()
+      raise MissingPose
 
     # get transformation to bring point in egovehicle frame to city frame,
     # at the time when the LiDAR sweep was recorded.
@@ -766,7 +773,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
                               self.root_dir,
                               self.current_log)
     if city_SE3_ego_pts_t is None:
-      raise MissingPose()
+      raise MissingPose
     
     # Argoverse SE3 does not want homogenous coords
     pts = np.copy(pts)

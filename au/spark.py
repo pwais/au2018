@@ -214,6 +214,9 @@ class Spark(object):
       yield spark
 
   @staticmethod
+  def install
+
+  @staticmethod
   def archive_rdd(spark, path):
     fws = util.ArchiveFileFlyweight.fws_from(path)
     return spark.sparkContext.parallelize(fws)
@@ -514,7 +517,9 @@ class K8SSpark(Spark):
 
 class NumpyArrayUDT(types.UserDefinedType):
   """SQL User-Defined Type (UDT) for *opaque* numpy arrays.  Unlike Spark's
-  DenseVector, this class preserves array shape.
+  DenseVector, this class preserves array shape.  An unlike Spark's
+  DenseMatrix, this class supports arbitrary shape.  See also
+  pyspark.mllib.linalg.MatrixUDT.
 
   TODO: make an arbitrary pickleable wrapper ....
   """
@@ -524,6 +529,14 @@ class NumpyArrayUDT(types.UserDefinedType):
     # NB: this is actually an instance method in practice O_O !
     return types.StructType([
       types.StructField("np_bytes", types.BinaryType(), False)
+
+      # TODO: we'd like to make arrays more portable, but we need
+      # to infer the type of the numpy array values ...
+      # types.StructField("dtype_name", types.StringType(), False),
+      # types.StructField("shape",
+      #   types.ArrayType(types.IntegerType(), False), False),
+      # types.StructField("values",
+      #   types.ArrayType(  ???  , False), False),
     ])
 
   @classmethod
