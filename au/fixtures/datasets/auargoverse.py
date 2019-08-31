@@ -178,12 +178,14 @@ class BBox(common.BBox):
       'is_visible',
       'z',
 
-      # Has the ObjectLabelRecord been motion-corrected?
-      'motion_corrected',
+      'motion_corrected',   # Has the ObjectLabelRecord
+                            # been motion-corrected?
       'cuboid_pts',         # In robot ego frame
       'cuboid_pts_image',   # In image space
       'ego_to_obj',         # Translation vector in ego frame
-      'city_to_ego',        # Transform of car / pose in city frame
+      # 'city_to_ego',        # Transform of city to car
+      # 'ego_to_camera',      # Transform from car to camera frame
+      'obj_in_crop',        # Pose of object relative to a crop centered on it
     ]
   )
 
@@ -191,6 +193,8 @@ class BBox(common.BBox):
   def _adapt(v):
     if isinstance(v, np.ndarray):
       return NumpyArray(v)
+    # elif isinstance(v, common.Transform):
+    #   return dict((k, NumpyArray(v)) for k, v in v.to_dict().items()) # ~~~~~~~~~~~~~
     elif isinstance(v, NumpyArray):
       return v.arr
     else:
@@ -308,7 +312,7 @@ class BBox(common.BBox):
         float(np.min(np.linalg.norm(bbox.cuboid_pts, axis=-1)))
 
       from argoverse.utils.transform import quat2rotmat
-        # NB: must use quat2rotmat due to Argo-specific quaternions
+        # NB: must use quat2rotmat due to Argo-specific quaternion encoding
       rotmat = quat2rotmat(object_label_record.quaternion)
       bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
 
@@ -318,9 +322,31 @@ class BBox(common.BBox):
 
       bbox.ego_to_obj = object_label_record.translation
       city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
-      bbox.city_to_ego = common.Transform(
-                            rotation=city_to_ego_se3.rotation,
-                            translation=city_to_ego_se3.translation)
+      # bbox.city_to_ego = common.Transform(
+      #                       rotation=city_to_ego_se3.rotation,
+      #                       translation=city_to_ego_se3.translation) ~~~~~~~~~~
+      
+      from scipy.spatial.transform import Rotation as R
+      # bbox.ego_to_camera = common.Transform(
+      #                         rotation=R.from_dcm(calib.R).as_quat(),
+      #                         translation=calib.T) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      
+      # Compute object pose relative to camera view; this is the object's
+      # pose relative to a crop of the image.
+      obj_from_cam = (
+        object_label_record.translation - calib.T)
+      obj_t_x, obj_t_y, obj_t_z = obj_from_cam 
+      
+      yaw = R.from_euler('z', math.atan2(obj_t_y, obj_t_x))
+      pitch = R.from_euler('y', math.atan2(obj_t_x, obj_t_z))
+      roll = R.from_euler('x', R.from_dcm(calib.R).as_euler('xyz')[0])
+        # Use camera roll; don't roll the camera when "pointing it" at obj
+      
+      obj_from_ray_R = (yaw * pitch * roll)
+
+      obj_in_cam_ray = R.from_dcm(rotmat) * obj_from_ray_R.inv()
+      bbox.obj_in_crop = obj_in_cam_ray.as_euler('zyx')
+                                # yaw, pitch, roll
 
     def fill_bbox_core(bbox):
       bbox.category_name = object_label_record.label_class
@@ -741,10 +767,14 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       return cloud, False
 
   def get_city_to_ego(self, timestamp):
+    from argoverse.data_loading.pose_loader import \
+      get_city_SE3_egovehicle_at_sensor_t
+    
     city_to_ego = get_city_SE3_egovehicle_at_sensor_t(
       timestamp, self.root_dir, self.current_log)
     if city_to_ego is None:
       raise MissingPose
+    
     return city_to_ego
 
   def get_motion_corrected_pts(self, pts, pts_timestamp, dest_timestamp):
@@ -1562,7 +1592,7 @@ class AnnoReports(object):
 class CroppedObjectImageTable(dataset.ImageTable):
 
   # Center the object in a viewport of this size (pixels)
-  VIEWPORT_WH = (170, 170)
+  VIEWPORT_WH = (270, 270)#(170, 170)
   
   # Pad the object by this many pixels against the viewport edges
   PADDING_PIXELS = 20
@@ -1618,10 +1648,10 @@ class CroppedObjectImageTable(dataset.ImageTable):
     return df
 
   @classmethod
-  def to_html(cls, spark, limit=100, random_sample_seed=1337):
+  def to_html(cls, spark, limit=500, random_sample_seed=1337):
     df = cls.as_imagerow_df(spark)
     if random_sample_seed is not None:
-      fraction_approx = float(limit) / df.count()
+      fraction_approx = min(1.0, float(limit) / df.count())
       df = df.sample(
                 withReplacement=False,
                 fraction=fraction_approx + .1,
@@ -1641,11 +1671,20 @@ class CroppedObjectImageTable(dataset.ImageTable):
           util.log.error("Failed to encode image bytes %s" % (e,))
       return v
 
+    # The HTML page will be very wide; move these cols to the left (no scroll)
+    # COLS = [
+    #   'category_name',
+    #   'jpeg_bytes',
+    #   'debug_jpeg_bytes',
+    #   'camera',
+    # ]
     COLS = [
-      'category_name',
       'jpeg_bytes',
       'debug_jpeg_bytes',
       'camera',
+      'relative_yaw_radians',
+      'relative_yaw_to_camera_radians',
+      'obj_in_crop',
     ]
     other_cols = set(pdf.columns) - set(COLS)
     pdf = pdf.reindex(columns=COLS + list(sorted(other_cols)))
@@ -1804,8 +1843,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
   @classmethod
   def __save_df(cls, crop_df):
     crop_df.write.parquet(
-      '/outer_root/media/seagates-ext4/au_datas/table_save/' + cls.TABLE_NAME,
-      #cls.table_root(),
+      cls.table_root(),
       partitionBy=['split', 'shard'],
       compression='snappy') # TODO pyarrow / lz4
     util.log.info("Wrote to %s" % cls.table_root())

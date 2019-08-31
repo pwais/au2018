@@ -7,11 +7,16 @@ from au.plotting import hash_to_rbg
 class Transform(object):
   """An SE(3) / ROS Transform-like object"""
 
-  __slots__ = ('rotation', 'translation')
+  slots__ = ('rotation', 'translation')
   
   def __init__(self, **kwargs):
-    for k in self.__slots__:
+    for k in self.slots__:
       setattr(self, k, kwargs.get(k))
+
+  def to_dict(self):
+    return dict(
+      (k, getattr(self, k, None))
+      for k in self.slots__)
 
 class BBox(object):
   """An object in an image; in particular, an (ideally amodal) bounding box

@@ -214,9 +214,6 @@ class Spark(object):
       yield spark
 
   @staticmethod
-  def install
-
-  @staticmethod
   def archive_rdd(spark, path):
     fws = util.ArchiveFileFlyweight.fws_from(path)
     return spark.sparkContext.parallelize(fws)
