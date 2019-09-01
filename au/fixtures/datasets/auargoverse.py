@@ -183,9 +183,11 @@ class BBox(common.BBox):
       'cuboid_pts',         # In robot ego frame
       'cuboid_pts_image',   # In image space
       'ego_to_obj',         # Translation vector in ego frame
-      # 'city_to_ego',        # Transform of city to car
+      'city_to_ego',        # Transform of city to car
       # 'ego_to_camera',      # Transform from car to camera frame
       'obj_in_crop',        # Pose of object relative to a crop centered on it
+      'obj_in_crop_debug',
+      'obj_in_crop_xyz',
     ]
   )
 
@@ -311,11 +313,14 @@ class BBox(common.BBox):
       bbox.distance_meters = \
         float(np.min(np.linalg.norm(bbox.cuboid_pts, axis=-1)))
 
+      from scipy.spatial.transform import Rotation as R
       from argoverse.utils.transform import quat2rotmat
-        # NB: must use quat2rotmat due to Argo-specific quaternion encoding
       rotmat = quat2rotmat(object_label_record.quaternion)
-      bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
-
+        # NB: must use quat2rotmat due to Argo-specific quaternion encoding
+      # bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
+      bbox.relative_yaw_radians = float(R.from_dcm(rotmat).as_euler('zxy')[0])
+        # Tait–Bryan?  ... But y in Argoverse is to the left?
+      
       camera_yaw = math.atan2(calib.R[2, 1], calib.R[1, 1])
       bbox.relative_yaw_to_camera_radians = (
         bbox.relative_yaw_radians + camera_yaw) % (2. * math.pi)
@@ -325,28 +330,46 @@ class BBox(common.BBox):
       # bbox.city_to_ego = common.Transform(
       #                       rotation=city_to_ego_se3.rotation,
       #                       translation=city_to_ego_se3.translation) ~~~~~~~~~~
-      
+      bbox.city_to_ego = city_to_ego_se3.translation
+
+
+      assert False, "need to check log_id maybe cam calibrations are diff axes"
+
+
       from scipy.spatial.transform import Rotation as R
       # bbox.ego_to_camera = common.Transform(
       #                         rotation=R.from_dcm(calib.R).as_quat(),
       #                         translation=calib.T) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-      
+
       # Compute object pose relative to camera view; this is the object's
       # pose relative to a crop of the image.
+      from argoverse.utils.se3 import SE3
+      ego_to_cam = SE3(rotation=calib.R, translation=calib.T).inverse()
+
       obj_from_cam = (
-        object_label_record.translation - calib.T)
+        object_label_record.translation - ego_to_cam.translation)
       obj_t_x, obj_t_y, obj_t_z = obj_from_cam 
       
-      yaw = R.from_euler('z', math.atan2(obj_t_y, obj_t_x))
-      pitch = R.from_euler('y', math.atan2(obj_t_x, obj_t_z))
-      roll = R.from_euler('x', R.from_dcm(calib.R).as_euler('xyz')[0])
+      yaw = R.from_euler('z', math.atan2(-obj_t_y, obj_t_x))
+      pitch = R.from_euler('y', math.atan2(obj_t_z, obj_t_x))
+      roll = R.from_euler('x', 
+        R.from_dcm(ego_to_cam.rotation).as_euler('zxy')[2] - math.pi / 2)
         # Use camera roll; don't roll the camera when "pointing it" at obj
+        # Also adjust camera roll for pi / 2 frame change that's embedded
+        # into calibration JSON
       
       obj_from_ray_R = (yaw * pitch * roll)
 
       obj_in_cam_ray = R.from_dcm(rotmat) * obj_from_ray_R.inv()
       bbox.obj_in_crop = obj_in_cam_ray.as_euler('zyx')
                                 # yaw, pitch, roll
+
+      bbox.obj_in_crop_debug = [
+        math.atan2(-obj_t_y, obj_t_x), # yaw
+        math.atan2(obj_t_z, obj_t_x), # pitch
+        float(R.from_dcm(ego_to_cam.rotation).as_euler('zxy')[2] - math.pi / 2) # roll
+      ]
+      bbox.obj_in_crop_xyz = [float(obj_t_x), float(obj_t_y), float(obj_t_z)]
 
     def fill_bbox_core(bbox):
       bbox.category_name = object_label_record.label_class
@@ -508,18 +531,14 @@ class AVFrame(object):
     if target_bbox:
       # Draw a highlight box first; then the draw() calls below will draw over
       # the box.
-      WHITE = (225, 225, 255)
-      target_bbox.draw_in_image(img, color=WHITE, thickness=20)
+      # WHITE = (225, 225, 255)
+      # target_bbox.draw_in_image(img, color=WHITE, thickness=20)
 
-    for bbox in self.image_bboxes:
+    # for bbox in self.image_bboxes:
+      bbox = target_bbox
       bbox.draw_cuboid_in_image(img)
-      bbox.draw_in_image(img)
+      # bbox.draw_in_image(img)
     
-    # if not self.viewport.is_full_image():
-    #   c, r, w, h = (
-    #     self.viewport.x, self.viewport.y,
-    #     self.viewport.width, self.viewport.height)
-    #   img = img[r:r+h, c:c+w, :]
     return img
 
   def get_cropped(self, bbox):
@@ -1612,6 +1631,8 @@ class CroppedObjectImageTable(dataset.ImageTable):
   TABLE_NAME = (
     'argoverse_cropped_object_%s_%s' % (VIEWPORT_WH[0], VIEWPORT_WH[1]))
 
+  DEBUG_CROP_HW = (500, 500)
+
   @classmethod
   def setup(cls, spark=None):
     if not util.missing_or_empty(cls.table_root()):
@@ -1651,10 +1672,10 @@ class CroppedObjectImageTable(dataset.ImageTable):
   def to_html(cls, spark, limit=500, random_sample_seed=1337):
     df = cls.as_imagerow_df(spark)
     if random_sample_seed is not None:
-      fraction_approx = min(1.0, float(limit) / df.count())
+      fraction_approx = np.clip(float(limit) / df.count(), 0.1, 1.0)
       df = df.sample(
                 withReplacement=False,
-                fraction=fraction_approx + .1,
+                fraction=fraction_approx,
                 seed=random_sample_seed)
     if limit and limit >= 1:
       df = df.limit(limit)
@@ -1683,8 +1704,9 @@ class CroppedObjectImageTable(dataset.ImageTable):
       'debug_jpeg_bytes',
       'camera',
       'relative_yaw_radians',
-      'relative_yaw_to_camera_radians',
       'obj_in_crop',
+      'obj_in_crop_debug',
+      'obj_in_crop_xyz',
     ]
     other_cols = set(pdf.columns) - set(COLS)
     pdf = pdf.reindex(columns=COLS + list(sorted(other_cols)))
@@ -1784,7 +1806,8 @@ class CroppedObjectImageTable(dataset.ImageTable):
         if and_debug:
           # Rescale debug image to save space
           crop_debug = cropped_frame.get_debug_image()
-          th, tw = aupl.get_hw_in_viewport(crop_debug.shape[:2], (300, 300))
+          th, tw = aupl.get_hw_in_viewport(
+                      crop_debug.shape[:2], cls.DEBUG_CROP_HW)
           crop_debug = cv2.resize(
             crop_debug, (tw, th), interpolation=cv2.INTER_NEAREST)
           row_out['debug_jpeg_bytes'] = bytearray(
