@@ -81,6 +81,101 @@ def get_image_width_height(camera):
   else:
     raise ValueError("Unknown camera: %s" % camera)
 
+def get_camera_normal(calib):
+  """Compute and return a 3d unit vector in the ego (car) frame that is
+  normal to the principal plane of the camera with Calibration `calib`.
+
+  In ROS land (e.g. a robot URDF), we typically give cameras two frames:
+  one for the physical device (whose frame axes semantically match
+  the robot's) and one for the CCD sensor (which typically has different
+  frame axes, e.g. Z is depth [out of the camera forward] instead of
+  height [or "up" in the robot frame]). This design allows us to
+  disambiguate the sensor's pose on the robot (as e.g. a human would
+  see the sensor) and the sensor's internal frame. Knowing the sensor's
+  pose can facilitate easy estimates of blindspots, calibration checks,
+  etc.
+
+  BARF: Unfortunately, Argoverse does not use this convention, and
+  instead their calibration confounds sensor pose and frame.  Moreover,
+  they appear to use different sensors on differnet drives.  For example: 
+    * Log f9fa3960 has pitch of 0.51 rad for front center camera
+    * Log 53037376 has pitch of 0.008 rad for front center camera
+  The above two logs have yaws / rolls that are off by Pi.
+
+  Solution: We can estimate the camera normal in the robot's frame
+  from the full camera projection matrix P = K[R|T], which is provided
+  through `calib`.  We use a method described in Zisserman "Multiple
+  View Geometry".
+
+  First, we form the projection matrix P:
+      P = |K 0| * | R  T|
+                  |000 1|
+  
+  Via `argoverse.utils.calibration.get_camera_intrinsic_matrix`,
+  we see that:
+      calib.K = |fx s  cx 0|
+                |0  fy cy 0|
+                |0  0   1 0|
+
+  and `argoverse.utils.calibration.Calibration.__init__` as well as
+  `argoverse.utils.se3.SE3.__init__` show that:
+      calib.extrinsic = | R  T|
+                        |000 1|
+  
+  Thus 
+      P = calib.K.dot(calib.extrinsic)
+
+  Zisserman pg "Multiple View Gemoetric (2nd ed.) pg. 161
+  http://cvrs.whu.edu.cn/downloads/ebooks/Multiple%20View%20Geometry%20in%20Computer%20Vision%20(Second%20Edition).pdf
+  The principal axis vector $pv$ is a ray that points along the
+  principal axis of the camera (in the world frame) and is computed
+  as follows:
+      Let P = [M | p4] and
+      Let M = |..|
+              |m3|
+      Then pv = det(M) * m3
+  
+  Zisserman cites 'proof by studying the P matrix' :P
+
+  In practice, we observe the follow normalized vectors for Argoverse
+  cars, which agree with Argoverse's published sensor placement
+  diagrams as well as the frames documented
+  in `argoverse.utils.calibration.Calibration`:
+    Log Prefix            Camera                             Normal
+    22160544   ring_front_center     [0.999917, -0.01263, 0.002472]
+    53037376   ring_front_center   [0.999962, -0.008618, -0.001102]
+    15c802a9   ring_front_center    [0.999958, -0.00647, -0.006419]
+    5c251c22   ring_front_center   [0.999962, -0.008618, -0.001102]
+    1d676737   ring_front_center     [0.999955, 0.009325, -0.00156]
+    64c12551   ring_front_center   [0.999957, -0.002238, -0.008979]
+    53037376     ring_front_left    [0.722965, 0.690788, -0.011564]
+    1d676737     ring_front_left      [0.703746, 0.7104, -0.008523]
+    cb0cba51    ring_front_right   [0.704961, -0.709232, -0.004577]
+    c6911883    ring_front_right   [0.704096, -0.709917, -0.016312]
+    2c07fcda      ring_rear_left    [-0.864428, 0.502756, 0.000217]
+    f9fa3960     ring_rear_right   [-0.869722, -0.493458, 0.009077]
+    02cf0ce1     ring_rear_right  [-0.871229, -0.490875, -0.001238]
+    e17eed4f      ring_side_left   [-0.172404, 0.984978, -0.009765]
+    e17eed4f     ring_side_right  [-0.177154, -0.984156, -0.007321]
+    c6911883   stereo_front_left    [0.999996, -0.002041, 0.001755]
+    3138907e   stereo_front_left    [0.999984, -0.001388, 0.005503]
+    70d2aea5   stereo_front_left    [0.999996, -0.002041, 0.001755]
+    043aeba7  stereo_front_right     [0.999957, -0.00716, 0.005925]
+
+  """
+  # Build P
+  # P = K * | R |T|
+  #         |000 1|
+  P = calib.K.dot(calib.extrinsic)
+
+  # Zisserman pg 161 The principal axis vector.
+  # P = [M | p4]; M = |..|
+  #                   |m3|
+  # pv = det(M) * m3
+  pv = np.linalg.det(P[:3,:3]) * P[2,:3].T
+  pv_hat = pv / np.linalg.norm(pv)
+  return pv_hat
+
 class FrameURI(object):
   __slots__ = (
     'tarball_name', # E.g. tracking_sample.tar.gz
@@ -339,6 +434,10 @@ class BBox(common.BBox):
       # bbox.ego_to_camera = common.Transform(
       #                         rotation=R.from_dcm(calib.R).as_quat(),
       #                         translation=calib.T) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+      
+
 
       # Compute object pose relative to camera view; this is the object's
       # pose relative to a ray cast from camera center to object centroid.
