@@ -188,6 +188,7 @@ class BBox(common.BBox):
       'obj_in_crop',        # Pose of object relative to a crop centered on it
       'obj_in_crop_debug',
       'obj_in_crop_xyz',
+      'calib_ypr',
     ]
   )
 
@@ -322,8 +323,7 @@ class BBox(common.BBox):
         # Tait–Bryan?  ... But y in Argoverse is to the left?
       
       camera_yaw = math.atan2(calib.R[2, 1], calib.R[1, 1])
-      bbox.relative_yaw_to_camera_radians = (
-        bbox.relative_yaw_radians + camera_yaw) % (2. * math.pi)
+      # bbox.relative_yaw_to_camera_radians = [camera_yaw, 
 
       bbox.ego_to_obj = object_label_record.translation
       city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
@@ -333,7 +333,6 @@ class BBox(common.BBox):
       bbox.city_to_ego = city_to_ego_se3.translation
 
 
-      assert False, "need to check log_id maybe cam calibrations are diff axes"
 
 
       from scipy.spatial.transform import Rotation as R
@@ -342,18 +341,64 @@ class BBox(common.BBox):
       #                         translation=calib.T) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
       # Compute object pose relative to camera view; this is the object's
-      # pose relative to a crop of the image.
+      # pose relative to a ray cast from camera center to object centroid.
+      # We can use this pose as a label for predicting 'local pose'
+      # as described in Drago et al. https://arxiv.org/pdf/1612.00496.pdf .
+      # BARF: camera extrinsics can vary widely:
+      # * Log f9fa3960 has pitch of 0.51 rad for front center camera
+      # * Log 53037376 has pitch of 0.008 rad for front center camera
+      # And the above two logs have yaws / rolls that are off by pi.
+      # However, extrinsic translation has less variance, as one might expect.
+      # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      
+      # from argoverse.utils.calibration import get_camera_extrinsic_matrix
+      # calib_raw = get_camera_extrinsic_matrix(calib.calib_data)
+      # vehicle_SE3_sensor = calib.calib_data["value"]['vehicle_SE3_camera_']
+      # egovehicle_t_camera = np.array(vehicle_SE3_sensor["translation"])
+      # egovehicle_q_camera = vehicle_SE3_sensor["rotation"]["coefficients"]
+      # egovehicle_R_camera = quat2rotmat(egovehicle_q_camera)
+
+      # cam_h, cam_w = get_image_width_height(uri.camera)
+      # P = calib.K[:,:3].dot(calib.extrinsic[:3,:4])#[:,:-1]
+      # P_plus = np.linalg.pinv(P)#P.T * np.linalg.inv(P * P.T)
+      # pt3 = np.dot(P_plus,[.5 * cam_w, .5 * cam_h, 10.])
+
+      # P = K * | R |T|
+      #         |000 1|
+      P = calib.K.dot(calib.extrinsic)
+
+      # Zisserman pg 161
+      # http://cvrs.whu.edu.cn/downloads/ebooks/Multiple%20View%20Geometry%20in%20Computer%20Vision%20(Second%20Edition).pdf
+      # The principal axis vector.  A ray that points along the principal 
+      # axis.
+      # P = [M | p4]; M = |..|
+      #                   |m3|
+      # pv = det(M) * m3
+      pv = np.linalg.det(P[:3,:3]) * P[2,:3].T
+      pv_hat = pv / np.linalg.norm(pv)
+
+      
+      # P_plus * [.5 * cam_w, .5 * cam_h, 10]
+      # ptcam = np.array([ ptcam ])
+      # pt3 = calib.project_image_to_ego(ptcam)
+      
       from argoverse.utils.se3 import SE3
       ego_to_cam = SE3(rotation=calib.R, translation=calib.T).inverse()
-
+      bbox.calib_ypr = ego_to_cam.translation
+      bbox.relative_yaw_to_camera_radians = [
+        [float(v) for v in pv_hat]
+      ]
+      
+      # [[float(v) for v in 
+      #   R.from_dcm(egovehicle_R_camera).as_euler('zxy').tolist()] , [
+      #     float(v) for v in pt3.tolist()]]
       obj_from_cam = (
         object_label_record.translation - ego_to_cam.translation)
       obj_t_x, obj_t_y, obj_t_z = obj_from_cam 
       
       yaw = R.from_euler('z', math.atan2(-obj_t_y, obj_t_x))
       pitch = R.from_euler('y', math.atan2(obj_t_z, obj_t_x))
-      roll = R.from_euler('x', 
-        R.from_dcm(ego_to_cam.rotation).as_euler('zxy')[2] - math.pi / 2)
+      roll = R.from_euler('x', -R.from_dcm(rotmat).as_euler('zxy')[2])
         # Use camera roll; don't roll the camera when "pointing it" at obj
         # Also adjust camera roll for pi / 2 frame change that's embedded
         # into calibration JSON
@@ -1175,7 +1220,6 @@ class ImageAnnoTable(object):
         except Exception as e:
           import sys
           print(str(sys.exc_info()))
-          import pdb; pdb.set_trace()
           # TODO: getting spurious "numpy cast to bool" exceptions here?
           util.log.error("Bike rider assoc wat? %s" % e)
           continue
@@ -1648,15 +1692,25 @@ class CroppedObjectImageTable(dataset.ImageTable):
       cls.__save_df(df)
       util.log.info(
         "Created %s total crops." % cls.as_imagerow_df(spark).count())
-
+      
+      
+      
+      df2 = cls.ANNOS.as_df(spark)
+      df2.createOrReplaceTempView('d2')
+      import pprint
+      pprint.pprint(spark.sql('select log_id, camera, first(relative_yaw_to_camera_radians) from d2 where relative_yaw_to_camera_radians is not null group by log_id, camera order by camera').collect())
+      import pdb; pdb.set_trace()
+      
+      
       util.log.info("Creating HTML sample report ...")
       html = cls.to_html(spark)
+      
       fname = cls.TABLE_NAME + '_sample.html'
       dest = os.path.join(cls.ANNOS.FIXTURES.index_root(), fname)
       util.mkdir(cls.ANNOS.FIXTURES.index_root())
       with open(dest, 'w') as f:
         f.write(html)
-      util.log.info("... saved HTML sample report to %s" % dest)
+      util.log.info("... saved HTML sample report to %s" % dest)      
   
   @classmethod
   def as_imagerow_df(cls, spark):
@@ -1673,6 +1727,7 @@ class CroppedObjectImageTable(dataset.ImageTable):
     df = cls.as_imagerow_df(spark)
     if random_sample_seed is not None:
       fraction_approx = np.clip(float(limit) / df.count(), 0.1, 1.0)
+      df = df.where(df.category_name != 'background')
       df = df.sample(
                 withReplacement=False,
                 fraction=fraction_approx,
@@ -1704,9 +1759,12 @@ class CroppedObjectImageTable(dataset.ImageTable):
       'debug_jpeg_bytes',
       'camera',
       'relative_yaw_radians',
+      'relative_yaw_to_camera_radians',
       'obj_in_crop',
       'obj_in_crop_debug',
       'obj_in_crop_xyz',
+      'calib_ypr',
+      'log_id',
     ]
     other_cols = set(pdf.columns) - set(COLS)
     pdf = pdf.reindex(columns=COLS + list(sorted(other_cols)))
@@ -1747,9 +1805,13 @@ class CroppedObjectImageTable(dataset.ImageTable):
     
     # Size of crop
     radius = .5 * max(bbox.width, bbox.height)
-    padding_in_target_res = radius * (
-      cls.PADDING_PIXELS / np.array(cls.VIEWPORT_WH))
-    radius_xy = radius + padding_in_target_res
+    padding_relative = 2 * cls.PADDING_PIXELS / np.array(cls.VIEWPORT_WH)
+    radius_xy = radius / (1 - padding_relative)
+      # If paddig is 10% relative, we want the crop to cover
+      # 90% of the viewport
+    # padding_in_target_res = radius / (
+    #   1 - ())
+    # radius_xy = radius + padding_in_target_res
 
     # Compute the crop
     x1, y1 = (box_center - radius_xy).tolist()
