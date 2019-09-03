@@ -440,27 +440,46 @@ class BBox(common.BBox):
       bbox.obj_ypr_in_ego = R.from_dcm(rotmat).as_euler('zxy')
 
       from argoverse.utils.se3 import SE3
-      assert False, " no use bbox.camera_norm to deduce xform!!"
-      ego_to_cam = SE3(rotation=calib.R, translation=calib.T).inverse()
-      obj_in_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
-      obj_in_cam = ego_to_cam.right_multiply_with_se3(obj_in_ego)
+      x_hat = np.array([1, 0, 0])
+      cos_theta = bbox.camera_norm.dot(x_hat)
+      rot_axis = np.cross(bbox.camera_norm, x_hat)
+      ego_to_cam_device_rot = R.from_rotvec(
+        math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
 
-      camera_to_obj = obj_in_cam.translation
+      # Recover translation from ego to camera
+      ego_to_cam = SE3(rotation=calib.R, translation=calib.T)
+      cam_device_from_ego_T = ego_to_cam.inverse().translation
+      cam_device_from_ego = SE3(
+            rotation=ego_to_cam_device_rot.as_dcm(),
+            translation=cam_device_from_ego_T)
+      # ego_to_cam_device.rotation = ego_to_cam_device_rot.as_dcm()
+      # obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
+      # obj_in_cam = cam_device_from_ego.right_multiply_with_se3(obj_from_ego)
+
+      camera_to_obj = bbox.ego_to_obj - cam_device_from_ego_T
       bbox.camera_to_obj = camera_to_obj
 
       camera_to_obj_hat = camera_to_obj / np.linalg.norm(camera_to_obj)
 
-      doh_camera_norm = np.array([1, 0, 0])
+
+      # doh_camera_norm = np.array([1, 0, 0])
       # cos_theta = bbox.camera_norm.dot(camera_to_obj_hat)
       # rot_axis = np.cross(bbox.camera_norm, camera_to_obj_hat)
-      cos_theta = doh_camera_norm.dot(camera_to_obj_hat)
-      rot_axis = np.cross(doh_camera_norm, camera_to_obj_hat)
+      obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
+      obj_normal = obj_from_ego.rotation.dot(x_hat)
+      cos_theta = camera_to_obj_hat.dot(obj_normal)
+      rot_axis = np.cross(camera_to_obj_hat, obj_normal)
 
-      obj_from_cam = R.from_rotvec(
+      obj_from_ray = R.from_rotvec(
         math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
-      
-      obj_camera_local = R.from_dcm(obj_in_cam.rotation) * obj_from_cam.inv()
-      bbox.obj_ypr_camera_local = obj_camera_local.as_euler('zxy')
+      # ray_from_cam = SE3(
+      #   rotation=ray_from_cam_normal.as_dcm(),
+      #   translation=np.zeros(3))
+      # obj_in_ray = obj_in_cam.right_multiply_with_se3(ray_from_cam)
+
+      # obj_camera_local = R.from_dcm(obj_in_cam.rotation) * obj_from_cam.inv()
+      # obj_camera_local = R.from_dcm(obj_in_ray.rotation)
+      bbox.obj_ypr_camera_local = obj_from_ray.as_euler('zxy')
 
       
 
