@@ -291,10 +291,8 @@ class BBox(common.BBox):
   def _adapt(v):
     if isinstance(v, np.ndarray):
       return NumpyArray(v)
-    # elif isinstance(v, common.Transform):
-    #   return dict((k, NumpyArray(v)) for k, v in v.to_dict().items()) # ~~~~~~~~~~~~~
-    elif isinstance(v, NumpyArray):
-      return v.arr
+    # elif isinstance(v, NumpyArray):
+    #   return v.arr
     else:
       return v
 
@@ -479,7 +477,7 @@ class BBox(common.BBox):
 
       # obj_camera_local = R.from_dcm(obj_in_cam.rotation) * obj_from_cam.inv()
       # obj_camera_local = R.from_dcm(obj_in_ray.rotation)
-      bbox.obj_ypr_camera_local = obj_from_ray.as_euler('zxy')
+      bbox.obj_ypr_camera_local = [NumpyArray(obj_from_ray.as_euler('zxy'))]
 
       
 

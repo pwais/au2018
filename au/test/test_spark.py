@@ -1,5 +1,6 @@
 from au import util
 from au.spark import NumpyArray
+from au.spark import SparkTypeAdapter
 from au.test import testconf
 from au.test import testutils
 
@@ -10,6 +11,74 @@ import pytest
 @pytest.mark.slow
 def test_spark_selftest():
   testutils.LocalSpark.selftest()
+
+class Moof(object):
+  __slots__ = ('foo', 'bar')
+  
+  def __init__(self, **kwargs):
+    # NB: ctor for convenience; SparkTypeAdapter does not require it
+    for k in self.__slots__:
+      setattr(self, k, kwargs.get(k))
+
+@pytest.mark.slow
+def test_spark_adaptor():
+  TEST_TEMPDIR = os.path.join(
+                      testconf.TEST_TEMPDIR_ROOT,
+                      'spark_adapter_test')
+  util.cleandir(TEST_TEMPDIR)
+
+  import numpy as np
+  rows = [
+    {
+      'id': 1,
+      'a': np.array([1]), 
+      'b': {
+        'foo': np.array( [ [1] ], dtype=np.uint8)
+      },
+      'c': [
+        np.array([[[1.]], [[2.]], [[3.]]])
+      ],
+      'd': Moof(foo=5, bar="abc"),
+      'e': [Moof(foo=6, bar="def")],
+    },
+    {
+      'id': 2,
+      'a': np.array([]),
+      'b': {},
+      'c': [],
+      'd': None,
+      'e': [],
+    },
+  ]
+
+  # Test serialization numpy <-> parquet
+  with testutils.LocalSpark.sess() as spark:
+    from pyspark.sql import Row
+
+    adapted_rows = [SparkTypeAdapter.to_row(r) for r in rows]
+
+    import pdb; pdb.set_trace()
+
+    df = spark.createDataFrame(adapted_rows)
+    df.show()
+    outpath = os.path.join(TEST_TEMPDIR, 'rowdata')
+    df.write.parquet(outpath)
+
+    df2 = spark.read.parquet(outpath)
+    decoded_wrapped_rows = df2.collect()
+    
+    decoded_rows = [
+      dict((k, v.arr if v else v) for k, v in row.asDict().items())
+      for row in decoded_wrapped_rows
+    ]
+    import pdb; pdb.set_trace()
+    
+    # We can't do assert sorted(rows) == sorted(decoded_rows)
+    # because numpy syntatic sugar breaks ==
+    import pprint
+    def sorted_row_str(rowz):
+      return pprint.pformat(sorted(rowz, key=lambda row: row['id']))
+    assert sorted_row_str(rows) == sorted_row_str(decoded_rows)
 
 @pytest.mark.slow
 def test_spark_numpy_df():

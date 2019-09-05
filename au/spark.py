@@ -510,7 +510,89 @@ class K8SSpark(Spark):
 # https://github.com/databricks/tensorframes   o_O
 #
 # BREADCRUMBS: so these UDTs can't be used in nested structs :( pyspark
-# isn't smart enough.  
+# isn't smart enough.  In particular, suppose UDT is a class with a
+# __UDT__ attribute (so it's a Spark UDT).  Spark will be unable to handle:
+#  * [UDT()] (i.e. a list of UDTs)
+#  * {'foo': UDT()} (i.e. a map with UDT values)
+# Due to some internal class cast exception.
+
+class Tensor(object):
+  __slots__ = ('shape', 'dtype', 'order', 'values')
+
+  @staticmethod
+  def from_numpy(arr):
+    t = Tensor()
+    t.shape = arr.shape
+    t.dtype = arr.dtype.name
+    t.order = 'C' # C-style row-major
+    t.values = arr.flatten(order='C').tolist()
+    return t
+    # TODO maybe https://stackoverflow.com/questions/9452775/converting-numpy-dtypes-to-native-python-types ~~~~
+  
+  @staticmethod
+  def to_numpy(t):
+    import numpy as np
+    return np.array(
+              np.reshape(t.values, t.shape, order=t.order),
+              dtype=np.dtype(t.dtype))
+
+class SparkTypeAdapter(object):
+  """
+  TODO explainme
+  """
+
+  @staticmethod
+  def _get_classname_from_obj(o):
+    # Based upon https://stackoverflow.com/a/2020083
+    module = o.__class__.__module__
+    # NB: __module__ might be null
+    if module is None or module == str.__class__.__module__:
+      return o.__class__.__name__  # skip "__builtin__"
+    else:
+      return module + '.' + o.__class__.__name__
+
+  @classmethod
+  def _get_class_from_path(path):
+    # Pydoc is a bit safer and more robust than anything we can write
+    import pydoc
+    obj_cls, obj_name = pydoc.resolve(path)
+    assert obj_cls
+    return obj_cls
+
+  @classmethod
+  def to_row(cls, obj):
+    from pyspark.sql import Row
+      # Translates to parquet struct
+    import numpy as np
+    if isinstance(obj, np.ndarray):
+      return cls._to_user_struct(Tensor.from_numpy(obj))
+    elif hasattr(obj, '__slots__'):
+      tag = ('__pyclass__', SparkTypeAdaptor._get_classname_from_obj(obj))
+      obj_attrs = [
+        (k, cls.to_row(getattr(obj, k)))
+        for k in obj.__slots__
+      ]
+      return Row(**dict([tag] + obj_attrs))
+    else:
+      return obj
+  
+  @classmethod
+  def from_row(cls, row):
+    if hasattr(row, '__fields__'):
+      if '__pyclass__' in row.__fields__:
+        obj_cls_name = row['__pyclass__']
+        obj_cls = SparkTypeAdaptor._get_class_from_path(obj_cls_name)
+        obj = obj_cls()
+        for k, v in row.asDict().items():
+          if k == '__pyclass__':
+            continue
+          setattr(obj, k, cls.from_row(v))
+        if isinstance(obj, Tensor):
+          obj = Tensor.to_numpy(obj)
+        return obj
+    return row
+
+
 
 class NumpyArrayUDT(types.UserDefinedType):
   """SQL User-Defined Type (UDT) for *opaque* numpy arrays.  Unlike Spark's
