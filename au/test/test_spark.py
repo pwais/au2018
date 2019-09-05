@@ -19,9 +19,12 @@ class Moof(object):
     # NB: ctor for convenience; SparkTypeAdapter does not require it
     for k in self.__slots__:
       setattr(self, k, kwargs.get(k))
+  
+  def __repr__(self):
+    return "Moof(%s)" % (((k, getattr(self, k)) for k in self.__slots__),)
 
 @pytest.mark.slow
-def test_spark_adaptor():
+def test_spark_adapter():
   TEST_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
                       'spark_adapter_test')
@@ -57,8 +60,6 @@ def test_spark_adaptor():
 
     adapted_rows = [SparkTypeAdapter.to_row(r) for r in rows]
 
-    import pdb; pdb.set_trace()
-
     df = spark.createDataFrame(adapted_rows)
     df.show()
     outpath = os.path.join(TEST_TEMPDIR, 'rowdata')
@@ -68,10 +69,10 @@ def test_spark_adaptor():
     decoded_wrapped_rows = df2.collect()
     
     decoded_rows = [
-      dict((k, v.arr if v else v) for k, v in row.asDict().items())
+      SparkTypeAdapter.from_row(row)
       for row in decoded_wrapped_rows
     ]
-    import pdb; pdb.set_trace()
+    decoded_rows = [r.asDict() for r in decoded_rows]
     
     # We can't do assert sorted(rows) == sorted(decoded_rows)
     # because numpy syntatic sugar breaks ==

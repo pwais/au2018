@@ -551,7 +551,7 @@ class SparkTypeAdapter(object):
     else:
       return module + '.' + o.__class__.__name__
 
-  @classmethod
+  @staticmethod
   def _get_class_from_path(path):
     # Pydoc is a bit safer and more robust than anything we can write
     import pydoc
@@ -562,17 +562,20 @@ class SparkTypeAdapter(object):
   @classmethod
   def to_row(cls, obj):
     from pyspark.sql import Row
-      # Translates to parquet struct
     import numpy as np
     if isinstance(obj, np.ndarray):
-      return cls._to_user_struct(Tensor.from_numpy(obj))
+      return cls.to_row(Tensor.from_numpy(obj))
     elif hasattr(obj, '__slots__'):
-      tag = ('__pyclass__', SparkTypeAdaptor._get_classname_from_obj(obj))
+      tag = ('__pyclass__', SparkTypeAdapter._get_classname_from_obj(obj))
       obj_attrs = [
         (k, cls.to_row(getattr(obj, k)))
         for k in obj.__slots__
       ]
       return Row(**dict([tag] + obj_attrs))
+    elif isinstance(obj, list):
+      return [cls.to_row(x) for x in obj]
+    elif isinstance(obj, dict):
+      return dict((k, cls.to_row(v)) for k, v in obj.items())
     else:
       return obj
   
@@ -581,7 +584,7 @@ class SparkTypeAdapter(object):
     if hasattr(row, '__fields__'):
       if '__pyclass__' in row.__fields__:
         obj_cls_name = row['__pyclass__']
-        obj_cls = SparkTypeAdaptor._get_class_from_path(obj_cls_name)
+        obj_cls = SparkTypeAdapter._get_class_from_path(obj_cls_name)
         obj = obj_cls()
         for k, v in row.asDict().items():
           if k == '__pyclass__':
@@ -590,6 +593,14 @@ class SparkTypeAdapter(object):
         if isinstance(obj, Tensor):
           obj = Tensor.to_numpy(obj)
         return obj
+      else:
+        from pyspark.sql import Row
+        attrs = dict((k, cls.from_row(v)) for k, v in row.asDict().items())
+        return Row(**attrs)
+    elif isinstance(row, list):
+      return [cls.from_row(x) for x in row]
+    elif isinstance(row, dict):
+      return dict((k, cls.from_row(v)) for k, v in row.items())
     return row
 
 
