@@ -1,6 +1,6 @@
 from au import util
 from au.spark import NumpyArray
-from au.spark import SparkTypeAdapter
+from au.spark import RowAdapter
 from au.test import testconf
 from au.test import testutils
 
@@ -12,7 +12,7 @@ import pytest
 def test_spark_selftest():
   testutils.LocalSpark.selftest()
 
-class Moof(object):
+class Slotted(object):
   __slots__ = ('foo', 'bar')
   
   def __init__(self, **kwargs):
@@ -21,19 +21,28 @@ class Moof(object):
       setattr(self, k, kwargs.get(k))
   
   def __repr__(self):
-    return "Moof(%s)" % (((k, getattr(self, k)) for k in self.__slots__),)
+    return "Slotted(%s)" % ([(k, getattr(self, k)) for k in self.__slots__],)
+
+class Unslotted(object):
+  def __init__(self, **kwargs):
+    for k, v in kwargs.items():
+      setattr(self, k, v)
+  
+  def __repr__(self):
+    return "Unslotted" + str(sorted(self.__dict__.items()))
 
 @pytest.mark.slow
-def test_spark_adapter():
+def test_row_adapter():
   TEST_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
-                      'spark_adapter_test')
+                      'spark_row_adapter_test')
   util.cleandir(TEST_TEMPDIR)
 
   import numpy as np
   rows = [
     {
       'id': 1,
+      'np_number': np.float32(1.),
       'a': np.array([1]), 
       'b': {
         'foo': np.array( [ [1] ], dtype=np.uint8)
@@ -41,16 +50,25 @@ def test_spark_adapter():
       'c': [
         np.array([[[1.]], [[2.]], [[3.]]])
       ],
-      'd': Moof(foo=5, bar="abc"),
-      'e': [Moof(foo=6, bar="def")],
+      'd': Slotted(foo=5, bar="abc"),
+      'e': [Slotted(foo=6, bar="def")],
+      'f': Unslotted(meow=4),
+      'e': Unslotted() # Intentionally empty; adapter should set nothing
     },
+
+    # Include a mostly empty row below to exercise Spark type validation.
+    # Spark will ensure the row below and row above have the same schema;
+    # note that `None` (or 'null') is only allowed for Struct / Row types.
     {
       'id': 2,
+      'np_number': np.float32(2.),
       'a': np.array([]),
       'b': {},
       'c': [],
       'd': None,
       'e': [],
+      'f': None,
+      'e': None,
     },
   ]
 
@@ -58,7 +76,7 @@ def test_spark_adapter():
   with testutils.LocalSpark.sess() as spark:
     from pyspark.sql import Row
 
-    adapted_rows = [SparkTypeAdapter.to_row(r) for r in rows]
+    adapted_rows = [RowAdapter.to_row(r) for r in rows]
 
     df = spark.createDataFrame(adapted_rows)
     df.show()
@@ -69,7 +87,7 @@ def test_spark_adapter():
     decoded_wrapped_rows = df2.collect()
     
     decoded_rows = [
-      SparkTypeAdapter.from_row(row)
+      RowAdapter.from_row(row)
       for row in decoded_wrapped_rows
     ]
     decoded_rows = [r.asDict() for r in decoded_rows]
@@ -83,6 +101,10 @@ def test_spark_adapter():
 
 @pytest.mark.slow
 def test_spark_numpy_df():
+  ###
+  ### DEPRECATED
+  ###
+  
   TEST_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
                       'spark_numpy_df')

@@ -527,7 +527,6 @@ class Tensor(object):
     t.order = 'C' # C-style row-major
     t.values = arr.flatten(order='C').tolist()
     return t
-    # TODO maybe https://stackoverflow.com/questions/9452775/converting-numpy-dtypes-to-native-python-types ~~~~
   
   @staticmethod
   def to_numpy(t):
@@ -536,7 +535,7 @@ class Tensor(object):
               np.reshape(t.values, t.shape, order=t.order),
               dtype=np.dtype(t.dtype))
 
-class SparkTypeAdapter(object):
+class RowAdapter(object):
   """
   TODO explainme
   """
@@ -565,12 +564,18 @@ class SparkTypeAdapter(object):
     import numpy as np
     if isinstance(obj, np.ndarray):
       return cls.to_row(Tensor.from_numpy(obj))
-    elif hasattr(obj, '__slots__'):
-      tag = ('__pyclass__', SparkTypeAdapter._get_classname_from_obj(obj))
-      obj_attrs = [
-        (k, cls.to_row(getattr(obj, k)))
-        for k in obj.__slots__
-      ]
+    elif isinstance(obj, np.generic):
+      # Those pesky numpy types ...
+      return obj.item()
+    elif hasattr(obj, '__slots__') or hasattr(obj, '__dict__'):
+      tag = ('__pyclass__', RowAdapter._get_classname_from_obj(obj))
+      if hasattr(obj, '__slots__'):
+        obj_attrs = [
+          (k, cls.to_row(getattr(obj, k)))
+          for k in obj.__slots__
+        ]
+      else:
+        obj_attrs = [(k, cls.to_row(v)) for k, v in obj.__dict__.items()]
       return Row(**dict([tag] + obj_attrs))
     elif isinstance(obj, list):
       return [cls.to_row(x) for x in obj]
@@ -584,15 +589,25 @@ class SparkTypeAdapter(object):
     if hasattr(row, '__fields__'):
       if '__pyclass__' in row.__fields__:
         obj_cls_name = row['__pyclass__']
-        obj_cls = SparkTypeAdapter._get_class_from_path(obj_cls_name)
+        obj_cls = RowAdapter._get_class_from_path(obj_cls_name)
         obj = obj_cls()
-        for k, v in row.asDict().items():
-          if k == '__pyclass__':
-            continue
-          setattr(obj, k, cls.from_row(v))
+
+        if hasattr(obj, '__slots__'):
+          for k in obj.__slots__:
+            setattr(obj, k, cls.from_row(row[k]))
+        elif hasattr(obj, '__dict__'):
+          for k, v in row.asDict().items():
+            if k == '__pyclass__':
+              continue
+            obj.__dict__[k] = cls.from_row(v)
+        else:
+          raise ValueError(
+              "Object %s no longer has __slots__ nor __dict__" % obj_cls_name)
+
         if isinstance(obj, Tensor):
           obj = Tensor.to_numpy(obj)
         return obj
+      
       else:
         from pyspark.sql import Row
         attrs = dict((k, cls.from_row(v)) for k, v in row.asDict().items())
@@ -604,9 +619,10 @@ class SparkTypeAdapter(object):
     return row
 
 
-
 class NumpyArrayUDT(types.UserDefinedType):
-  """SQL User-Defined Type (UDT) for *opaque* numpy arrays.  Unlike Spark's
+  """DEPRECATED
+  
+  SQL User-Defined Type (UDT) for *opaque* numpy arrays.  Unlike Spark's
   DenseVector, this class preserves array shape.  An unlike Spark's
   DenseMatrix, this class supports arbitrary shape.  See also
   pyspark.mllib.linalg.MatrixUDT.
