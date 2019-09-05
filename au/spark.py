@@ -502,21 +502,17 @@ class K8SSpark(Spark):
       os.environ.get('SPARK_LOCAL_IP', util.get_non_loopback_iface()),
   }
 
-## Spark UDTs
-# These utils are based upon Spark's DenseVector:
-# https://github.com/apache/spark/blob/044b33b2ed2d423d798f2a632fab110c46f41567/python/pyspark/mllib/linalg/__init__.py#L239
-# https://apache.googlesource.com/spark/+/refs/heads/master/python/pyspark/sql/tests.py#119
-# Sadly they don't have a UDT for tensors... not even in Tensorframes
-# https://github.com/databricks/tensorframes   o_O
-#
-# BREADCRUMBS: so these UDTs can't be used in nested structs :( pyspark
-# isn't smart enough.  In particular, suppose UDT is a class with a
-# __UDT__ attribute (so it's a Spark UDT).  Spark will be unable to handle:
-#  * [UDT()] (i.e. a list of UDTs)
-#  * {'foo': UDT()} (i.e. a map with UDT values)
-# Due to some internal class cast exception.
+
+
+## Spark Python Type Adapters
 
 class Tensor(object):
+  """An ndarray-like object designed to store numpy arrays in Parquet / 
+  Spark SQL format.  Spark's DenseVector and Matrix unfortunately don't 
+  support arbitrary tensor shape.  Furthermore, `Tensor` stores data in
+  an explicit order accessible to external readers such as Eigen in C++
+  or nd4j / BLAS wrappers in Java.
+  """
   __slots__ = ('shape', 'dtype', 'order', 'values')
 
   @staticmethod
@@ -536,8 +532,36 @@ class Tensor(object):
               dtype=np.dtype(t.dtype))
 
 class RowAdapter(object):
-  """
-  TODO explainme
+  """Transforms between custom objects and `pyspark.sql.Row`s used in Spark SQL
+  or Parquet files. Use to encode numpy arrays and standard Python objects
+  with a transparent Parquet schema that is accessible to other readers.
+
+  Usage:
+   * Use `RowAdapter.to_row()` in place of the `pyspark.sql.Row` constructor.
+   * Call `RowAdapter.from_row()` on any `pyspark.sql.Row` instance, e.g.
+       within an `RDD.map()` call or after a `DataFrame.collect()` call.
+   * Decoding requires Python objects to have an available zero-arg __init__()
+  
+  Unfortunately, we can't use Spark's UDT API to embed this adapter (and 
+  obviate user calls) because UDTs require schema definitions.  Furthermore,
+  Spark unfortunately can't handle UDTs nested in maps or lists (see
+  notes below).
+
+  Benefits of RowAdapter:
+    * Transparently handles numpy arrays and numpy scalar types
+        (e.g. np.float32).
+    * Deep type adaptation; supports nested types.
+    * At the decode stage, supports evolution of object types independent of
+        the schema of data at rest:
+          - Added object fields don't get set unless there's a recorded value
+          - Removed object fields will get ignored
+          - NB: Fields that change type will get set with the data at rest;
+              if you need to change type, consider adding a new field.
+    * Handles slotted Python objects (which Spark currently does not support),
+        as well as un-slotted objects (where Spark supports automatic encoding
+        but not decoding).
+
+  Enables saving objects and numpy arrays to Parquet in a format
   """
 
   @staticmethod
@@ -559,7 +583,7 @@ class RowAdapter(object):
     return obj_cls
 
   @classmethod
-  def to_row(cls, obj):
+  def to_row(cls, obj, ignore_protected=False, ignore_private=True):
     from pyspark.sql import Row
     import numpy as np
     if isinstance(obj, np.ndarray):
@@ -568,14 +592,26 @@ class RowAdapter(object):
       # Those pesky numpy types ...
       return obj.item()
     elif hasattr(obj, '__slots__') or hasattr(obj, '__dict__'):
+      def is_hidden(fname):
+        # Check private first to disambiguate `_` vs `__` prefixes
+        if ignore_private and fname.startswith('__'):
+          return True
+        if ignore_protected and fname.startswith('_'):
+          return True
+        return False
       tag = ('__pyclass__', RowAdapter._get_classname_from_obj(obj))
       if hasattr(obj, '__slots__'):
         obj_attrs = [
           (k, cls.to_row(getattr(obj, k)))
           for k in obj.__slots__
+          if not is_hidden(k)
         ]
       else:
-        obj_attrs = [(k, cls.to_row(v)) for k, v in obj.__dict__.items()]
+        obj_attrs = [
+          (k, cls.to_row(v))
+          for k, v in obj.__dict__.items()
+          if not is_hidden(k)
+        ]
       return Row(**dict([tag] + obj_attrs))
     elif isinstance(obj, list):
       return [cls.to_row(x) for x in obj]
@@ -618,6 +654,22 @@ class RowAdapter(object):
       return dict((k, cls.from_row(v)) for k, v in row.items())
     return row
 
+
+
+## Spark UDTs
+# DEPRECATED! Use RowAdapter above.
+# These utils are based upon Spark's DenseVector:
+# https://github.com/apache/spark/blob/044b33b2ed2d423d798f2a632fab110c46f41567/python/pyspark/mllib/linalg/__init__.py#L239
+# https://apache.googlesource.com/spark/+/refs/heads/master/python/pyspark/sql/tests.py#119
+# Sadly they don't have a UDT for tensors... not even in Tensorframes
+# https://github.com/databricks/tensorframes   o_O
+#
+# BREADCRUMBS: so these UDTs can't be used in nested structs :( pyspark
+# isn't smart enough.  In particular, suppose UDT is a class with a
+# __UDT__ attribute (so it's a Spark UDT).  Spark will be unable to handle:
+#  * [UDT()] (i.e. a list of UDTs)
+#  * {'foo': UDT()} (i.e. a map with UDT values)
+# Due to some internal class cast exception.
 
 class NumpyArrayUDT(types.UserDefinedType):
   """DEPRECATED

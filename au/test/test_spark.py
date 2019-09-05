@@ -12,8 +12,11 @@ import pytest
 def test_spark_selftest():
   testutils.LocalSpark.selftest()
 
+### Test Row Adapter
+## NB: these classes must be declared package-level
+
 class Slotted(object):
-  __slots__ = ('foo', 'bar')
+  __slots__ = ('foo', 'bar', '_not_hidden')
   
   def __init__(self, **kwargs):
     # NB: ctor for convenience; SparkTypeAdapter does not require it
@@ -21,15 +24,21 @@ class Slotted(object):
       setattr(self, k, kwargs.get(k))
   
   def __repr__(self):
+    # For unit tests below
     return "Slotted(%s)" % ([(k, getattr(self, k)) for k in self.__slots__],)
 
 class Unslotted(object):
   def __init__(self, **kwargs):
-    for k, v in kwargs.items():
-      setattr(self, k, v)
+    self.__dict__.update(**kwargs)
   
   def __repr__(self):
-    return "Unslotted" + str(sorted(self.__dict__.items()))
+    # For unit tests below
+    # Hide any 'hidden' attributes since `RowAdapter` will elide them
+    attrs = dict(
+              (k, v) for k, v in self.__dict__.items()
+              if not k.startswith('__')
+    )
+    return "Unslotted" + str(sorted(attrs.items()))
 
 @pytest.mark.slow
 def test_row_adapter():
@@ -50,9 +59,9 @@ def test_row_adapter():
       'c': [
         np.array([[[1.]], [[2.]], [[3.]]])
       ],
-      'd': Slotted(foo=5, bar="abc"),
-      'e': [Slotted(foo=6, bar="def")],
-      'f': Unslotted(meow=4),
+      'd': Slotted(foo=5, bar="abc", _not_hidden=1),
+      'e': [Slotted(foo=6, bar="def", _not_hidden=1)],
+      'f': Unslotted(meow=4, _not_hidden=1, __hidden=2),
       'e': Unslotted() # Intentionally empty; adapter should set nothing
     },
 
@@ -98,6 +107,8 @@ def test_row_adapter():
     def sorted_row_str(rowz):
       return pprint.pformat(sorted(rowz, key=lambda row: row['id']))
     assert sorted_row_str(rows) == sorted_row_str(decoded_rows)
+
+
 
 @pytest.mark.slow
 def test_spark_numpy_df():
