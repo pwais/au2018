@@ -1,22 +1,4 @@
-import copy
-
-import numpy as np
-
-from au.plotting import hash_to_rbg
-
-class Transform(object):
-  """An SE(3) / ROS Transform-like object"""
-
-  slots__ = ('rotation', 'translation')
-  
-  def __init__(self, **kwargs):
-    for k in self.slots__:
-      setattr(self, k, kwargs.get(k))
-
-  def to_dict(self):
-    return dict(
-      (k, getattr(self, k, None))
-      for k in self.slots__)
+"""A set of objects (e.g. for annotations) shared across datasets"""
 
 class BBox(object):
   """An object in an image; in particular, an (ideally amodal) bounding box
@@ -39,7 +21,8 @@ class BBox(object):
 
   def __init__(self, **kwargs):
     for k in self.__slots__:
-      setattr(self, k, kwargs.get(k))
+      NULL = '' # NB: Spark cannot encode None in Parquet, but '' is OK
+      setattr(self, k, kwargs.get(k, NULL))
   
   def update(self, **kwargs):
     for k in self.__slots__:
@@ -117,6 +100,7 @@ class BBox(object):
       setattr(self, attr, quantize(getattr(self, attr)))
 
   def clamp_to_screen(self):
+    import numpy as np
     def clip_and_norm(v, max_v):
       return int(np.clip(v, 0, max_v).round())
     
@@ -135,6 +119,7 @@ class BBox(object):
     iy1 = max(y1, oy1)
     iy2 = min(y2, oy2)
     
+    import copy
     intersection = copy.deepcopy(self)
     intersection.set_x1_y1_x2_y2(ix1, iy1, ix2, iy2)
     return intersection
@@ -147,6 +132,7 @@ class BBox(object):
     uy1 = min(y1, oy1)
     uy2 = max(y2, oy2)
     
+    import copy
     union = copy.deepcopy(self)
     union.set_x1_y1_x2_y2(ux1, uy1, ux2, uy2)
     return union
@@ -171,6 +157,7 @@ class BBox(object):
     assert self.im_width == img.shape[1], (self.im_width, img.shape)
 
     if not color:
+      from au.plotting import hash_to_rbg
       color = hash_to_rbg(self.category_name)
 
     # Tensorflow takes BGR

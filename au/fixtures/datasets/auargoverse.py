@@ -25,6 +25,7 @@ import sys
 from au import conf
 from au import util
 from au.fixtures import dataset
+from au.fixtures.datasets import av
 from au.fixtures.datasets import common
 from au.spark import Spark
 from au.spark import NumpyArray
@@ -176,84 +177,84 @@ def get_camera_normal(calib):
   pv_hat = pv / np.linalg.norm(pv)
   return pv_hat
 
-class FrameURI(object):
-  __slots__ = (
-    'tarball_name', # E.g. tracking_sample.tar.gz
-    'log_id',       # E.g. c6911883-1843-3727-8eaa-41dc8cda8993
-    'split',        # Official Argoverse split (see Fixtures.SPLITS)
-    'camera',       # E.g. ring_front_center
-    'timestamp',    # E.g. 315975652303331336, yes this is GPS time :P :P
+# class FrameURI(object):
+#   __slots__ = (
+#     'tarball_name', # E.g. tracking_sample.tar.gz
+#     'log_id',       # E.g. c6911883-1843-3727-8eaa-41dc8cda8993
+#     'split',        # Official Argoverse split (see Fixtures.SPLITS)
+#     'camera',       # E.g. ring_front_center
+#     'timestamp',    # E.g. 315975652303331336, yes this is GPS time :P :P
 
-    ## Optional
-    'track_id',     # A UUID of a specific track / annotation in the frame
+#     ## Optional
+#     'track_id',     # A UUID of a specific track / annotation in the frame
     
-    'crop_x', 'crop_y',
-    'crop_w', 'crop_h',
-                    # A specific viewport / crop of the frame
-  )
+#     'crop_x', 'crop_y',
+#     'crop_w', 'crop_h',
+#                     # A specific viewport / crop of the frame
+#   )
   
-  OPTIONAL = ('track_id', 'crop_x', 'crop_y', 'crop_w', 'crop_h',)
+#   OPTIONAL = ('track_id', 'crop_x', 'crop_y', 'crop_w', 'crop_h',)
 
-  PREFIX = 'argoverse://'
+#   PREFIX = 'argoverse://'
 
-  def __init__(self, **kwargs):
-    # Use kwargs, then fall back to args
-    for i, k in enumerate(self.__slots__):
-      setattr(self, k, kwargs.get(k, ''))
-    if self.timestamp is not '':
-      self.timestamp = int(self.timestamp)
+#   def __init__(self, **kwargs):
+#     # Use kwargs, then fall back to args
+#     for i, k in enumerate(self.__slots__):
+#       setattr(self, k, kwargs.get(k, ''))
+#     if self.timestamp is not '':
+#       self.timestamp = int(self.timestamp)
   
-  def to_str(self):
-    path = '&'.join(
-      attr + '=' + str(getattr(self, attr))
-      for attr in self.__slots__
-      if getattr(self, attr))
-    return self.PREFIX + path
+#   def to_str(self):
+#     path = '&'.join(
+#       attr + '=' + str(getattr(self, attr))
+#       for attr in self.__slots__
+#       if getattr(self, attr))
+#     return self.PREFIX + path
   
-  def __str__(self):
-    return self.to_str()
+#   def __str__(self):
+#     return self.to_str()
 
-  def to_dict(self):
-    return dict((k, getattr(self, k, '')) for k in self.__slots__)
+#   def to_dict(self):
+#     return dict((k, getattr(self, k, '')) for k in self.__slots__)
 
-  def update(self, **kwargs):
-    for k in self.__slots__:
-      if k in kwargs:
-        setattr(self, k, kwargs[k])
+#   def update(self, **kwargs):
+#     for k in self.__slots__:
+#       if k in kwargs:
+#         setattr(self, k, kwargs[k])
 
-  def set_crop(self, bbox):
-    self.update(
-      crop_x=bbox.x,
-      crop_y=bbox.y,
-      crop_w=bbox.width,
-      crop_h=bbox.height)
+#   def set_crop(self, bbox):
+#     self.update(
+#       crop_x=bbox.x,
+#       crop_y=bbox.y,
+#       crop_w=bbox.width,
+#       crop_h=bbox.height)
 
-  def has_crop(self):
-    return all(
-      getattr(self, 'crop_%s' % a) is not ''
-      for a in ('x', 'y', 'w', 'h'))
+#   def has_crop(self):
+#     return all(
+#       getattr(self, 'crop_%s' % a) is not ''
+#       for a in ('x', 'y', 'w', 'h'))
 
-  def get_crop_bbox(self):
-    return BBox(
-            x=self.crop_x, y=self.crop_y,
-            width=self.crop_w, height=self.crop_h)
+#   def get_crop_bbox(self):
+#     return BBox(
+#             x=self.crop_x, y=self.crop_y,
+#             width=self.crop_w, height=self.crop_h)
 
-  def get_viewport(self):
-    if self.has_crop():
-      return self.get_crop_bbox()
-    else:
-      return BBox.of_size(*get_image_width_height(self.camera))
+#   def get_viewport(self):
+#     if self.has_crop():
+#       return self.get_crop_bbox()
+#     else:
+#       return BBox.of_size(*get_image_width_height(self.camera))
 
-  @staticmethod
-  def from_str(s):
-    if isinstance(s, FrameURI):
-      return s
-    assert s.startswith(FrameURI.PREFIX)
-    toks_s = s[len(FrameURI.PREFIX):]
-    toks = toks_s.split('&')
-    assert len(toks) >= (len(FrameURI.__slots__) - len(FrameURI.OPTIONAL))
-    uri = FrameURI(**dict(tok.split('=') for tok in toks))
-    return uri
+#   @staticmethod
+#   def from_str(s):
+#     if isinstance(s, FrameURI):
+#       return s
+#     assert s.startswith(FrameURI.PREFIX)
+#     toks_s = s[len(FrameURI.PREFIX):]
+#     toks = toks_s.split('&')
+#     assert len(toks) >= (len(FrameURI.__slots__) - len(FrameURI.OPTIONAL))
+#     uri = FrameURI(**dict(tok.split('=') for tok in toks))
+#     return uri
 
 class BBox(common.BBox):
   __slots__ = tuple(
@@ -898,7 +899,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
           "Could not find timestamp within 1 sec of %s" % timestamp
 
     path = ts_to_path[timestamp]
-    return path
+    return path, timestamp
   
   def get_nearest_lidar_sweep_id(self, timestamp):
     """Return the index of the lidar sweep and its timestamp in this log that
@@ -960,17 +961,50 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
 
     return bboxes
 
-  # @klepto.lru_cache(maxsize=1000, ignore=(0,)) doesnt seem to work concurrent ... 
+  @klepto.lru_cache(maxsize=10, ignore=(0,))
+  def _get_lidar(idx):
+    return self.get_lidar(idx)
+
   def get_maybe_motion_corrected_cloud(self, timestamp):
     """Similar to `get_lidar()` but motion-corrects the entire cloud
     to (likely camera-time) `timestamp`.  Return also True if
     motion corrected."""
     idx, lidar_t = self.get_nearest_lidar_sweep_id(timestamp)
-    cloud = self.get_lidar(idx)
+    cloud = self._get_lidar(idx)
     try:
       return self.get_motion_corrected_pts(cloud, lidar_t, timestamp), True
     except MissingPose:
       return cloud, False
+
+  def get_cloud_in_image(self, camera, timestamp, viewport=None):
+    cloud, motion_corrected = self.get_maybe_motion_corrected_cloud(timestamp)
+    calib = self.get_calibration(camera)
+
+    if not viewport:
+      viewport = common.BBox.of_size(*get_image_width_height(self.camera))
+
+    # Limits of the cloud to crop
+    x, y, w, h = (
+      self.viewport.x, self.viewport.y,
+      self.viewport.width, self.viewport.height)
+
+    # Per the argoverse recommendation, this should be safe:
+    # https://github.com/argoai/argoverse-api/blob/master/demo_usage/argoverse_tracking_tutorial.ipynb
+    uv = calib.project_ego_to_image(cloud).T
+    idx_ = np.where(
+            np.logical_and.reduce((
+              # Filter offscreen points
+              x <= uv[0, :], uv[0, :] < x + w - 1.0,
+              y <= uv[1, :], uv[1, :] < y + h - 1.0,
+              # Filter behind-screen points
+              uv[2, :] > 0)))
+    idx_ = idx_[0]
+    uv = uv[:, idx_]
+    uv = uv.T
+
+    # Correct for image origin if this frame is a crop
+    uv -= np.array([self.viewport.x, self.viewport.y, 0])
+    return uv, motion_corrected
 
   def get_city_to_ego(self, timestamp):
     from argoverse.data_loading.pose_loader import \
@@ -1032,13 +1066,10 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
 class Fixtures(object):
 
   # All Argoverse tarballs served from here
-  # BASE_TARBALL_URL = "https://s3.amazonaws.com/argoai-argoverse"
+  BASE_TARBALL_URL = "https://s3.amazonaws.com/argoai-argoverse"
 
-  # If you happen to have a local copy of the tarballs, use this:
-  BASE_TARBALL_URL = "file:///outer_root/tmp/argotars"
-
-  # # If you happen to have a local copy of the tarballs, use this:
-  # BASE_TARBALL_URL = "file:///tmp/argotars"
+  # If you happen to have a local copy of the tarballs, use this instead:
+  #BASE_TARBALL_URL = "file:///tmp/argotars"
 
   ###
   ### NB: we omit the forecasting tarballs because they appear to exclude
@@ -1049,7 +1080,7 @@ class Fixtures(object):
 
   SAMPLE_TARBALLS = (
     TRACKING_SAMPLE,
-    # "forecasting_sample.tar.gz",
+    # "forecasting_sample.tar.gz", Ignore forecasting for now
   )
 
   TRACKING_TARBALLS = (
@@ -1062,6 +1093,7 @@ class Fixtures(object):
   )
 
   PREDICTION_TARBALLS = tuple()
+  # Ignore forecasting for now
   # (
   #   "forecasting_train.tar.gz",
   #   "forecasting_val.tar.gz",
@@ -1076,7 +1108,6 @@ class Fixtures(object):
 
   ROOT = os.path.join(conf.AU_DATA_CACHE, 'argoverse')
 
-  # TEST_FIXTURE_DIR = os.path.join(conf.AU_DY_TEST_FIXTURES, 'argoverse') ~~~~~~~~~~~
 
 
   ## Source Data
@@ -1138,12 +1169,16 @@ class Fixtures(object):
   def get_loader(cls, uri):
     """Return a (maybe cached) `AUTrackingLoader` for the given `uri`"""
     if isinstance(uri, six.string_types):
-      uri = FrameURI.from_str(uri)
-    return cls._get_loader(uri.tarball_name, uri.log_id)
+      uri = URI.from_str(uri)
+    tarball_name, log_id = uri.segment_id.split('|')
+    return cls._get_loader(tarball_name, log_id)
   
   @classmethod
   @klepto.inf_cache(ignore=(0,))
   def _get_loader(cls, tarball_name, log_id):
+    """Argoverse log loaders are paifully expensive because they
+    scrape the filesystem in the ctor.  Here we try to cache them
+    as much as possible."""
     loader = None # Build this
     # Need to find the dir corresponding to log_id
     base_path = cls.tarball_dir(tarball_name)
@@ -1157,11 +1192,11 @@ class Fixtures(object):
     assert loader, "Could not find log %s in %s" % (log_id, base_path)
     return loader
 
-  @classmethod
-  def get_frame(cls, uri):
-    """Factory function for constructing an AVFrame that uses this Fixtures
-    instance as fixtures."""
-    return AVFrame(uri=uri, FIXTURES=cls)
+  # @classmethod
+  # def get_frame(cls, uri):
+  #   """Factory function for constructing an AVFrame that uses this Fixtures
+  #   instance as fixtures."""
+  #   return AVFrame(uri=uri, FIXTURES=cls)
 
 
     # # These stupid Loader objects are painfully, painfully expensive because
@@ -1259,16 +1294,19 @@ class Fixtures(object):
       base_path = cls.tarball_dir(tarball)
       for log_dir in cls.get_log_dirs(base_path):
         log_id = os.path.split(log_dir)[-1]
-        yield FrameURI(split=split, tarball_name=tarball, log_id=log_id)
+        yield av.URI(
+          split=split,
+          dataset='argoverse',
+          segment_id=tarball + '|' + log_id)
 
   @classmethod
-  def get_frame_uris(cls, log_frame_uri):
+  def get_image_frame_uris(cls, log_frame_uri):
     loader = cls.get_loader(log_frame_uri)
     for camera, ts_to_path in loader.timestamp_image_dict.items():
       for ts in ts_to_path.keys():
-        uri = log_frame_uri.to_dict()
+        uri = copy.deepcopy(log_frame_uri)
         uri.update(camera=camera, timestamp=ts)
-        yield FrameURI(**uri)
+        yield uri
 
   
 
@@ -1298,6 +1336,124 @@ class Fixtures(object):
     ImageAnnoTable.save_anno_reports(spark)
 
 
+
+###
+### FrameTable Impl
+###
+
+class FrameTable(av.FrameTableBase):
+
+  FIXTURES = Fixtures
+
+  @classmethod
+  def create_frame_rdd(cls, spark):
+    pass
+
+  ## Support
+  
+  @classmethod
+  def create_frame_uri_rdd(cls, spark, splits=None):
+    if not splits:
+      splits = cls.FIXTURES.SPLITS
+
+    util.log.info("Building frame table for splits %s" % (splits,))
+
+    # Be careful to hint to Spark how to parallelize reads
+    log_uris = list(
+              itertools.chain.from_iterable(
+                    cls.FIXTURES.get_log_uris(split)
+                    for split in splits))
+    util.log.info("... reading from %s logs ..." % len(log_uris))
+    log_uri_rdd = spark.sparkContext.parallelize(
+                            log_uris, numSlices=len(log_uris))
+    uri_rdd = log_uri_rdd.flatMap(cls.FIXTURES.get_image_frame_uris)
+    uri_rdd = uri_rdd.partitionBy(100, lambda uri: uri.segment_id)
+    util.log.info("... read %s URIs ..." % uri_rdd.count())
+    return uri_rdd
+
+  @classmethod
+  def create_frame(cls, uri):
+    f = av.Frame(uri=uri)
+    f.camera_images = cls._get_camera_images(uri)
+
+
+  def _get_camera_images(cls, uri):
+    loader = cls.FIXTURES.get_loader(uri)
+    cameras = []
+    if f.uri.camera:
+      cameras = [uri.camera]
+    else:
+      from argoverse.utils import camera_stats
+      cameras = CAMERA_LIST
+
+    cis = []
+    for camera in cameras:
+      path, path_ts = loader.get_nearest_image_path(camera, uri.timestamp)
+      cloud, motion_corrected = loader.get_cloud_in_image(camera, path_ts)
+      cis.append(av.CameraImage(
+        camera_name=camera,
+        image_jpeg=bytearray(open(path, 'rb').read()),
+        timestamp=path_ts,
+        cloud=cloud,
+        cloud_motion_corrected=motion_corrected,
+      ))
+    return cis
+
+
+      
+
+    # Fill URI
+    # Fill image
+    # Fill cloud
+    # Fill cuboids
+
+
+  @classmethod
+  def _create_frame_rdd(cls, spark, splits=None):
+    uri_rdd = cls.create_frame_uri_rdd(spark, splits=splits)
+
+    def iter_frames(uri):
+      # from collections import namedtuple ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      # pt = namedtuple('pt', 'x y z')
+
+      frame = cls.FIXTURES.get_frame(uri)
+      for bbox in frame.image_bboxes:
+        row = {}
+
+        # Obj
+        row.update(bbox.to_row_dict())
+        # # TODO make spark accept numpy and numpy float64 things
+        # row = box.to_dict()
+        # IGNORE = ('cuboid_pts', 'cuboid_pts_image', 'ego_to_obj')
+        # for attr in IGNORE:
+        #   v = row.pop(attr)
+        #   if attr == 'cuboid_pts_image':
+        #     continue
+        #   if hasattr(v, 'shape'):
+        #     if len(v.shape) == 1:
+        #       row[attr] = pt(*v.tolist())
+        #     else:
+        #       row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
+        
+        # Anno Context
+        obj_uri = copy.deepcopy(frame.uri)
+        obj_uri.track_id = bbox.track_id
+        row.update(
+          frame_uri=str(uri),
+          uri=str(obj_uri),
+          **obj_uri.to_dict())
+        row.update(
+          city=cls.FIXTURES.get_loader(uri).city_name,
+          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(bbox.category_name, ''))
+        
+        from pyspark.sql import Row
+        yield Row(**row)
+    
+    row_rdd = uri_rdd.flatMap(iter_anno_rows)
+    df = spark.createDataFrame(row_rdd)
+    df = cls._impute_rider_for_bikes(spark, df)
+    return df
+  
 
 class ImageAnnoTable(object):
   """A table of argoverse annotations projected into image space."""
