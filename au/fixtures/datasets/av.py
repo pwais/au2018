@@ -6,6 +6,8 @@ from au import conf
 from au import util
 from au.fixtures.datasets import common
 
+import numpy as np
+
 import six
 
 class Transform(object):
@@ -14,24 +16,33 @@ class Transform(object):
   slots__ = ('rotation', 'translation')
   
   def __init__(self, **kwargs):
-    self.rotation = kwargs.get('rotation', np.array([]))
+    self.rotation = kwargs.get('rotation', np.eye((3, 3)))
+    self.translation = kwargs.get('translation', np.zeros(3))
 
 class Cuboid(object):
+  """TODO describe point order"""
   __slots__ = (
     'track_id',
     'category_name',
+
+    ## Points
+    '3d_box',               # Points in ego / robot frame defining the cuboid.
+                            # Given in order described above.
+    'motion_corrected',     # Is `3d_box` corrected for ego motion?
 
     ## In robot / ego frame
     'length_meters',        # Cuboid frame: +x forward
     'width_meters',         #               +y left
     'height_meters',        #               +z up
-    'distance_meters',      # Dist to closest cuboid point
+    'distance_meters',      # Dist from ego to closest cuboid point
     
-    'yaw',                  # +yaw to the left (right-handed)
-    'pitch',                # +pitch up from horizon
-    'roll',                 # +roll towards y axis (?); usually 0
+    # 'yaw',                  # +yaw to the left (right-handed)
+    # 'pitch',                # +pitch up from horizon
+    # 'roll',                 # +roll towards y axis (?); usually 0
 
-    'obj_from_ego',         # type: Transform
+    'obj_from_ego',         # type: Transform from ego / robot frame to object
+    
+    'extra',                # type: string -> ?  Extra metadata
   )
 
 class BBox(common.BBox):
@@ -159,7 +170,10 @@ class Frame(object):
 
   __slots__ = (
     'uri',                  # type: URI or str
-    'camera_images',        # type List[CameraImage]
+    'camera_images',        # type: List[CameraImage]
+    'cuboids',              # type: List[Cuboid]
+    'world_to_ego',         # type: Transform; the pose of the robot in the
+                            #   global frame (typicaly the city frame)
   )
 
 

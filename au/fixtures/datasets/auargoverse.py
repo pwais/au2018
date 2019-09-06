@@ -362,232 +362,232 @@ class BBox(common.BBox):
     # Now blend!
     img[:] = cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
 
-  @staticmethod
-  def from_argoverse_label(
-        uri,
-        object_label_record,
-        motion_corrected=True,
-        fixures_cls=None):
-    """Construct and return a single `BBox` instance from the given
-    Argoverse ObjectLabelRecord instance.  Labels are in lidar space-time
-    and *not* camera space-time; therefore, transforming labels into
-    the camera domain requires (to be most precise) correction for the
-    egomotion of the robot.  This correction can be substantial (~20cm)
-    at high robot speed.  Apply this correction only if
-    `motion_corrected`.
-    """
+  # @staticmethod
+  # def from_argoverse_label(
+  #       uri,
+  #       object_label_record,
+  #       motion_corrected=True,
+  #       fixures_cls=None):
+  #   """Construct and return a single `BBox` instance from the given
+  #   Argoverse ObjectLabelRecord instance.  Labels are in lidar space-time
+  #   and *not* camera space-time; therefore, transforming labels into
+  #   the camera domain requires (to be most precise) correction for the
+  #   egomotion of the robot.  This correction can be substantial (~20cm)
+  #   at high robot speed.  Apply this correction only if
+  #   `motion_corrected`.
+  #   """
     
-    if not fixures_cls:
-      fixures_cls = Fixtures
+  #   if not fixures_cls:
+  #     fixures_cls = Fixtures
     
-    loader = fixures_cls.get_loader(uri)
-    calib = loader.get_calibration(uri.camera)
+  #   loader = fixures_cls.get_loader(uri)
+  #   calib = loader.get_calibration(uri.camera)
 
-    def fill_cuboid_pts(bbox):
-      bbox.cuboid_pts = object_label_record.as_3d_bbox()
-      bbox.motion_corrected = False
-        # Points in robot frame
-      if motion_corrected:
-        try:
-          bbox.cuboid_pts = loader.get_motion_corrected_pts(
-                                    bbox.cuboid_pts,
-                                    object_label_record.timestamp,
-                                    uri.timestamp)
-          bbox.motion_corrected = True
-        except MissingPose:
-          # Garbage!
-          pass
+  #   def fill_cuboid_pts(bbox):
+  #     bbox.cuboid_pts = object_label_record.as_3d_bbox()
+  #     bbox.motion_corrected = False
+  #       # Points in robot frame
+  #     if motion_corrected:
+  #       try:
+  #         bbox.cuboid_pts = loader.get_motion_corrected_pts(
+  #                                   bbox.cuboid_pts,
+  #                                   object_label_record.timestamp,
+  #                                   uri.timestamp)
+  #         bbox.motion_corrected = True
+  #       except MissingPose:
+  #         # Garbage!
+  #         pass
 
-    def fill_extra(bbox):
-      bbox.track_id = object_label_record.track_id
-      bbox.occlusion = object_label_record.occlusion
-      bbox.length_meters = object_label_record.length
-      bbox.width_meters = object_label_record.width
-      bbox.height_meters = object_label_record.height
+  #   def fill_extra(bbox):
+  #     bbox.track_id = object_label_record.track_id
+  #     bbox.occlusion = object_label_record.occlusion
+  #     bbox.length_meters = object_label_record.length
+  #     bbox.width_meters = object_label_record.width
+  #     bbox.height_meters = object_label_record.height
 
-      bbox.distance_meters = \
-        float(np.min(np.linalg.norm(bbox.cuboid_pts, axis=-1)))
+  #     bbox.distance_meters = \
+  #       float(np.min(np.linalg.norm(bbox.cuboid_pts, axis=-1)))
 
-      from scipy.spatial.transform import Rotation as R
-      from argoverse.utils.transform import quat2rotmat
-      rotmat = quat2rotmat(object_label_record.quaternion)
-        # NB: must use quat2rotmat due to Argo-specific quaternion encoding
-      # bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
-      bbox.relative_yaw_radians = float(R.from_dcm(rotmat).as_euler('zxy')[0])
-        # Tait–Bryan?  ... But y in Argoverse is to the left?
+  #     from scipy.spatial.transform import Rotation as R
+  #     from argoverse.utils.transform import quat2rotmat
+  #     rotmat = quat2rotmat(object_label_record.quaternion)
+  #       # NB: must use quat2rotmat due to Argo-specific quaternion encoding
+  #     # bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
+  #     bbox.relative_yaw_radians = float(R.from_dcm(rotmat).as_euler('zxy')[0])
+  #       # Tait–Bryan?  ... But y in Argoverse is to the left?
       
-      camera_yaw = math.atan2(calib.R[2, 1], calib.R[1, 1])
-      # bbox.relative_yaw_to_camera_radians = [camera_yaw, 
+  #     camera_yaw = math.atan2(calib.R[2, 1], calib.R[1, 1])
+  #     # bbox.relative_yaw_to_camera_radians = [camera_yaw, 
 
-      bbox.ego_to_obj = object_label_record.translation
-      city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
-      # bbox.city_to_ego = common.Transform(
-      #                       rotation=city_to_ego_se3.rotation,
-      #                       translation=city_to_ego_se3.translation) ~~~~~~~~~~
-      bbox.city_to_ego = city_to_ego_se3.translation
-
-
+  #     bbox.ego_to_obj = object_label_record.translation
+  #     city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
+  #     # bbox.city_to_ego = common.Transform(
+  #     #                       rotation=city_to_ego_se3.rotation,
+  #     #                       translation=city_to_ego_se3.translation) ~~~~~~~~~~
+  #     bbox.city_to_ego = city_to_ego_se3.translation
 
 
-      from scipy.spatial.transform import Rotation as R
-      # bbox.ego_to_camera = common.Transform(
-      #                         rotation=R.from_dcm(calib.R).as_quat(),
-      #                         translation=calib.T) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-      bbox.camera_norm = get_camera_normal(calib)
-
-      bbox.obj_ypr_in_ego = R.from_dcm(rotmat).as_euler('zxy')
-
-      from argoverse.utils.se3 import SE3
-      x_hat = np.array([1, 0, 0])
-      cos_theta = bbox.camera_norm.dot(x_hat)
-      rot_axis = np.cross(bbox.camera_norm, x_hat)
-      ego_to_cam_device_rot = R.from_rotvec(
-        math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
-
-      # Recover translation from ego to camera
-      ego_to_cam = SE3(rotation=calib.R, translation=calib.T)
-      cam_device_from_ego_T = ego_to_cam.inverse().translation
-      cam_device_from_ego = SE3(
-            rotation=ego_to_cam_device_rot.as_dcm(),
-            translation=cam_device_from_ego_T)
-      # ego_to_cam_device.rotation = ego_to_cam_device_rot.as_dcm()
-      # obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
-      # obj_in_cam = cam_device_from_ego.right_multiply_with_se3(obj_from_ego)
-
-      camera_to_obj = bbox.ego_to_obj - cam_device_from_ego_T
-      bbox.camera_to_obj = camera_to_obj
-
-      camera_to_obj_hat = camera_to_obj / np.linalg.norm(camera_to_obj)
 
 
-      # doh_camera_norm = np.array([1, 0, 0])
-      # cos_theta = bbox.camera_norm.dot(camera_to_obj_hat)
-      # rot_axis = np.cross(bbox.camera_norm, camera_to_obj_hat)
-      obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
-      obj_normal = obj_from_ego.rotation.dot(x_hat)
-      cos_theta = camera_to_obj_hat.dot(obj_normal)
-      rot_axis = np.cross(camera_to_obj_hat, obj_normal)
+  #     from scipy.spatial.transform import Rotation as R
+  #     # bbox.ego_to_camera = common.Transform(
+  #     #                         rotation=R.from_dcm(calib.R).as_quat(),
+  #     #                         translation=calib.T) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-      obj_from_ray = R.from_rotvec(
-        math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
-      # ray_from_cam = SE3(
-      #   rotation=ray_from_cam_normal.as_dcm(),
-      #   translation=np.zeros(3))
-      # obj_in_ray = obj_in_cam.right_multiply_with_se3(ray_from_cam)
+  #     bbox.camera_norm = get_camera_normal(calib)
 
-      # obj_camera_local = R.from_dcm(obj_in_cam.rotation) * obj_from_cam.inv()
-      # obj_camera_local = R.from_dcm(obj_in_ray.rotation)
-      bbox.obj_ypr_camera_local = [NumpyArray(obj_from_ray.as_euler('zxy'))]
+  #     bbox.obj_ypr_in_ego = R.from_dcm(rotmat).as_euler('zxy')
 
-      
+  #     from argoverse.utils.se3 import SE3
+  #     x_hat = np.array([1, 0, 0])
+  #     cos_theta = bbox.camera_norm.dot(x_hat)
+  #     rot_axis = np.cross(bbox.camera_norm, x_hat)
+  #     ego_to_cam_device_rot = R.from_rotvec(
+  #       math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
+
+  #     # Recover translation from ego to camera
+  #     ego_to_cam = SE3(rotation=calib.R, translation=calib.T)
+  #     cam_device_from_ego_T = ego_to_cam.inverse().translation
+  #     cam_device_from_ego = SE3(
+  #           rotation=ego_to_cam_device_rot.as_dcm(),
+  #           translation=cam_device_from_ego_T)
+  #     # ego_to_cam_device.rotation = ego_to_cam_device_rot.as_dcm()
+  #     # obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
+  #     # obj_in_cam = cam_device_from_ego.right_multiply_with_se3(obj_from_ego)
+
+  #     camera_to_obj = bbox.ego_to_obj - cam_device_from_ego_T
+  #     bbox.camera_to_obj = camera_to_obj
+
+  #     camera_to_obj_hat = camera_to_obj / np.linalg.norm(camera_to_obj)
 
 
-      # # Compute object pose relative to camera view; this is the object's
-      # # pose relative to a ray cast from camera center to object centroid.
-      # # We can use this pose as a label for predicting 'local pose'
-      # # as described in Drago et al. https://arxiv.org/pdf/1612.00496.pdf .
-      # # BARF: camera extrinsics can vary widely:
-      # # * Log f9fa3960 has pitch of 0.51 rad for front center camera
-      # # * Log 53037376 has pitch of 0.008 rad for front center camera
-      # # And the above two logs have yaws / rolls that are off by pi.
-      # # However, extrinsic translation has less variance, as one might expect.
-      # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-      
-      # # from argoverse.utils.calibration import get_camera_extrinsic_matrix
-      # # calib_raw = get_camera_extrinsic_matrix(calib.calib_data)
-      # # vehicle_SE3_sensor = calib.calib_data["value"]['vehicle_SE3_camera_']
-      # # egovehicle_t_camera = np.array(vehicle_SE3_sensor["translation"])
-      # # egovehicle_q_camera = vehicle_SE3_sensor["rotation"]["coefficients"]
-      # # egovehicle_R_camera = quat2rotmat(egovehicle_q_camera)
+  #     # doh_camera_norm = np.array([1, 0, 0])
+  #     # cos_theta = bbox.camera_norm.dot(camera_to_obj_hat)
+  #     # rot_axis = np.cross(bbox.camera_norm, camera_to_obj_hat)
+  #     obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
+  #     obj_normal = obj_from_ego.rotation.dot(x_hat)
+  #     cos_theta = camera_to_obj_hat.dot(obj_normal)
+  #     rot_axis = np.cross(camera_to_obj_hat, obj_normal)
 
-      # # cam_h, cam_w = get_image_width_height(uri.camera)
-      # # P = calib.K[:,:3].dot(calib.extrinsic[:3,:4])#[:,:-1]
-      # # P_plus = np.linalg.pinv(P)#P.T * np.linalg.inv(P * P.T)
-      # # pt3 = np.dot(P_plus,[.5 * cam_w, .5 * cam_h, 10.])
+  #     obj_from_ray = R.from_rotvec(
+  #       math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
+  #     # ray_from_cam = SE3(
+  #     #   rotation=ray_from_cam_normal.as_dcm(),
+  #     #   translation=np.zeros(3))
+  #     # obj_in_ray = obj_in_cam.right_multiply_with_se3(ray_from_cam)
 
-      # # P = K * | R |T|
-      # #         |000 1|
-      # P = calib.K.dot(calib.extrinsic)
-
-      # # Zisserman pg 161
-      # # http://cvrs.whu.edu.cn/downloads/ebooks/Multiple%20View%20Geometry%20in%20Computer%20Vision%20(Second%20Edition).pdf
-      # # The principal axis vector.  A ray that points along the principal 
-      # # axis.
-      # # P = [M | p4]; M = |..|
-      # #                   |m3|
-      # # pv = det(M) * m3
-      # pv = np.linalg.det(P[:3,:3]) * P[2,:3].T
-      # pv_hat = pv / np.linalg.norm(pv)
+  #     # obj_camera_local = R.from_dcm(obj_in_cam.rotation) * obj_from_cam.inv()
+  #     # obj_camera_local = R.from_dcm(obj_in_ray.rotation)
+  #     bbox.obj_ypr_camera_local = [NumpyArray(obj_from_ray.as_euler('zxy'))]
 
       
-      # # P_plus * [.5 * cam_w, .5 * cam_h, 10]
-      # # ptcam = np.array([ ptcam ])
-      # # pt3 = calib.project_image_to_ego(ptcam)
+
+
+  #     # # Compute object pose relative to camera view; this is the object's
+  #     # # pose relative to a ray cast from camera center to object centroid.
+  #     # # We can use this pose as a label for predicting 'local pose'
+  #     # # as described in Drago et al. https://arxiv.org/pdf/1612.00496.pdf .
+  #     # # BARF: camera extrinsics can vary widely:
+  #     # # * Log f9fa3960 has pitch of 0.51 rad for front center camera
+  #     # # * Log 53037376 has pitch of 0.008 rad for front center camera
+  #     # # And the above two logs have yaws / rolls that are off by pi.
+  #     # # However, extrinsic translation has less variance, as one might expect.
+  #     # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       
-      # from argoverse.utils.se3 import SE3
-      # ego_to_cam = SE3(rotation=calib.R, translation=calib.T).inverse()
-      # bbox.calib_ypr = ego_to_cam.translation
-      # bbox.relative_yaw_to_camera_radians = [
-      #   [float(v) for v in pv_hat]
-      # ]
+  #     # # from argoverse.utils.calibration import get_camera_extrinsic_matrix
+  #     # # calib_raw = get_camera_extrinsic_matrix(calib.calib_data)
+  #     # # vehicle_SE3_sensor = calib.calib_data["value"]['vehicle_SE3_camera_']
+  #     # # egovehicle_t_camera = np.array(vehicle_SE3_sensor["translation"])
+  #     # # egovehicle_q_camera = vehicle_SE3_sensor["rotation"]["coefficients"]
+  #     # # egovehicle_R_camera = quat2rotmat(egovehicle_q_camera)
+
+  #     # # cam_h, cam_w = get_image_width_height(uri.camera)
+  #     # # P = calib.K[:,:3].dot(calib.extrinsic[:3,:4])#[:,:-1]
+  #     # # P_plus = np.linalg.pinv(P)#P.T * np.linalg.inv(P * P.T)
+  #     # # pt3 = np.dot(P_plus,[.5 * cam_w, .5 * cam_h, 10.])
+
+  #     # # P = K * | R |T|
+  #     # #         |000 1|
+  #     # P = calib.K.dot(calib.extrinsic)
+
+  #     # # Zisserman pg 161
+  #     # # http://cvrs.whu.edu.cn/downloads/ebooks/Multiple%20View%20Geometry%20in%20Computer%20Vision%20(Second%20Edition).pdf
+  #     # # The principal axis vector.  A ray that points along the principal 
+  #     # # axis.
+  #     # # P = [M | p4]; M = |..|
+  #     # #                   |m3|
+  #     # # pv = det(M) * m3
+  #     # pv = np.linalg.det(P[:3,:3]) * P[2,:3].T
+  #     # pv_hat = pv / np.linalg.norm(pv)
+
       
-      # # [[float(v) for v in 
-      # #   R.from_dcm(egovehicle_R_camera).as_euler('zxy').tolist()] , [
-      # #     float(v) for v in pt3.tolist()]]
-      # obj_from_cam = (
-      #   object_label_record.translation - ego_to_cam.translation)
-      # obj_t_x, obj_t_y, obj_t_z = obj_from_cam 
+  #     # # P_plus * [.5 * cam_w, .5 * cam_h, 10]
+  #     # # ptcam = np.array([ ptcam ])
+  #     # # pt3 = calib.project_image_to_ego(ptcam)
       
-      # yaw = R.from_euler('z', math.atan2(-obj_t_y, obj_t_x))
-      # pitch = R.from_euler('y', math.atan2(obj_t_z, obj_t_x))
-      # roll = R.from_euler('x', -R.from_dcm(rotmat).as_euler('zxy')[2])
-      #   # Use camera roll; don't roll the camera when "pointing it" at obj
-      #   # Also adjust camera roll for pi / 2 frame change that's embedded
-      #   # into calibration JSON
+  #     # from argoverse.utils.se3 import SE3
+  #     # ego_to_cam = SE3(rotation=calib.R, translation=calib.T).inverse()
+  #     # bbox.calib_ypr = ego_to_cam.translation
+  #     # bbox.relative_yaw_to_camera_radians = [
+  #     #   [float(v) for v in pv_hat]
+  #     # ]
       
-      # obj_from_ray_R = (yaw * pitch * roll)
-
-      # obj_in_cam_ray = R.from_dcm(rotmat) * obj_from_ray_R.inv()
-      # bbox.obj_in_crop = obj_in_cam_ray.as_euler('zyx')
-      #                           # yaw, pitch, roll
-
-      # bbox.obj_in_crop_debug = [
-      #   math.atan2(-obj_t_y, obj_t_x), # yaw
-      #   math.atan2(obj_t_z, obj_t_x), # pitch
-      #   float(R.from_dcm(ego_to_cam.rotation).as_euler('zxy')[2] - math.pi / 2) # roll
-      # ]
-      # bbox.obj_in_crop_xyz = [float(obj_t_x), float(obj_t_y), float(obj_t_z)]
-
-    def fill_bbox_core(bbox):
-      bbox.category_name = object_label_record.label_class
-
-      bbox.im_width, bbox.im_height = get_image_width_height(uri.camera)
-      uv = calib.project_ego_to_image(bbox.cuboid_pts)
+  #     # # [[float(v) for v in 
+  #     # #   R.from_dcm(egovehicle_R_camera).as_euler('zxy').tolist()] , [
+  #     # #     float(v) for v in pt3.tolist()]]
+  #     # obj_from_cam = (
+  #     #   object_label_record.translation - ego_to_cam.translation)
+  #     # obj_t_x, obj_t_y, obj_t_z = obj_from_cam 
       
-      bbox.cuboid_pts_image = np.array([uv[:, 0] , uv[:, 1]]).T
+  #     # yaw = R.from_euler('z', math.atan2(-obj_t_y, obj_t_x))
+  #     # pitch = R.from_euler('y', math.atan2(obj_t_z, obj_t_x))
+  #     # roll = R.from_euler('x', -R.from_dcm(rotmat).as_euler('zxy')[2])
+  #     #   # Use camera roll; don't roll the camera when "pointing it" at obj
+  #     #   # Also adjust camera roll for pi / 2 frame change that's embedded
+  #     #   # into calibration JSON
+      
+  #     # obj_from_ray_R = (yaw * pitch * roll)
 
-      x1, x2 = np.min(uv[:, 0]), np.max(uv[:, 0])
-      y1, y2 = np.min(uv[:, 1]), np.max(uv[:, 1])
-      z = float(np.max(uv[:, 2]))
+  #     # obj_in_cam_ray = R.from_dcm(rotmat) * obj_from_ray_R.inv()
+  #     # bbox.obj_in_crop = obj_in_cam_ray.as_euler('zyx')
+  #     #                           # yaw, pitch, roll
 
-      bbox.set_x1_y1_x2_y2(x1, y1, x2, y2)
+  #     # bbox.obj_in_crop_debug = [
+  #     #   math.atan2(-obj_t_y, obj_t_x), # yaw
+  #     #   math.atan2(obj_t_z, obj_t_x), # pitch
+  #     #   float(R.from_dcm(ego_to_cam.rotation).as_euler('zxy')[2] - math.pi / 2) # roll
+  #     # ]
+  #     # bbox.obj_in_crop_xyz = [float(obj_t_x), float(obj_t_y), float(obj_t_z)]
 
-      num_onscreen = bbox.get_num_onscreen_corners()
-      bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
-      bbox.is_visible = (
-        z > 0 and
-        num_onscreen > 0 and
-        object_label_record.occlusion < 100)
+  #   def fill_bbox_core(bbox):
+  #     bbox.category_name = object_label_record.label_class
 
-      bbox.clamp_to_screen()
-      bbox.z = float(z)
+  #     bbox.im_width, bbox.im_height = get_image_width_height(uri.camera)
+  #     uv = calib.project_ego_to_image(bbox.cuboid_pts)
+      
+  #     bbox.cuboid_pts_image = np.array([uv[:, 0] , uv[:, 1]]).T
 
-    bbox = BBox()
-    fill_cuboid_pts(bbox)
-    fill_bbox_core(bbox)
-    fill_extra(bbox)
-    return bbox
+  #     x1, x2 = np.min(uv[:, 0]), np.max(uv[:, 0])
+  #     y1, y2 = np.min(uv[:, 1]), np.max(uv[:, 1])
+  #     z = float(np.max(uv[:, 2]))
+
+  #     bbox.set_x1_y1_x2_y2(x1, y1, x2, y2)
+
+  #     num_onscreen = bbox.get_num_onscreen_corners()
+  #     bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
+  #     bbox.is_visible = (
+  #       z > 0 and
+  #       num_onscreen > 0 and
+  #       object_label_record.occlusion < 100)
+
+  #     bbox.clamp_to_screen()
+  #     bbox.z = float(z)
+
+  #   bbox = BBox()
+  #   fill_cuboid_pts(bbox)
+  #   fill_bbox_core(bbox)
+  #   fill_extra(bbox)
+  #   return bbox
 
 
 
@@ -937,16 +937,15 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     
     return objs
   
-  def get_nearest_label_bboxes(self, uri):
-    """Load and return a list of `BBox`es using the `ObjectLabelRecord`s
-    nearest to `timestamp`; provide either an exact match or choose the closest
-    available."""
+  def get_nearest_label_objects(self, uri):
+    """Load and return a list of `ObjectLabelRecord`s nearest to `timestamp`;
+    provide either an exact match or choose the closest available."""
     uri = FrameURI.from_str(uri)
 
     av_label_objects = self.get_nearest_label_objects(uri.timestamp)
 
     # Some of the labels are complete junk.  Argoverse filters these
-    # interally in scattered places.
+    # interally in scattered places.  Let's do that in one place here.
     av_label_objects = [
       olr for olr in av_label_objects
       if not (
@@ -954,12 +953,14 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
         np.isnan(olr.translation).any())
     ]
 
-    bboxes = [
-      BBox.from_argoverse_label(uri, olr, fixures_cls=self.FIXTURES)
-      for olr in av_label_objects
-    ]
+    return av_label_objects
 
-    return bboxes
+    # bboxes = [
+    #   BBox.from_argoverse_label(uri, olr, fixures_cls=self.FIXTURES)
+    #   for olr in av_label_objects
+    # ]
+
+    # return bboxes
 
   @klepto.lru_cache(maxsize=10, ignore=(0,))
   def _get_lidar(idx):
@@ -1374,10 +1375,21 @@ class FrameTable(av.FrameTableBase):
   @classmethod
   def create_frame(cls, uri):
     f = av.Frame(uri=uri)
+    f.world_to_ego = cls._get_ego_pose(uri)
     f.camera_images = cls._get_camera_images(uri)
+    f.cuboids = cls._get_cuboids(uri)
 
+  def _get_ego_pose(cls, uri):
+    loader = cls.FIXTURES.get_loader(uri)
+    city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
+    return av.Transform(
+            rotation=city_to_ego_se3.rotation,
+            translation=city_to_ego_se3.translation)
 
   def _get_camera_images(cls, uri):
+    """Fetch image(s) for the camera(s) specified in `uri`; if no cameras are
+    specified then fetch images for *all* cameras.  Include a projection of
+    lidar points into the image; motion-correct the cloud by default."""
     loader = cls.FIXTURES.get_loader(uri)
     cameras = []
     if f.uri.camera:
@@ -1390,6 +1402,7 @@ class FrameTable(av.FrameTableBase):
     for camera in cameras:
       path, path_ts = loader.get_nearest_image_path(camera, uri.timestamp)
       cloud, motion_corrected = loader.get_cloud_in_image(camera, path_ts)
+
       cis.append(av.CameraImage(
         camera_name=camera,
         image_jpeg=bytearray(open(path, 'rb').read()),
@@ -1399,60 +1412,248 @@ class FrameTable(av.FrameTableBase):
       ))
     return cis
 
+  def _get_cuboids(cls, uri, motion_corrected=True):
+    """Construct and return a list of `av.Cuboid` instances from the given
+    Argoverse `ObjectLabelRecord` instance.  Labels are in lidar space-time
+    and *not* camera space-time; therefore, transforming labels into
+    the camera domain requires (to be most precise) correction for the
+    egomotion of the robot.  This correction can be substantial (~20cm)
+    at high robot speed.  Apply this correction only if `motion_corrected`.
+    """
+    loader = cls.FIXTURES.get_loader(uri)
+    calib = loader.get_calibration(uri.camera)
+    olrs = loader.get_nearest_label_objects(uri)
+    cuboids = []
+    for olr in olrs:
+      FrameTable.__fill_core(cuboid, olr)
+      FrameTable.__fill_pts(
+        loader, uri, cuboid, olr, motion_corrected=motion_corrected)
+      FrameTable.__fill_pose(calib, cuboid, olr)
+    return cuboids
+
+    # # Ingore invisible things
+    # self._image_bboxes = [
+    #   bbox for bbox in bboxes
+    #   if bbox.is_visible and self.viewport.overlaps_with(bbox)
+    # ]
+
+    # # Correct for image origin if this frame is a crop
+    # for bbox in self._image_bboxes:
+    #   bbox.translate(-np.array(self.viewport.get_x1_y1()))
+    #   bbox.im_width = self.viewport.width
+    #   bbox.im_height = self.viewport.height
+
+  ### Cuboid Utils
+
+  @staticmethod
+  def __fill_core(cuboid, olr):
+    cuboid.track_id = olr.track_id
+    cuboid.category_name = olr.label_class
+    cuboid.extra = {
+      'argoverse_occlusion': olr.occlusion,
+        # In practice, the value in this field is not meaningful
+    }
+
+  @staticmethod
+  def __fill_pts(loader, uri, cuboid, olr, motion_corrected=True):
+    cuboid.3d_box = olr.as_3d_bbox()
+    cuboid.motion_corrected = False
+    if motion_corrected:
+      try:
+        cuboid.3d_box = loader.get_motion_corrected_pts(
+                                  cuboid.3d_box,
+                                  olr.timestamp,
+                                  uri.timestamp)
+        cuboid.motion_corrected = True
+      except MissingPose:
+        # Garbage!  Ignore.
+        pass
+    
+    cuboid.distance_meters = np.min(np.linalg.norm(cuboid.3d_box, axis=-1))
+  
+  @staticmethod
+  def __fill_pose(calib, cuboid, olr):
+    cuboid.length_meters = olr.length
+    cuboid.width_meters = olr.width
+    cuboid.height_meters = olr.height
+
+    from argoverse.utils.transform import quat2rotmat
+    rotmat = quat2rotmat(olr.quaternion)
+      # NB: must use quat2rotmat due to Argo-specific quaternion encoding
+    
+    from scipy.spatial.transform import Rotation as R
+    cuboid.obj_from_ego = av.Transform(
+      rotation=rotmat, translation=orl.translation)
+    
+    # cuboid.yaw, cuboid.pitch, cuboid.roll = R.from_dcm(rotmat).as_euler('zxy') ~~~~~~
+
+
+
+  # def _to_cuboid(cls, loader, object_label_record, motion_corrected=True):
+    
+      
+  #     if not fixures_cls:
+  #       fixures_cls = Fixtures
+      
+  #     loader = fixures_cls.get_loader(uri)
+  #     calib = loader.get_calibration(uri.camera)
 
       
 
-    # Fill URI
-    # Fill image
-    # Fill cloud
-    # Fill cuboids
-
-
-  @classmethod
-  def _create_frame_rdd(cls, spark, splits=None):
-    uri_rdd = cls.create_frame_uri_rdd(spark, splits=splits)
-
-    def iter_frames(uri):
-      # from collections import namedtuple ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-      # pt = namedtuple('pt', 'x y z')
-
-      frame = cls.FIXTURES.get_frame(uri)
-      for bbox in frame.image_bboxes:
-        row = {}
-
-        # Obj
-        row.update(bbox.to_row_dict())
-        # # TODO make spark accept numpy and numpy float64 things
-        # row = box.to_dict()
-        # IGNORE = ('cuboid_pts', 'cuboid_pts_image', 'ego_to_obj')
-        # for attr in IGNORE:
-        #   v = row.pop(attr)
-        #   if attr == 'cuboid_pts_image':
-        #     continue
-        #   if hasattr(v, 'shape'):
-        #     if len(v.shape) == 1:
-        #       row[attr] = pt(*v.tolist())
-        #     else:
-        #       row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
+  #     def fill_extra(bbox):
+  #       bbox.track_id = object_label_record.track_id
+  #       bbox.occlusion = object_label_record.occlusion
         
-        # Anno Context
-        obj_uri = copy.deepcopy(frame.uri)
-        obj_uri.track_id = bbox.track_id
-        row.update(
-          frame_uri=str(uri),
-          uri=str(obj_uri),
-          **obj_uri.to_dict())
-        row.update(
-          city=cls.FIXTURES.get_loader(uri).city_name,
-          coarse_category=AV_OBJ_CLASS_TO_COARSE.get(bbox.category_name, ''))
+  #       bbox.distance_meters = \
+  #         float(np.min(np.linalg.norm(bbox.cuboid_pts, axis=-1)))
+
         
-        from pyspark.sql import Row
-        yield Row(**row)
+  #       # bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
+  #       bbox.relative_yaw_radians = float(R.from_dcm(rotmat).as_euler('zxy')[0])
+  #         # Tait–Bryan?  ... But y in Argoverse is to the left?
+        
+  #       camera_yaw = math.atan2(calib.R[2, 1], calib.R[1, 1])
+  #       # bbox.relative_yaw_to_camera_radians = [camera_yaw, 
+
+  #       bbox.ego_to_obj = object_label_record.translation
+  #       city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
+  #       # bbox.city_to_ego = common.Transform(
+  #       #                       rotation=city_to_ego_se3.rotation,
+  #       #                       translation=city_to_ego_se3.translation) ~~~~~~~~~~
+  #       bbox.city_to_ego = city_to_ego_se3.translation
+
+
+
+
+  #       from scipy.spatial.transform import Rotation as R
+  #       # bbox.ego_to_camera = common.Transform(
+  #       #                         rotation=R.from_dcm(calib.R).as_quat(),
+  #       #                         translation=calib.T) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  #       bbox.camera_norm = get_camera_normal(calib)
+
+  #       bbox.obj_ypr_in_ego = R.from_dcm(rotmat).as_euler('zxy')
+
+  #       from argoverse.utils.se3 import SE3
+  #       x_hat = np.array([1, 0, 0])
+  #       cos_theta = bbox.camera_norm.dot(x_hat)
+  #       rot_axis = np.cross(bbox.camera_norm, x_hat)
+  #       ego_to_cam_device_rot = R.from_rotvec(
+  #         math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
+
+  #       # Recover translation from ego to camera
+  #       ego_to_cam = SE3(rotation=calib.R, translation=calib.T)
+  #       cam_device_from_ego_T = ego_to_cam.inverse().translation
+  #       cam_device_from_ego = SE3(
+  #             rotation=ego_to_cam_device_rot.as_dcm(),
+  #             translation=cam_device_from_ego_T)
+  #       # ego_to_cam_device.rotation = ego_to_cam_device_rot.as_dcm()
+  #       # obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
+  #       # obj_in_cam = cam_device_from_ego.right_multiply_with_se3(obj_from_ego)
+
+  #       camera_to_obj = bbox.ego_to_obj - cam_device_from_ego_T
+  #       bbox.camera_to_obj = camera_to_obj
+
+  #       camera_to_obj_hat = camera_to_obj / np.linalg.norm(camera_to_obj)
+
+
+  #       # doh_camera_norm = np.array([1, 0, 0])
+  #       # cos_theta = bbox.camera_norm.dot(camera_to_obj_hat)
+  #       # rot_axis = np.cross(bbox.camera_norm, camera_to_obj_hat)
+  #       obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
+  #       obj_normal = obj_from_ego.rotation.dot(x_hat)
+  #       cos_theta = camera_to_obj_hat.dot(obj_normal)
+  #       rot_axis = np.cross(camera_to_obj_hat, obj_normal)
+
+  #       obj_from_ray = R.from_rotvec(
+  #         math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
+  #       # ray_from_cam = SE3(
+  #       #   rotation=ray_from_cam_normal.as_dcm(),
+  #       #   translation=np.zeros(3))
+  #       # obj_in_ray = obj_in_cam.right_multiply_with_se3(ray_from_cam)
+
+  #       # obj_camera_local = R.from_dcm(obj_in_cam.rotation) * obj_from_cam.inv()
+  #       # obj_camera_local = R.from_dcm(obj_in_ray.rotation)
+  #       bbox.obj_ypr_camera_local = [NumpyArray(obj_from_ray.as_euler('zxy'))]
+
+        
+
+  #     def fill_bbox_core(bbox):
+  #       bbox.category_name = object_label_record.label_class
+
+  #       bbox.im_width, bbox.im_height = get_image_width_height(uri.camera)
+  #       uv = calib.project_ego_to_image(bbox.cuboid_pts)
+        
+  #       bbox.cuboid_pts_image = np.array([uv[:, 0] , uv[:, 1]]).T
+
+  #       x1, x2 = np.min(uv[:, 0]), np.max(uv[:, 0])
+  #       y1, y2 = np.min(uv[:, 1]), np.max(uv[:, 1])
+  #       z = float(np.max(uv[:, 2]))
+
+  #       bbox.set_x1_y1_x2_y2(x1, y1, x2, y2)
+
+  #       num_onscreen = bbox.get_num_onscreen_corners()
+  #       bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
+  #       bbox.is_visible = (
+  #         z > 0 and
+  #         num_onscreen > 0 and
+  #         object_label_record.occlusion < 100)
+
+  #       bbox.clamp_to_screen()
+  #       bbox.z = float(z)
+
+  #     bbox = BBox()
+  #     fill_cuboid_pts(bbox)
+  #     fill_bbox_core(bbox)
+  #     fill_extra(bbox)
+  #     return bbox
+
+
+  # @classmethod
+  # def _create_frame_rdd(cls, spark, splits=None):
+  #   uri_rdd = cls.create_frame_uri_rdd(spark, splits=splits)
+
+  #   def iter_frames(uri):
+  #     # from collections import namedtuple ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  #     # pt = namedtuple('pt', 'x y z')
+
+  #     frame = cls.FIXTURES.get_frame(uri)
+  #     for bbox in frame.image_bboxes:
+  #       row = {}
+
+  #       # Obj
+  #       row.update(bbox.to_row_dict())
+  #       # # TODO make spark accept numpy and numpy float64 things
+  #       # row = box.to_dict()
+  #       # IGNORE = ('cuboid_pts', 'cuboid_pts_image', 'ego_to_obj')
+  #       # for attr in IGNORE:
+  #       #   v = row.pop(attr)
+  #       #   if attr == 'cuboid_pts_image':
+  #       #     continue
+  #       #   if hasattr(v, 'shape'):
+  #       #     if len(v.shape) == 1:
+  #       #       row[attr] = pt(*v.tolist())
+  #       #     else:
+  #       #       row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
+        
+  #       # Anno Context
+  #       obj_uri = copy.deepcopy(frame.uri)
+  #       obj_uri.track_id = bbox.track_id
+  #       row.update(
+  #         frame_uri=str(uri),
+  #         uri=str(obj_uri),
+  #         **obj_uri.to_dict())
+  #       row.update(
+  #         city=cls.FIXTURES.get_loader(uri).city_name,
+  #         coarse_category=AV_OBJ_CLASS_TO_COARSE.get(bbox.category_name, ''))
+        
+  #       from pyspark.sql import Row
+  #       yield Row(**row)
     
-    row_rdd = uri_rdd.flatMap(iter_anno_rows)
-    df = spark.createDataFrame(row_rdd)
-    df = cls._impute_rider_for_bikes(spark, df)
-    return df
+  #   row_rdd = uri_rdd.flatMap(iter_anno_rows)
+  #   df = spark.createDataFrame(row_rdd)
+  #   df = cls._impute_rider_for_bikes(spark, df)
+  #   return df
   
 
 class ImageAnnoTable(object):
