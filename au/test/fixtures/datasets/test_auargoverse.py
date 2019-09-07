@@ -54,6 +54,15 @@ FIXTURES_BASE_PATH = os.path.join(conf.AU_ROOT, 'au/test/')
 
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_argoverse')
 
+
+
+def test_ag_hacks_test():
+  
+  frame = av.FrameTable.create_frame(
+    'avframe://segment_id=tracking_train2.tar.gz|5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936')
+  with open('frame_tast.html', 'w') as f:
+    f.write(frame.to_html())
+
 class TestImageAnnoTableBase(av.ImageAnnoTable):
   # NB: We will override FIXTURES at test time
 

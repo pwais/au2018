@@ -10,14 +10,23 @@ import numpy as np
 
 import six
 
+def _set_default(attr, default):
+  if not util.np_truthy(attr):
+    attr = default
+
 class Transform(object):
   """An SE(3) / ROS Transform-like object"""
 
   slots__ = ('rotation', 'translation')
   
   def __init__(self, **kwargs):
-    self.rotation = kwargs.get('rotation', np.eye((3, 3)))
-    self.translation = kwargs.get('translation', np.zeros(3))
+    # Defaults to identity transform
+    self.rotation = kwargs.get('rotation', np.eye(3, 3))
+    self.translation = kwargs.get('translation', np.zeros((3, 1)))
+  
+  def __str__(self):
+    return 'Transform(rotation=%s;translation=%s)' % (
+      self.rotation, self.translation)
 
 class Cuboid(object):
   """TODO describe point order"""
@@ -26,7 +35,7 @@ class Cuboid(object):
     'category_name',
 
     ## Points
-    '3d_box',               # Points in ego / robot frame defining the cuboid.
+    'box3d',                # Points in ego / robot frame defining the cuboid.
                             # Given in order described above.
     'motion_corrected',     # Is `3d_box` corrected for ego motion?
 
@@ -85,7 +94,7 @@ class URI(object):
 
   def __init__(self, **kwargs):
     for k in self.__slots__:
-      setattr(self, k, kwargs.get(k))
+      setattr(self, k, kwargs.get(k, ''))
     if self.timestamp is not '':
       self.timestamp = int(self.timestamp)
   
@@ -151,26 +160,108 @@ class CameraImage(object):
                               #   [pixel_x, pixel_y, depth]
     'cloud_motion_corrected', # type: bool; is `cloud` corrected for ego motion?
     
-    # 'ego_to_camera',    # type: Transform
-    # 'P',                # type: np.ndarray, Camera projective matrix
-    # 'camera_normal',    # type: np.ndarray
+    'ego_to_camera',          # type: Transform
+    'K',                      # type: np.ndarray, Camera matrix
+    # 'P',                      # type: np.ndarray, Camera projective matrix
+    'principal_axis_in_ego',  # type: np.ndarray, pose of camera *device* in
+                              #   ego frame; may be different from
+                              #   `ego_to_camera`, which often has axis change
   )
 
   def __init__(self, **kwargs):
     for k in self.__slots__:
-      setattr(self, k, kwargs.get(k))
+      setattr(self, k, kwargs.get(k, ''))
+        
+    _set_default(self.camera_name, '')
+    _set_default(self.cloud, np.array([]))
+    _set_default(self.image_jpeg, bytearray(b''))
+    _set_default(self.timestamp, 0)
+    self.cloud_motion_corrected = bool(self.cloud_motion_corrected)
+
+    _sef_default(self.ego_to_camera, Transform())
+    _set_default(self.K, np.array([]))
+    _set_default(self.principal_axis_in_ego, np.array([]))
+  
+  @property
+  def image(self):
+    # TODO: cache
+    if self.image_jpeg:
+      import imageio
+      from io import BytesIO
+      return imageio.imread(BytesIO(self.image_jpeg))
+
+  def to_html(self):
+    import tabulate
+    from au import plotting as auplt
+    table = [
+      [attr, getattr(self, attr)]
+      for attr in (
+        'camera_name',
+        'timestamp',
+        'ego_to_camera',
+        'K',
+        'principal_axis_in_ego')
+    ]
+
+    if self.image:
+      table.extend([
+        ['Image', ''],
+        [auplt.img_to_img_tag(self.image), ''],
+      ])
+
+    if util.np_truthy(self.cloud):
+      debug_img = np.copy(self.image)
+      aupl.draw_xy_depth_in_image(debug_img, self.cloud)
+      table.extend([
+        ['Image With Cloud', ''],
+        [auplt.img_to_img_tag(debug_img), ''],
+      ])
     
-    if not util.np_truthy(self.cloud):
-      self.cloud = np.array([])
+    return tabulate.tabluate(table, tablefmt='html')
+
+class PointCloud(object):
+  __slots__ = (
+    'sensor_name',          # type: string
+    'timestamp',            # type: int (GPS or unix time)
+    'cloud',                # type: np.array of points
+    'motion_corrected',     # type: bool; is `cloud` corrected for ego motion?
+    'ego_to_sensor',        # type: Transform
+  )
+
+  def __init__(self, **kwargs):
+    for k in self.__slots__:
+      setattr(self, k, kwargs.get(k, ''))
     
+    _set_default(self.sensor_name, '')
+    _set_default(self.timestamp, 0)
+    _set_default(self.cloud, np.array([]))
+    _set_default(self.ego_to_sensor, Transform())
     self.motion_corrected = bool(self.motion_corrected)
-    
+  
+  def to_html(self):
+    import tabulate
+    table = [
+      [attr, getattr(self, attr)]
+      for attr in (
+        'sensor_name',
+        'timestamp',
+        'motion_corrected',
+        'ego_to_sensor')
+    ]
+
+    # TODO: BEV / RV cloud
+    table.extend([
+      ['Cloud', ''],
+      [len(self.cloud), '']
+    ])
+    return tabulate.tabluate(table, tablefmt='html')
 
 class Frame(object):
 
   __slots__ = (
     'uri',                  # type: URI or str
     'camera_images',        # type: List[CameraImage]
+    'clouds',               # type: List[PointCloud]
     'cuboids',              # type: List[Cuboid]
     'world_to_ego',         # type: Transform; the pose of the robot in the
                             #   global frame (typicaly the city frame)
@@ -198,6 +289,19 @@ class Frame(object):
       self.uri = URI.from_str(self.uri)
     
     self.camera_images = self.camera_images or []
+
+  def to_html(self):
+    import tabulate
+    table = [
+      ['URI', str(self.uri)],
+      ['Num Labels', len(self.cuboids)],
+      ['Ego Pose', str(self.world_to_ego)],
+      ['Camera Images', ''],
+      [''.join(c.to_html() for c in self.camera_images), ''],
+      ['Point Clouds', ''],
+      [''.join(c.to_html() for c in self.clouds), ''],
+    ]
+    return tabulate.tabluate(table, tablefmt='html')
 
     # if not self.viewport:
     #   self.viewport = self.uri.get_viewport()

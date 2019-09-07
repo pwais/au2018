@@ -911,6 +911,15 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       "Could not find a cloud within 1 sec of %s, diff %s" % (timestamp, diff)
     return idx, self.lidar_timestamp_list[idx]
 
+  @klepto.lru_cache(maxsize=10)#, ignore=(0,))
+  def _get_lidar(self, idx):
+    return self.get_lidar(idx)
+
+  def get_nearest_lidar_sweep(self, timestamp):
+    idx, lidar_t = self.get_nearest_lidar_sweep_id(timestamp)
+    cloud = self._get_lidar(idx)
+    return cloud, lidar_t
+
   def get_nearest_label_objects(self, timestamp):
     """Load and return the `ObjectLabelRecord`s nearest to `timestamp`;
     provide either an exact match or choose the closest available."""
@@ -962,23 +971,31 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
 
     # return bboxes
 
-  @klepto.lru_cache(maxsize=10, ignore=(0,))
-  def _get_lidar(idx):
-    return self.get_lidar(idx)
+  
 
   def get_maybe_motion_corrected_cloud(self, timestamp):
     """Similar to `get_lidar()` but motion-corrects the entire cloud
     to (likely camera-time) `timestamp`.  Return also True if
     motion corrected."""
-    idx, lidar_t = self.get_nearest_lidar_sweep_id(timestamp)
-    cloud = self._get_lidar(idx)
+    cloud, lidar_t = self.get_nearest_lidar_sweep(timestamp)
     try:
       return self.get_motion_corrected_pts(cloud, lidar_t, timestamp), True
     except MissingPose:
       return cloud, False
 
-  def get_cloud_in_image(self, camera, timestamp, viewport=None):
-    cloud, motion_corrected = self.get_maybe_motion_corrected_cloud(timestamp)
+  def get_cloud_in_image(
+        self,
+        camera,
+        timestamp,
+        motion_corrected=True,
+        viewport=None):
+    if motion_corrected:
+      cloud, motion_corrected = \
+        self.get_maybe_motion_corrected_cloud(timestamp)
+    else:
+      cloud, lidar_t = self.get_nearest_lidar_sweep(timestamp)
+      motion_corrected = False
+
     calib = self.get_calibration(camera)
 
     if not viewport:
@@ -1170,7 +1187,7 @@ class Fixtures(object):
   def get_loader(cls, uri):
     """Return a (maybe cached) `AUTrackingLoader` for the given `uri`"""
     if isinstance(uri, six.string_types):
-      uri = URI.from_str(uri)
+      uri = av.URI.from_str(uri)
     tarball_name, log_id = uri.segment_id.split('|')
     return cls._get_loader(tarball_name, log_id)
   
@@ -1346,6 +1363,8 @@ class FrameTable(av.FrameTableBase):
 
   FIXTURES = Fixtures
 
+  MOTION_CORRECTED_POINTS = True
+
   @classmethod
   def create_frame_rdd(cls, spark):
     pass
@@ -1375,10 +1394,13 @@ class FrameTable(av.FrameTableBase):
   @classmethod
   def create_frame(cls, uri):
     f = av.Frame(uri=uri)
+    uri = f.uri
     f.world_to_ego = cls._get_ego_pose(uri)
     f.camera_images = cls._get_camera_images(uri)
+    f.clouds = cls._get_clouds(uri)
     f.cuboids = cls._get_cuboids(uri)
 
+  @classmethod
   def _get_ego_pose(cls, uri):
     loader = cls.FIXTURES.get_loader(uri)
     city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
@@ -1386,13 +1408,14 @@ class FrameTable(av.FrameTableBase):
             rotation=city_to_ego_se3.rotation,
             translation=city_to_ego_se3.translation)
 
+  @classmethod
   def _get_camera_images(cls, uri):
     """Fetch image(s) for the camera(s) specified in `uri`; if no cameras are
     specified then fetch images for *all* cameras.  Include a projection of
     lidar points into the image; motion-correct the cloud by default."""
     loader = cls.FIXTURES.get_loader(uri)
     cameras = []
-    if f.uri.camera:
+    if uri.camera:
       cameras = [uri.camera]
     else:
       from argoverse.utils import camera_stats
@@ -1401,18 +1424,45 @@ class FrameTable(av.FrameTableBase):
     cis = []
     for camera in cameras:
       path, path_ts = loader.get_nearest_image_path(camera, uri.timestamp)
-      cloud, motion_corrected = loader.get_cloud_in_image(camera, path_ts)
-
+      cloud, motion_corrected = loader.get_cloud_in_image(
+                camera, path_ts, motion_corrected=cls.MOTION_CORRECTED_POINTS)
+      calib = loader.get_calibration(camera)
+      ego_to_camera = av.Transform(rotation=calib.R, translation=calib.T)
       cis.append(av.CameraImage(
         camera_name=camera,
         image_jpeg=bytearray(open(path, 'rb').read()),
         timestamp=path_ts,
         cloud=cloud,
         cloud_motion_corrected=motion_corrected,
+        ego_to_camera=ego_to_camera,
+        K=calib.K,
+        principal_axis_in_ego=get_camera_normal(calib),
       ))
     return cis
 
-  def _get_cuboids(cls, uri, motion_corrected=True):
+  @classmethod
+  def _get_clouds(cls, uri):
+    loader = cls.FIXTURES.get_loader(uri)
+    timestamp = uri.timestamp
+    if cls.MOTION_CORRECTED_POINTS:
+      cloud, motion_corrected = \
+        loader.get_maybe_motion_corrected_cloud(timestamp)
+    else:
+      cloud, timestamp = loader.get_nearest_lidar_sweep(timestamp)
+      motion_corrected = False
+    
+    # TODO: split top and bottom lidars
+    return [
+      av.PointCloud(
+        sensor_name='lidar',
+        timestamp=timestamp,
+        cloud=cloud,
+        motion_corrected=motion_corrected,
+        # Leave ego_to_sensor as $I$; points are in ego frame
+      )]
+
+  @classmethod
+  def _get_cuboids(cls, uri):
     """Construct and return a list of `av.Cuboid` instances from the given
     Argoverse `ObjectLabelRecord` instance.  Labels are in lidar space-time
     and *not* camera space-time; therefore, transforming labels into
@@ -1425,23 +1475,12 @@ class FrameTable(av.FrameTableBase):
     olrs = loader.get_nearest_label_objects(uri)
     cuboids = []
     for olr in olrs:
+      cuboid = av.Cuboid()
       FrameTable.__fill_core(cuboid, olr)
-      FrameTable.__fill_pts(
-        loader, uri, cuboid, olr, motion_corrected=motion_corrected)
+      FrameTable.__fill_pts(loader, uri, cuboid, olr)
       FrameTable.__fill_pose(calib, cuboid, olr)
+      cuboids.append(cuboid)
     return cuboids
-
-    # # Ingore invisible things
-    # self._image_bboxes = [
-    #   bbox for bbox in bboxes
-    #   if bbox.is_visible and self.viewport.overlaps_with(bbox)
-    # ]
-
-    # # Correct for image origin if this frame is a crop
-    # for bbox in self._image_bboxes:
-    #   bbox.translate(-np.array(self.viewport.get_x1_y1()))
-    #   bbox.im_width = self.viewport.width
-    #   bbox.im_height = self.viewport.height
 
   ### Cuboid Utils
 
@@ -1455,13 +1494,13 @@ class FrameTable(av.FrameTableBase):
     }
 
   @staticmethod
-  def __fill_pts(loader, uri, cuboid, olr, motion_corrected=True):
-    cuboid.3d_box = olr.as_3d_bbox()
+  def __fill_pts(loader, uri, cuboid, olr):
+    cuboid.box3d = olr.as_3d_bbox()
     cuboid.motion_corrected = False
-    if motion_corrected:
+    if cls.MOTION_CORRECTED_POINTS:
       try:
-        cuboid.3d_box = loader.get_motion_corrected_pts(
-                                  cuboid.3d_box,
+        cuboid.box3d = loader.get_motion_corrected_pts(
+                                  cuboid.box3d,
                                   olr.timestamp,
                                   uri.timestamp)
         cuboid.motion_corrected = True
@@ -1469,7 +1508,7 @@ class FrameTable(av.FrameTableBase):
         # Garbage!  Ignore.
         pass
     
-    cuboid.distance_meters = np.min(np.linalg.norm(cuboid.3d_box, axis=-1))
+    cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
   
   @staticmethod
   def __fill_pose(calib, cuboid, olr):
