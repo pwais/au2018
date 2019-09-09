@@ -104,7 +104,7 @@ def img_to_img_tag(
     dh, dw = get_hw_in_viewport((dh, dw), display_viewport_hw)
 
   src = img_to_data_uri(img, format=format, jpeg_quality=jpeg_quality)
-  TEMPLATE = """<img src="{src}" height="{dh}" width="{dh}" />"""
+  TEMPLATE = """<img src="{src}" height="{dh}" width="{dw}" />"""
   return TEMPLATE.format(src=src, dh=dh, dw=dw)
 
 def unpack_pyspark_row(r):

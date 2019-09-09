@@ -156,7 +156,7 @@ class CameraImage(object):
     'timestamp',              # type: int (GPS or unix time)
     
     # Optional Point Cloud (e.g. Lidar)
-    'cloud'                   # type: np.array of points
+    'cloud',                  # type: np.array of points
                               #   [pixel_x, pixel_y, depth]
     'cloud_motion_corrected', # type: bool; is `cloud` corrected for ego motion?
     
@@ -178,7 +178,7 @@ class CameraImage(object):
     _set_default(self.timestamp, 0)
     self.cloud_motion_corrected = bool(self.cloud_motion_corrected)
 
-    _sef_default(self.ego_to_camera, Transform())
+    _set_default(self.ego_to_camera, Transform())
     _set_default(self.K, np.array([]))
     _set_default(self.principal_axis_in_ego, np.array([]))
   
@@ -192,9 +192,9 @@ class CameraImage(object):
 
   def to_html(self):
     import tabulate
-    from au import plotting as auplt
+    from au import plotting as aupl
     table = [
-      [attr, getattr(self, attr)]
+      [attr, '<pre>' + str(getattr(self, attr)) + '</pre>']
       for attr in (
         'camera_name',
         'timestamp',
@@ -202,22 +202,25 @@ class CameraImage(object):
         'K',
         'principal_axis_in_ego')
     ]
+    html = tabulate.tabulate(table, tablefmt='html')
 
-    if self.image:
-      table.extend([
-        ['Image', ''],
-        [auplt.img_to_img_tag(self.image), ''],
-      ])
+    if util.np_truthy(self.image):
+      table = [
+        ['<b>Image</b>'],
+        [aupl.img_to_img_tag(self.image, display_viewport_hw=(1000, 1000))],
+      ]
+      html += tabulate.tabulate(table, tablefmt='html')
 
     if util.np_truthy(self.cloud):
       debug_img = np.copy(self.image)
-      aupl.draw_xy_depth_in_image(debug_img, self.cloud)
-      table.extend([
-        ['Image With Cloud', ''],
-        [auplt.img_to_img_tag(debug_img), ''],
-      ])
+      aupl.draw_xy_depth_in_image(debug_img, self.cloud, alpha=0.5)
+      table = [
+        ['<b>Image With Cloud</b>'],
+        [aupl.img_to_img_tag(debug_img, display_viewport_hw=(1000, 1000))],
+      ]
+      html += tabulate.tabulate(table, tablefmt='html')
     
-    return tabulate.tabluate(table, tablefmt='html')
+    return html
 
 class PointCloud(object):
   __slots__ = (
@@ -254,7 +257,7 @@ class PointCloud(object):
       ['Cloud', ''],
       [len(self.cloud), '']
     ])
-    return tabulate.tabluate(table, tablefmt='html')
+    return tabulate.tabulate(table, tablefmt='html')
 
 class Frame(object):
 
@@ -292,16 +295,23 @@ class Frame(object):
 
   def to_html(self):
     import tabulate
+    import pprint
     table = [
       ['URI', str(self.uri)],
       ['Num Labels', len(self.cuboids)],
-      ['Ego Pose', str(self.world_to_ego)],
-      ['Camera Images', ''],
-      [''.join(c.to_html() for c in self.camera_images), ''],
-      ['Point Clouds', ''],
-      [''.join(c.to_html() for c in self.clouds), ''],
+      ['Ego Pose', pprint.pformat(self.world_to_ego)]
     ]
-    return tabulate.tabluate(table, tablefmt='html')
+    html = tabulate.tabulate(table, tablefmt='html')
+    table = [['<h2>Camera Images</h2>']]
+    for c in self.camera_images:
+      table += [[c.to_html()]]
+    
+    table += [['<h2>Point Clouds</h2>']]
+    for c in self.clouds:
+      table += [[c.to_html()]]
+
+    html += tabulate.tabulate(table, tablefmt='html')
+    return html
 
     # if not self.viewport:
     #   self.viewport = self.uri.get_viewport()

@@ -911,13 +911,16 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       "Could not find a cloud within 1 sec of %s, diff %s" % (timestamp, diff)
     return idx, self.lidar_timestamp_list[idx]
 
-  @klepto.lru_cache(maxsize=10)#, ignore=(0,))
-  def _get_lidar(self, idx):
-    return self.get_lidar(idx)
+  # @klepto.lru_cache(maxsize=10)#, ignore=(0,))
+  # def _get_lidar(self, idx):
+  #   return self.get_lidar(idx)
 
   def get_nearest_lidar_sweep(self, timestamp):
     idx, lidar_t = self.get_nearest_lidar_sweep_id(timestamp)
-    cloud = self._get_lidar(idx)
+    @klepto.lru_cache(maxsize=10)
+    def get_lidar(idx):
+      return self.get_lidar(idx)
+    cloud = get_lidar(idx)
     return cloud, lidar_t
 
   def get_nearest_label_objects(self, timestamp):
@@ -938,6 +941,15 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     objs = object_label.read_label(self.label_list[idx])
       # NB: the above actually reads a *list* of label objects :P
     
+    # Some of the labels are complete junk.  Argoverse filters these
+    # interally in scattered places.  Let's do that in one place here.
+    objs = [
+      obj for obj in objs
+      if not (
+        np.isnan(obj.quaternion).any() or 
+        np.isnan(obj.translation).any())
+    ]
+    
     # We hide the object timestamp in the label; I guess the Argoverse
     # authors didn't think the timestamp was important :P
     label_t = self.lidar_timestamp_list[idx]
@@ -945,33 +957,6 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       obj.timestamp = label_t
     
     return objs
-  
-  def get_nearest_label_objects(self, uri):
-    """Load and return a list of `ObjectLabelRecord`s nearest to `timestamp`;
-    provide either an exact match or choose the closest available."""
-    uri = FrameURI.from_str(uri)
-
-    av_label_objects = self.get_nearest_label_objects(uri.timestamp)
-
-    # Some of the labels are complete junk.  Argoverse filters these
-    # interally in scattered places.  Let's do that in one place here.
-    av_label_objects = [
-      olr for olr in av_label_objects
-      if not (
-        np.isnan(olr.quaternion).any() or 
-        np.isnan(olr.translation).any())
-    ]
-
-    return av_label_objects
-
-    # bboxes = [
-    #   BBox.from_argoverse_label(uri, olr, fixures_cls=self.FIXTURES)
-    #   for olr in av_label_objects
-    # ]
-
-    # return bboxes
-
-  
 
   def get_maybe_motion_corrected_cloud(self, timestamp):
     """Similar to `get_lidar()` but motion-corrects the entire cloud
@@ -999,12 +984,12 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     calib = self.get_calibration(camera)
 
     if not viewport:
-      viewport = common.BBox.of_size(*get_image_width_height(self.camera))
+      viewport = common.BBox.of_size(*get_image_width_height(camera))
 
     # Limits of the cloud to crop
     x, y, w, h = (
-      self.viewport.x, self.viewport.y,
-      self.viewport.width, self.viewport.height)
+      viewport.x, viewport.y,
+      viewport.width, viewport.height)
 
     # Per the argoverse recommendation, this should be safe:
     # https://github.com/argoai/argoverse-api/blob/master/demo_usage/argoverse_tracking_tutorial.ipynb
@@ -1021,7 +1006,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     uv = uv.T
 
     # Correct for image origin if this frame is a crop
-    uv -= np.array([self.viewport.x, self.viewport.y, 0])
+    uv -= np.array([viewport.x, viewport.y, 0])
     return uv, motion_corrected
 
   def get_city_to_ego(self, timestamp):
@@ -1399,6 +1384,7 @@ class FrameTable(av.FrameTableBase):
     f.camera_images = cls._get_camera_images(uri)
     f.clouds = cls._get_clouds(uri)
     f.cuboids = cls._get_cuboids(uri)
+    return f
 
   @classmethod
   def _get_ego_pose(cls, uri):
@@ -1472,20 +1458,20 @@ class FrameTable(av.FrameTableBase):
     """
     loader = cls.FIXTURES.get_loader(uri)
     calib = loader.get_calibration(uri.camera)
-    olrs = loader.get_nearest_label_objects(uri)
+    olrs = loader.get_nearest_label_objects(uri.timestamp)
     cuboids = []
     for olr in olrs:
       cuboid = av.Cuboid()
-      FrameTable.__fill_core(cuboid, olr)
-      FrameTable.__fill_pts(loader, uri, cuboid, olr)
-      FrameTable.__fill_pose(calib, cuboid, olr)
+      cls.__fill_core(cuboid, olr)
+      cls.__fill_pts(loader, uri, cuboid, olr)
+      cls.__fill_pose(calib, cuboid, olr)
       cuboids.append(cuboid)
     return cuboids
 
   ### Cuboid Utils
 
-  @staticmethod
-  def __fill_core(cuboid, olr):
+  @classmethod
+  def __fill_core(cls, cuboid, olr):
     cuboid.track_id = olr.track_id
     cuboid.category_name = olr.label_class
     cuboid.extra = {
@@ -1493,8 +1479,8 @@ class FrameTable(av.FrameTableBase):
         # In practice, the value in this field is not meaningful
     }
 
-  @staticmethod
-  def __fill_pts(loader, uri, cuboid, olr):
+  @classmethod
+  def __fill_pts(cls, loader, uri, cuboid, olr):
     cuboid.box3d = olr.as_3d_bbox()
     cuboid.motion_corrected = False
     if cls.MOTION_CORRECTED_POINTS:
@@ -1510,8 +1496,8 @@ class FrameTable(av.FrameTableBase):
     
     cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
   
-  @staticmethod
-  def __fill_pose(calib, cuboid, olr):
+  @classmethod
+  def __fill_pose(cls, calib, cuboid, olr):
     cuboid.length_meters = olr.length
     cuboid.width_meters = olr.width
     cuboid.height_meters = olr.height
@@ -1522,7 +1508,7 @@ class FrameTable(av.FrameTableBase):
     
     from scipy.spatial.transform import Rotation as R
     cuboid.obj_from_ego = av.Transform(
-      rotation=rotmat, translation=orl.translation)
+      rotation=rotmat, translation=olr.translation)
     
     # cuboid.yaw, cuboid.pitch, cuboid.roll = R.from_dcm(rotmat).as_euler('zxy') ~~~~~~
 
