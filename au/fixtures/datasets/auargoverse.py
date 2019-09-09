@@ -1348,6 +1348,7 @@ class FrameTable(av.FrameTableBase):
 
   FIXTURES = Fixtures
 
+  CLOUD_IN_CAM = True
   MOTION_CORRECTED_POINTS = True
 
   @classmethod
@@ -1382,7 +1383,7 @@ class FrameTable(av.FrameTableBase):
     uri = f.uri
     f.world_to_ego = cls._get_ego_pose(uri)
     f.camera_images = cls._get_camera_images(uri)
-    f.clouds = cls._get_clouds(uri)
+    # f.clouds = cls._get_clouds(uri)
     f.cuboids = cls._get_cuboids(uri)
     return f
 
@@ -1409,27 +1410,35 @@ class FrameTable(av.FrameTableBase):
 
     cis = []
     for camera in cameras:
-      path, path_ts = loader.get_nearest_image_path(camera, uri.timestamp)
-      cloud, motion_corrected = loader.get_cloud_in_image(
-                camera, path_ts, motion_corrected=cls.MOTION_CORRECTED_POINTS)
+      path, timestamp = loader.get_nearest_image_path(camera, uri.timestamp)
       calib = loader.get_calibration(camera)
       ego_to_camera = av.Transform(rotation=calib.R, translation=calib.T)
-      cis.append(av.CameraImage(
+
+      viewport = uri.get_viewport()
+      w, h = get_image_width_height(camera)
+      if not viewport:
+        viewport = common.BBox.of_size(w, h)
+
+      ci = av.CameraImage(
         camera_name=camera,
         image_jpeg=bytearray(open(path, 'rb').read()),
-        timestamp=path_ts,
-        cloud=cloud,
-        cloud_motion_corrected=motion_corrected,
+        height=h,
+        width=w,
+        viewport=viewport,
+        timestamp=timestamp,
         ego_to_camera=ego_to_camera,
         K=calib.K,
         principal_axis_in_ego=get_camera_normal(calib),
-      ))
+      )
+
+      if cls.CLOUD_IN_CAM:
+        cls.__fill_cloud_in_cam(loader, timestamp, ci)
+
+      cis.append(ci)
     return cis
 
   @classmethod
-  def _get_clouds(cls, uri):
-    loader = cls.FIXTURES.get_loader(uri)
-    timestamp = uri.timestamp
+  def __fill_cloud_in_cam(cls, loader, timestamp, camera_image):
     if cls.MOTION_CORRECTED_POINTS:
       cloud, motion_corrected = \
         loader.get_maybe_motion_corrected_cloud(timestamp)
@@ -1437,15 +1446,39 @@ class FrameTable(av.FrameTableBase):
       cloud, timestamp = loader.get_nearest_lidar_sweep(timestamp)
       motion_corrected = False
     
-    # TODO: split top and bottom lidars
-    return [
-      av.PointCloud(
-        sensor_name='lidar',
-        timestamp=timestamp,
+    # Put the cloud in the camera frame
+    cloud = camera_image.project_ego_to_image(cloud, omit_offscreen=True)
+    
+    camera_image.cloud = av.PointCloud(
+        sensor_name='lidar_in_' + camera_image.camera_name,
+        timestamp=timestamp, # NB: use *real* lidar timestamp if given
         cloud=cloud,
         motion_corrected=motion_corrected,
-        # Leave ego_to_sensor as $I$; points are in ego frame
-      )]
+        ego_to_sensor=copy.deepcopy(camera_image.ego_to_camera),
+          # Points are now in camera frame.  NB: for Argoverse, that
+          # means there might also include an axis change versus the
+          # ego frame
+      )
+    
+  # def _get_clouds(cls, uri):
+  #   loader = cls.FIXTURES.get_loader(uri)
+  #   timestamp = uri.timestamp
+  #   if cls.MOTION_CORRECTED_POINTS:
+  #     cloud, motion_corrected = \
+  #       loader.get_maybe_motion_corrected_cloud(timestamp)
+  #   else:
+  #     cloud, timestamp = loader.get_nearest_lidar_sweep(timestamp)
+  #     motion_corrected = False
+    
+  #   # TODO: split top and bottom lidars
+  #   return [
+  #     av.PointCloud(
+  #       sensor_name='lidar',
+  #       timestamp=timestamp,
+  #       cloud=cloud,
+  #       motion_corrected=motion_corrected,
+  #       # Leave ego_to_sensor as $I$; points are in ego frame
+  #     )]
 
   @classmethod
   def _get_cuboids(cls, uri):
