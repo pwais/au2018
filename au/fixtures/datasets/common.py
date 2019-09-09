@@ -152,6 +152,10 @@ class BBox(object):
     self.x += x
     self.y += y
 
+  def get_crop(self, img):
+    c, r, w, h = self.x, self.y, self.width, self.height
+    return img[r:r+h, c:c+w, :]
+
   def draw_in_image(self, img, color=None, thickness=2):
     assert self.im_height == img.shape[0], (self.im_height, img.shape)
     assert self.im_width == img.shape[1], (self.im_width, img.shape)
@@ -163,7 +167,7 @@ class BBox(object):
     # Tensorflow takes BGR
     color = tuple(reversed(color))
 
-    # Use Tensorflow Models
+    # Use Tensorflow Models; it handles category string text nicely
     from object_detection.utils.visualization_utils import \
       draw_bounding_box_on_image_array
     draw_bounding_box_on_image_array(

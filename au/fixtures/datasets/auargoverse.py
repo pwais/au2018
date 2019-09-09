@@ -1348,7 +1348,9 @@ class FrameTable(av.FrameTableBase):
 
   FIXTURES = Fixtures
 
-  CLOUD_IN_CAM = True
+  PROJECT_CLOUDS_TO_CAM = True
+  PROJECT_CUBOIDS_TO_CAM = True
+  IGNORE_INVISIBLE_CUBOIDS = True
   MOTION_CORRECTED_POINTS = True
 
   @classmethod
@@ -1384,7 +1386,7 @@ class FrameTable(av.FrameTableBase):
     f.world_to_ego = cls._get_ego_pose(uri)
     f.camera_images = cls._get_camera_images(uri)
     # f.clouds = cls._get_clouds(uri)
-    f.cuboids = cls._get_cuboids(uri)
+    # f.cuboids = cls._get_cuboids(uri)
     return f
 
   @classmethod
@@ -1412,7 +1414,7 @@ class FrameTable(av.FrameTableBase):
     for camera in cameras:
       path, timestamp = loader.get_nearest_image_path(camera, uri.timestamp)
       calib = loader.get_calibration(camera)
-      ego_to_camera = av.Transform(rotation=calib.R, translation=calib.T)
+      cam_from_ego = av.Transform(rotation=calib.R, translation=calib.T)
 
       viewport = uri.get_viewport()
       w, h = get_image_width_height(camera)
@@ -1426,13 +1428,16 @@ class FrameTable(av.FrameTableBase):
         width=w,
         viewport=viewport,
         timestamp=timestamp,
-        ego_to_camera=ego_to_camera,
+        cam_from_ego=cam_from_ego,
         K=calib.K,
         principal_axis_in_ego=get_camera_normal(calib),
       )
 
-      if cls.CLOUD_IN_CAM:
+      if cls.PROJECT_CLOUDS_TO_CAM:
         cls.__fill_cloud_in_cam(loader, timestamp, ci)
+      
+      if cls.PROJECT_CUBOIDS_TO_CAM:
+        cls.__fill_cuboids_in_cam(loader, timestamp, ci)
 
       cis.append(ci)
     return cis
@@ -1454,11 +1459,28 @@ class FrameTable(av.FrameTableBase):
         timestamp=timestamp, # NB: use *real* lidar timestamp if given
         cloud=cloud,
         motion_corrected=motion_corrected,
-        ego_to_sensor=copy.deepcopy(camera_image.ego_to_camera),
+        ego_to_sensor=copy.deepcopy(camera_image.cam_from_ego),
           # Points are now in camera frame.  NB: for Argoverse, that
           # means there might also include an axis change versus the
           # ego frame
       )
+  
+  @classmethod
+  def __fill_cuboids_in_cam(cls, loader, timestamp, camera_image):
+    calib = loader.get_calibration(camera_image.camera_name)
+    olrs = loader.get_nearest_label_objects(timestamp)
+    for olr in olrs:
+      cuboid = av.Cuboid()
+      cls.__fill_core(cuboid, olr)
+      cls.__fill_pts(loader, timestamp, cuboid, olr)
+      cls.__fill_pose(calib, cuboid, olr)
+      
+      bbox = camera_image.project_cuboid_to_bbox(cuboid)
+
+      if cls.IGNORE_INVISIBLE_CUBOIDS and not bbox.is_visible:
+        continue
+
+      camera_image.bboxes.append(bbox)
     
   # def _get_clouds(cls, uri):
   #   loader = cls.FIXTURES.get_loader(uri)
@@ -1480,26 +1502,26 @@ class FrameTable(av.FrameTableBase):
   #       # Leave ego_to_sensor as $I$; points are in ego frame
   #     )]
 
-  @classmethod
-  def _get_cuboids(cls, uri):
-    """Construct and return a list of `av.Cuboid` instances from the given
-    Argoverse `ObjectLabelRecord` instance.  Labels are in lidar space-time
-    and *not* camera space-time; therefore, transforming labels into
-    the camera domain requires (to be most precise) correction for the
-    egomotion of the robot.  This correction can be substantial (~20cm)
-    at high robot speed.  Apply this correction only if `motion_corrected`.
-    """
-    loader = cls.FIXTURES.get_loader(uri)
-    calib = loader.get_calibration(uri.camera)
-    olrs = loader.get_nearest_label_objects(uri.timestamp)
-    cuboids = []
-    for olr in olrs:
-      cuboid = av.Cuboid()
-      cls.__fill_core(cuboid, olr)
-      cls.__fill_pts(loader, uri, cuboid, olr)
-      cls.__fill_pose(calib, cuboid, olr)
-      cuboids.append(cuboid)
-    return cuboids
+  # @classmethod
+  # def _get_cuboids(cls, uri):
+  #   """Construct and return a list of `av.Cuboid` instances from the given
+  #   Argoverse `ObjectLabelRecord` instance.  Labels are in lidar space-time
+  #   and *not* camera space-time; therefore, transforming labels into
+  #   the camera domain requires (to be most precise) correction for the
+  #   egomotion of the robot.  This correction can be substantial (~20cm)
+  #   at high robot speed.  Apply this correction only if `motion_corrected`.
+  #   """
+  #   loader = cls.FIXTURES.get_loader(uri)
+  #   calib = loader.get_calibration(uri.camera)
+  #   olrs = loader.get_nearest_label_objects(uri.timestamp)
+  #   cuboids = []
+  #   for olr in olrs:
+  #     cuboid = av.Cuboid()
+  #     cls.__fill_core(cuboid, olr)
+  #     cls.__fill_pts(loader, uri, cuboid, olr)
+  #     cls.__fill_pose(calib, cuboid, olr)
+  #     cuboids.append(cuboid)
+  #   return cuboids
 
   ### Cuboid Utils
 
@@ -1507,13 +1529,14 @@ class FrameTable(av.FrameTableBase):
   def __fill_core(cls, cuboid, olr):
     cuboid.track_id = olr.track_id
     cuboid.category_name = olr.label_class
+    cuboid.timestamp = olr.timestamp
     cuboid.extra = {
       'argoverse_occlusion': olr.occlusion,
         # In practice, the value in this field is not meaningful
     }
 
   @classmethod
-  def __fill_pts(cls, loader, uri, cuboid, olr):
+  def __fill_pts(cls, loader, target_timestamp, cuboid, olr):
     cuboid.box3d = olr.as_3d_bbox()
     cuboid.motion_corrected = False
     if cls.MOTION_CORRECTED_POINTS:
@@ -1521,7 +1544,7 @@ class FrameTable(av.FrameTableBase):
         cuboid.box3d = loader.get_motion_corrected_pts(
                                   cuboid.box3d,
                                   olr.timestamp,
-                                  uri.timestamp)
+                                  target_timestamp)
         cuboid.motion_corrected = True
       except MissingPose:
         # Garbage!  Ignore.

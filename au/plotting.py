@@ -16,6 +16,48 @@ def hash_to_rbg(x, s=0.8, v=0.8):
   
   return rgb.astype(int).tolist()
 
+def color_to_opencv(color):
+  r, g, b = np.clip(color, 0, 255).astype(int).tolist()
+  return b, g, r
+
+def draw_cuboid_xy_in_image(img, pts, base_color_rgb, alpha=0.3, thickness=2):
+  """Given an image `img` and an array of n-by-(x,y) `pts` to be plotted in
+  (r, g, b) color `base_color_rgb`, draw a cuboid in `img`.  We interpret
+  the first four points of `pts` as the front of the cuboid (front face
+  of object in it's ego frame), and the last four points as the back.
+  We'll color the front face lighter than the rest of the cuboid edges."""
+
+  base_color = np.array(base_color_rgb)
+  front_color = color_to_opencv(base_color + 0.3 * 255)
+  back_color = color_to_opencv(base_color - 0.3 * 255)
+  center_color = color_to_opencv(base_color)
+
+  import cv2
+  # OpenCV can't draw transparent colors, so we use the 'overlay image' trick
+  overlay = img.copy()
+
+  front = pts[:4].astype(int)
+  cv2.polylines(
+    overlay,
+    [front],
+    True, # is_closed
+    front_color,
+    thickness)
+
+  back = pts[4:, :2].astype(int)
+  cv2.polylines(
+    overlay,
+    [back],
+    True, # is_closed
+    back_color,
+    thickness)
+  
+  for start, end in zip(front.tolist(), back.tolist()):
+    cv2.line(overlay, tuple(start), tuple(end), center_color, thickness)
+
+  # Now blend!
+  img[:] = cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
+
 def draw_xy_depth_in_image(img, pts, dot_size=1, alpha=.2):
   """Given an image `img` and a point cloud `pts` [in form
   (pixel x, pixel y, ego depth meters)], draw the points.
@@ -45,7 +87,7 @@ def draw_xy_depth_in_image(img, pts, dot_size=1, alpha=.2):
   # First draw dots an an overlay...
   overlay = img.copy()
   for x, y, d_meters in pts.tolist():
-    color = rgb_for_distance(d_meters).astype(int).tolist()
+    color = color_to_opencv(rgb_for_distance(d_meters))
     x = int(round(x))
     y = int(round(y))
     cv2.circle(overlay, (x, y), dot_size, color, thickness=2)

@@ -38,6 +38,8 @@ def test_draw_xy_depth_in_image():
 
   assert actual_bytes == expected_bytes
 
+# TODO: test draw_cuboid_xy_in_image
+
 @pytest.mark.slow
 def test_spark_histogram():
   with testutils.LocalSpark.sess() as spark:

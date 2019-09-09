@@ -3,6 +3,7 @@ datasets, e.g. Argoverse, nuScenes, Waymo Open. etc.
 """
 
 import copy
+import math
 
 import numpy as np
 import six
@@ -11,9 +12,10 @@ from au import conf
 from au import util
 from au.fixtures.datasets import common
 
-def _set_default(attr, default):
-  if not util.np_truthy(attr):
-    attr = default
+def _set_defaults(obj, vals, defaults, DEFAULT_FOR_MISSING=''):
+  for k in obj.__slots__:
+    v = vals.get(k, defaults.get(k, DEFAULT_FOR_MISSING))
+    setattr(obj, k, v)
 
 def maybe_make_homogeneous(pts, dim=3):
   """Convert numpy array `pts` to Homogeneous coordinates of target `dim`
@@ -44,14 +46,6 @@ class Transform(object):
   def __str__(self):
     return 'Transform(rotation=%s;translation=%s)' % (
       self.rotation, self.translation)
-
-class BBox(common.BBox):
-  __slots__ = tuple(
-    list(common.BBox.__slots__) + [
-      # Reference parent cuboid, if available
-      'cuboid',
-    ]
-  )
 
 class URI(object):
   __slots__ = (
@@ -136,11 +130,75 @@ class URI(object):
     uri = URI(**dict(tok.split('=') for tok in toks))
     return uri
 
+class BBox(common.BBox):
+  __slots__ = tuple(
+    list(common.BBox.__slots__) + [
+      'cuboid',             # Reference parent cuboid, if available
+      
+      'cuboid_pts',         # Points of parent cuboid projected into image;
+                            #   array of n-by-(x, y, d) points
+      'has_offscreen',      # Does the cuboid have off-screen points?
+      'is_visible',         # Is at least one point of the cuboid visible?
+      
+      'cuboid_from_cam',    # Transform from camera center to cuboid pose
+      
+      'ypr_camera_local',   # Pose (in yaw, pitch roll) of object relative to a
+                            #   ray cast from camera center to object centroid
+    ]
+  )
+  def __init__(self, **kwargs):
+    super(BBox, self).__init__(**kwargs)
+
+    DEFAULTS = {
+      'cuboid': None,
+      'cuboid_pts': None,
+      'cuboid_from_cam': Transform(),
+      'ypr_camera_local': None
+    }
+    _set_defaults(self, kwargs, DEFAULTS)
+
+    self.has_offscreen = bool(self.has_offscreen)
+    self.is_visible = bool(self.is_visible)
+
+  def draw_in_image(
+        self,
+        img,
+        color=None,
+        thickness=2,
+        cuboid_alpha=0.3,
+        cuboid_thickness=2):
+    """Draw this BBox in `img`, and optionally include visualization of the
+    box's cuboid if available"""
+    
+    super(BBox, self).draw_in_image(img, color=color, thickness=thickness)
+
+    if hasattr(self.cuboid_pts, 'shape'):
+      # Use category color
+      from au import plotting as aupl
+      base_color = aupl.hash_to_rbg(self.category_name)
+      
+      pts = self.cuboid_pts[:, :2]
+
+      aupl.draw_cuboid_xy_in_image(
+        img, pts, base_color, alpha=cuboid_alpha, thickness=cuboid_thickness)
+
+  def to_html(self):
+    import tabulate
+    table = [
+      [attr, getattr(self, attr)]
+      for attr in self.__slots__
+    ]
+    print('check ypr_camera_local')
+    return tabulate.tabulate(table, tablefmt='html')
+
 class Cuboid(object):
   """TODO describe point order"""
   __slots__ = (
-    'track_id',
-    'category_name',
+    ## Core
+    'track_id',             # String identifier; same object across many frames
+                            #   has same track_id
+    'category_name',        # String category name
+    'timestamp',            # Lidar timestamp associated with this cuboid
 
     ## Points
     'box3d',                # Points in ego / robot frame defining the cuboid.
@@ -153,6 +211,7 @@ class Cuboid(object):
     'height_meters',        #               +z up
     'distance_meters',      # Dist from ego to closest cuboid point
     
+    # TODO
     # 'yaw',                  # +yaw to the left (right-handed)
     # 'pitch',                # +pitch up from horizon
     # 'roll',                 # +roll towards y axis (?); usually 0
@@ -172,13 +231,13 @@ class PointCloud(object):
   )
 
   def __init__(self, **kwargs):
-    for k in self.__slots__:
-      setattr(self, k, kwargs.get(k, ''))
-    
-    _set_default(self.sensor_name, '')
-    _set_default(self.timestamp, 0)
-    _set_default(self.cloud, np.array([]))
-    _set_default(self.ego_to_sensor, Transform())
+    DEFAULTS = {
+      'timestamp': 0,
+      'cloud': np.array([]),
+      'ego_to_sensor': Transform(),
+    }
+    _set_defaults(self, kwargs, DEFAULTS)
+
     self.motion_corrected = bool(self.motion_corrected)
   
   def to_html(self):
@@ -210,32 +269,29 @@ class CameraImage(object):
     # Optional Point Cloud (e.g. Lidar projected to camera)
     'cloud',                  # type: PointCloud
     
-    # Optional Cuboids (e.g. Lidar labels projected to camera)
-    'cuboids',                # type: List[Cuboid]
+    # Optional BBoxes (e.g. Cuboids projected to camera)
+    'bboxes',                 # type: List[BBox]
 
     # Context
-    'ego_to_camera',          # type: Transform
+    'cam_from_ego',           # type: Transform
     'K',                      # type: np.ndarray, Camera matrix
     # 'P',                      # type: np.ndarray, Camera projective matrix
     'principal_axis_in_ego',  # type: np.ndarray, pose of camera *device* in
                               #   ego frame; may be different from
-                              #   `ego_to_camera`, which often has axis change
+                              #   `cam_from_ego`, which often has axis change
 
   )
 
   def __init__(self, **kwargs):
-    for k in self.__slots__:
-      setattr(self, k, kwargs.get(k, ''))
-        
-    _set_default(self.camera_name, '')
-    _set_default(self.image_jpeg, bytearray(b''))
-    _set_default(self.timestamp, 0)
-
-    _set_default(self.cuboids, [])
-
-    _set_default(self.ego_to_camera, Transform())
-    _set_default(self.K, np.array([]))
-    _set_default(self.principal_axis_in_ego, np.array([]))
+    DEFAULTS = {
+      'image_jpeg': bytearray(b''),
+      'timestamp': 0,
+      'bboxes': [],
+      'cam_from_ego': Transform(),
+      'K': np.array([]),
+      'principal_axis_in_ego': np.array([])
+    }
+    _set_defaults(self, kwargs, DEFAULTS)
   
   @property
   def image(self):
@@ -247,14 +303,15 @@ class CameraImage(object):
   
   def project_ego_to_image(self, pts, omit_offscreen=True):
     """ TODO return 3 x n, where 3 = (x, y, depth)"""
-    pts_from_cam = self.ego_to_camera.apply(pts)
+    pts_from_cam = self.cam_from_ego.apply(pts)
     uvd = self.K.dot(pts_from_cam)
     uvd[0:2, :] /= uvd[2, :]
+    uvd = uvd.T
 
     if omit_offscreen:
       x, y, w, h = 0, 0, self.width, self.height
         
-      uv = copy.deepcopy(uvd)
+      uv = uvd.T
       idx_ = np.where(
               np.logical_and.reduce((
                 # Filter offscreen points
@@ -269,24 +326,45 @@ class CameraImage(object):
     return uvd
   
   def project_cuboid_to_bbox(self, cuboid):
-    bbox = BBox(im_width=self.width, im_height=self.height, cuboid=cuboid)
+    bbox = BBox(
+            im_width=self.width,
+            im_height=self.height,
+            category_name=cuboid.category_name,
+            cuboid=cuboid)
     
+    ## Fill Points
     cuboid_points = copy.deepcopy(cuboid.box3d)
-    uvd = self.project_ego_to_image(cuboid_points, omit_offscreen=False)
-    
-    cuboid_pts_image = np.array([uvd[:, 0] , uvd[:, 1]]).T
+    uvd = self.project_ego_to_image(cuboid.box3d, omit_offscreen=False)
+
+    bbox.cuboid_pts = uvd
 
     x1, x2 = np.min(uvd[:, 0]), np.max(uvd[:, 0])
     y1, y2 = np.min(uvd[:, 1]), np.max(uvd[:, 1])
-    z = float(np.max(uvd[:, 2]))
-
     bbox.set_x1_y1_x2_y2(x1, y1, x2, y2)
 
+    z = float(np.max(uvd[:, 2]))
     num_onscreen = bbox.get_num_onscreen_corners()
-    has_offscreen = ((z <= 0) or (num_onscreen < 4))
-    is_visible = (z > 0 and num_onscreen > 0)
+    bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
+    bbox.is_visible = (z > 0 and num_onscreen > 0)
 
     bbox.clamp_to_screen()
+
+    ## Fill Pose
+    bbox.cuboid_from_cam = \
+      cuboid.obj_from_ego.translation - self.cam_from_ego.translation
+
+    cuboid_from_cam_hat = \
+      bbox.cuboid_from_cam / np.linalg.norm(bbox.cuboid_from_cam)
+    
+    from scipy.spatial.transform import Rotation as R
+    X_HAT = np.array([1, 0, 0])
+    obj_normal = cuboid.obj_from_ego.rotation.dot(X_HAT)
+    cos_theta = cuboid_from_cam_hat.dot(obj_normal)
+    rot_axis = np.cross(cuboid_from_cam_hat, obj_normal)
+    obj_from_ray = R.from_rotvec(
+          math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
+    bbox.ypr_camera_local = obj_from_ray.as_euler('zxy')
+
     return bbox
 
   def to_html(self):
@@ -297,21 +375,22 @@ class CameraImage(object):
       for attr in (
         'camera_name',
         'timestamp',
-        'ego_to_camera',
+        'cam_from_ego',
         'K',
         'principal_axis_in_ego')
     ]
     html = tabulate.tabulate(table, tablefmt='html')
 
-    if util.np_truthy(self.image):
+    image = self.image
+    if util.np_truthy(image):
       table = [
         ['<b>Image</b>'],
-        [aupl.img_to_img_tag(self.image, display_viewport_hw=(1000, 1000))],
+        [aupl.img_to_img_tag(image, display_viewport_hw=(1000, 1000))],
       ]
       html += tabulate.tabulate(table, tablefmt='html')
 
     if self.cloud:
-      debug_img = np.copy(self.image)
+      debug_img = np.copy(image)
       aupl.draw_xy_depth_in_image(debug_img, self.cloud.cloud, alpha=0.7)
       table = [
         ['<b>Image With Cloud</b>'],
@@ -319,8 +398,24 @@ class CameraImage(object):
       ]
       html += tabulate.tabulate(table, tablefmt='html')
     
-    if self.cuboids:
+    if self.bboxes:
+      debug_img = np.copy(image)
+      for bbox in self.bboxes:
+        bbox.draw_in_image(debug_img)
+      table = [
+        ['<b>Image With Boxes</b>'],
+        [aupl.img_to_img_tag(debug_img, display_viewport_hw=(1000, 1000))],
+      ]
+      html += tabulate.tabulate(table, tablefmt='html')
 
+      table = [
+        [aupl.img_to_img_tag(
+            bbox.get_crop(image),
+            image_viewport_hw=(300, 300)),
+         bbox.to_html()]
+        for bbox in self.bboxes
+      ]
+      html += tabulate.tabulate(table, tablefmt='html')
 
     return html
 
@@ -333,16 +428,13 @@ class CroppedCameraImage(CameraImage):
 
   def __init__(self, **kwargs):
     super(CroppedCameraImage, self).__init__(**kwargs)
-    _set_default(self.viewport, None)
+    self.viewport = self.viewport or None
 
   @property
   def image(self):
     img = super(CroppedCameraImage, self).image
     if util.np_truthy(img):
-      c, r, w, h = (
-        self.viewport.x, self.viewport.y,
-        self.viewport.width, self.viewport.height)
-      img = img[r:r+h, c:c+w, :]
+      img = self.viewport.get_crop(img)
     return img
   
   def project_ego_to_image(self, pts, omit_offscreen=True):
@@ -381,32 +473,18 @@ class Frame(object):
                             #   global frame (typicaly the city frame)
   )
 
-
-  #   '_loader',        # type: AUTrackingLoader
-
-  #   # Labels
-  #   '_image_bboxes',  # type: List[BBox]
-
-  #   # Vision
-  #   '_image',         # type: np.ndarray
-  #   'viewport',       # type: BBox (used to express a crop)
-    
-  #   # Lidar
-  #   '_cloud',         # type: np.ndarray
-  # )
-
   def __init__(self, **kwargs):
-    for k in self.__slots__:
-      setattr(self, k, kwargs.get(k, ''))
+    DEFAULTS = {
+      'camera_images': [],
+      'clouds': [],
+      'cuboids': [],
+      'world_to_ego': Transform(),
+    }
+    _set_defaults(self, kwargs, DEFAULTS)
     
     if isinstance(self.uri, six.string_types):
       self.uri = URI.from_str(self.uri)
     
-    _set_default(self.camera_images, [])
-    _set_default(self.clouds, [])
-    _set_default(self.cuboids, [])
-    _set_default(self.world_to_ego, Transform())
-
   def to_html(self):
     import tabulate
     import pprint
