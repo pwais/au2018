@@ -188,7 +188,6 @@ class BBox(common.BBox):
       [attr, getattr(self, attr)]
       for attr in self.__slots__
     ]
-    print('check ypr_camera_local')
     return tabulate.tabulate(table, tablefmt='html')
 
 class Cuboid(object):

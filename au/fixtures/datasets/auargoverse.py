@@ -1345,6 +1345,7 @@ class Fixtures(object):
 ###
 
 class FrameTable(av.FrameTableBase):
+  """TODO"""
 
   FIXTURES = Fixtures
 
@@ -1355,7 +1356,9 @@ class FrameTable(av.FrameTableBase):
 
   @classmethod
   def create_frame_rdd(cls, spark):
-    pass
+    uri_rdd = cls.create_frame_uri_rdd(spark)
+    frame_rdd = uri_rdd.map(cls.create_frame)
+    return frame_rdd
 
   ## Support
   
