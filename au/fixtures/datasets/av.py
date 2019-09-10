@@ -653,3 +653,5 @@ class FrameTableBase(object):
     """Subclasses should create and return a pyspark RDD containing `Frame`
     instances."""
     return spark.parallelize([Frame()])
+
+from object_detection import model_lib_v2

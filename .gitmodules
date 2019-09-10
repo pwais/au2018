@@ -19,3 +19,6 @@
 [submodule "external/bdd-data"]
 	path = external/bdd-data
 	url = git@github.com:pwais/bdd-data.git
+[submodule "external/tensorflow_tpu"]
+	path = external/tensorflow_tpu
+	url = https://github.com/tensorflow/tpu
