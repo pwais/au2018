@@ -12,6 +12,12 @@ from au import conf
 from au import util
 from au.fixtures.datasets import common
 
+
+
+###
+### Utils
+###
+
 def _set_defaults(obj, vals, defaults, DEFAULT_FOR_MISSING=''):
   for k in obj.__slots__:
     v = vals.get(k, defaults.get(k, DEFAULT_FOR_MISSING))
@@ -23,6 +29,12 @@ def maybe_make_homogeneous(pts, dim=3):
   if len(pts.shape) != dim + 1:
     pts = np.hstack((pts, np.ones((pts.shape[0], 1))))
   return pts
+
+
+
+###
+### Core Data Structures
+###
 
 class Transform(object):
   """An SE(3) / ROS Transform-like object"""
@@ -60,6 +72,7 @@ class URI(object):
 
     # Sensor-level selection
     'camera',       # Address an image from a specific camera
+    'camera_timestamp',
 
                     # Address a specific viewport / crop of the image
     'crop_x', 'crop_y',
@@ -366,6 +379,12 @@ class CameraImage(object):
 
     return bbox
 
+  def get_uri(self, uri):
+    uri = copy.deepcopy(uri)
+    uri.camera = self.camera_name
+    uri.camera_timestamp = self.timestamp
+    return uri
+
   def to_html(self):
     import tabulate
     from au import plotting as aupl
@@ -504,125 +523,11 @@ class Frame(object):
     html += tabulate.tabulate(table, tablefmt='html')
     return html
 
-    # if not self.viewport:
-    #   self.viewport = self.uri.get_viewport()
-    
-  # @property
-  # def loader(self):
-  #   if not self._loader:
-  #     self._loader = self.FIXTURES.get_loader(self.uri)
-  #   return self._loader # type: AUTrackingLoader
-  
-  # @staticmethod
-  # @klepto.lru_cache(maxsize=100)
-  # def __load_image(path):
-  #   return imageio.imread(path)
 
-  # @property
-  # def image(self):
-  #   if not util.np_truthy(self._image):
-  #     path = self.loader.get_nearest_image_path(
-  #                     self.uri.camera, self.uri.timestamp)
-  #     self._image = AVFrame.__load_image(path)
-  #     if not self.viewport.is_full_image():
-  #       c, r, w, h = (
-  #         self.viewport.x, self.viewport.y,
-  #         self.viewport.width, self.viewport.height)
-  #       self._image = self._image[r:r+h, c:c+w, :]
-  #   return self._image
-  
-  # @property
-  # def cloud(self):
-  #   if not util.np_truthy(self._cloud):
-  #     self._cloud, motion_corrected = \
-  #       self.loader.get_maybe_motion_corrected_cloud(self.uri.timestamp)
-  #       # We can ignore motion_corrected failures since the Frame will already
-  #       # have this info embedded in `image_bboxes`.
-  #   return self._cloud
-  
-  # def get_cloud_in_image(self):
-  #   cloud = self.cloud
-  #   calib = self.loader.get_calibration(self.uri.camera)
 
-  #   # Per the argoverse recommendation, this should be safe:
-  #   # https://github.com/argoai/argoverse-api/blob/master/demo_usage/argoverse_tracking_tutorial.ipynb
-  #   x, y, w, h = (
-  #     self.viewport.x, self.viewport.y,
-  #     self.viewport.width, self.viewport.height)
-  #   uv = calib.project_ego_to_image(cloud).T
-  #   idx_ = np.where(
-  #           np.logical_and.reduce((
-  #             # Filter offscreen points
-  #             x <= uv[0, :], uv[0, :] < x + w - 1.0,
-  #             y <= uv[1, :], uv[1, :] < y + h - 1.0,
-  #             # Filter behind-screen points
-  #             uv[2, :] > 0)))
-  #   idx_ = idx_[0]
-  #   uv = uv[:, idx_]
-  #   uv = uv.T
-
-  #   # Correct for image origin if this frame is a crop
-  #   uv -= np.array([self.viewport.x, self.viewport.y, 0])
-  #   return uv
-
-  # @property
-  # def image_bboxes(self):
-  #   if not self._image_bboxes:
-  #     bboxes = self.loader.get_nearest_label_bboxes(self.uri)
-
-  #     # Ingore invisible things
-  #     self._image_bboxes = [
-  #       bbox for bbox in bboxes
-  #       if bbox.is_visible and self.viewport.overlaps_with(bbox)
-  #     ]
-
-  #     # Correct for image origin if this frame is a crop
-  #     for bbox in self._image_bboxes:
-  #       bbox.translate(-np.array(self.viewport.get_x1_y1()))
-  #       bbox.im_width = self.viewport.width
-  #       bbox.im_height = self.viewport.height
-
-  #   return self._image_bboxes
-
-  # def get_target_bbox(self):
-  #   if self.uri.track_id:
-  #     for bbox in self.image_bboxes:
-  #         if bbox.track_id == self.uri.track_id:
-  #           return bbox
-  #   return None
-
-  # def get_debug_image(self):
-  #   img = np.copy(self.image)
-    
-  #   from au import plotting as aupl
-  #   xyd = self.get_cloud_in_image()
-  #   aupl.draw_xy_depth_in_image(img, xyd)
-
-  #   target_bbox = self.get_target_bbox()
-  #   if target_bbox:
-  #     # Draw a highlight box first; then the draw() calls below will draw over
-  #     # the box.
-  #     # WHITE = (225, 225, 255)
-  #     # target_bbox.draw_in_image(img, color=WHITE, thickness=20)
-
-  #   # for bbox in self.image_bboxes:
-  #     bbox = target_bbox
-  #     bbox.draw_cuboid_in_image(img)
-  #     # bbox.draw_in_image(img)
-    
-  #   return img
-
-  # def get_cropped(self, bbox):
-  #   """Create and return a new AVFrame instance that contains the data in this
-  #   frame cropped down to the viewport of just `bbox`."""
-
-  #   uri = copy.deepcopy(self.uri)
-  #   uri.set_crop(bbox)
-  #   if hasattr(bbox, 'track_id') and bbox.track_id:
-  #     uri.track_id = bbox.track_id
-
-  #   frame = self.FIXTURES.get_frame(uri)
-  #   return frame
+###
+### Tables
+###
 
 class FrameTableBase(object):
 
@@ -654,4 +559,90 @@ class FrameTableBase(object):
     instances."""
     return spark.parallelize([Frame()])
 
-from object_detection import model_lib_v2
+
+
+###
+### Tensorflow Interop
+###
+
+def camera_image_to_tf_example(
+    frame_uri,
+    camera_image,
+    label_map_dict):
+  """TODO TODO
+
+  Based upon tensorflow/models
+   * research/object_detection/dataset_tools/create_coco_tf_record.py
+   * research/object_detection/dataset_tools/create_pet_tf_record.py
+  """
+
+  import hashlib
+  key = hashlib.sha256(camera_image.image_jpeg).hexdigest()
+
+  camera_uri = camera_image.get_uri(frame_uri)
+  width = camera_image.width
+  height = camera_image.height
+
+  xmins = []
+  ymins = []
+  xmaxs = []
+  ymaxs = []
+  classes = []
+  classes_text = []
+  for bbox in camera_image.bboxes:
+    xmin, ymin, xmax, ymax = bbox.get_fractional_xmin_ymin_xmax_ymax(clip=True)
+    xmins.append(xmin)
+    ymins.append(ymin)
+    xmaxs.append(xmax)
+    ymaxs.append(ymax)
+
+    c = bbox.category_name
+    classes.append(int(label_map_dict[c]))
+    classes_text.append(c.encode('utf-8'))
+  n_annos = len(xmins)
+
+  # From tensorflow/models
+  from object_detection.utils import dataset_util
+  feature_dict = {
+    # Image
+    'image/height':
+        dataset_util.int64_feature(camera_image.height),
+    'image/width':
+        dataset_util.int64_feature(camera_image.width),
+    'image/encoded':
+        dataset_util.bytes_feature(bytes(camera_image.image_jpeg)),
+    'image/format':
+        dataset_util.bytes_feature('jpeg'.encode('utf8')),
+
+    # Annos
+    'image/object/bbox/xmin':
+        dataset_util.float_list_feature(xmins),
+    'image/object/bbox/xmax':
+        dataset_util.float_list_feature(xmaxs),
+    'image/object/bbox/ymin':
+        dataset_util.float_list_feature(ymins),
+    'image/object/bbox/ymax':
+        dataset_util.float_list_feature(ymaxs),
+    'image/object/class/label': 
+        dataset_util.int64_list_feature(classes),
+    'image/object/class/text':
+        dataset_util.bytes_list_feature(classes_text),
+
+    # Context
+    'image/filename':
+        dataset_util.bytes_feature(str(camera_uri).encode('utf8')),
+    'image/source_id':
+        dataset_util.bytes_feature(str(frame_uri).encode('utf8')),
+    'image/key/sha256':
+        dataset_util.bytes_feature(key.encode('utf8')),
+    
+    # Required(?) Junk
+    'image/object/is_crowd':
+        dataset_util.int64_list_feature([False] * n_annos),
+    'image/object/area':
+        dataset_util.float_list_feature([0.] * n_annos),
+  }
+  
+  import tensorflow as tf
+  example = tf.train.Example(features=tf.train.Features(feature=feature_dict))
+  return example

@@ -53,6 +53,18 @@ class BBox(object):
   def get_x1_y1(self):
     return self.x, self.y
 
+  def get_fractional_xmin_ymin_xmax_ymax(self, clip=True):
+    import numpy as np
+    xmin = float(self.x) / self.im_width
+    ymin = float(self.y) / self.im_height
+    xmax = float(self.x + self.width) / self.im_width
+    ymax = float(self.y + self.height) / self.im_height
+    if clip:
+      xmin, ymin, xmax, ymax = \
+        map(lambda x: float(np.clip(x, 0, 1)), \
+          (xmin, ymin, xmax, ymax))
+    return xmin, ymin, xmax, ymax
+
   def add_padding(self, *args):
     if len(args) == 1:
       px, py = args[0], args[0]

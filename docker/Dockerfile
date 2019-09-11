@@ -157,7 +157,8 @@ RUN \
   cd cocoapi/PythonAPI && \
   python3 setup.py install
 
-
+## TF TPUs
+ENV PYTHONPATH $PYTHONPATH:/opt/au/external/tensorflow_tpu/models:/opt/au/external/tensorflow_tpu/models/official/detection
 
 ## TF CNN Vis
 RUN pip3 install scipy h5py wget Pillow six scikit-image
