@@ -62,6 +62,11 @@ class Transform(object):
     return 'Transform(rotation=%s;translation=%s)' % (
       self.rotation, self.translation)
 
+  def is_identity(self):
+    return (
+      np.array_equal(self.rotation, np.eye(3, 3)) and
+      np.array_equal(self.translation, np.zeros((3, 1))))
+
 class URI(object):
   __slots__ = (
     # All parameters are optional; more parameters address a more
@@ -302,6 +307,7 @@ class CameraImage(object):
     DEFAULTS = {
       'image_jpeg': bytearray(b''),
       'timestamp': 0,
+      'cloud': PointCloud(),
       'bboxes': [],
       'cam_from_ego': Transform(),
       'K': np.array([]),
@@ -489,8 +495,8 @@ class Frame(object):
   __slots__ = (
     'uri',                  # type: URI or str
     'camera_images',        # type: List[CameraImage]
-    # 'clouds',               # type: List[PointCloud]
-    # 'cuboids',              # type: List[Cuboid]
+    'clouds',               # type: List[PointCloud]
+    'cuboids',              # type: List[Cuboid]
     'world_to_ego',         # type: Transform; the pose of the robot in the
                             #   global frame (typicaly the city frame)
   )
@@ -499,8 +505,8 @@ class Frame(object):
     DEFAULTS = {
       'uri': URI(),
       'camera_images': [],
-      # 'clouds': [],
-      # 'cuboids': [],
+      'clouds': [],
+      'cuboids': [],
       'world_to_ego': Transform(),
     }
     _set_defaults(self, kwargs, DEFAULTS)
@@ -513,7 +519,7 @@ class Frame(object):
     import pprint
     table = [
       ['URI', str(self.uri)],
-      # ['Num Labels', len(self.cuboids)],
+      ['Num Labels', len(self.cuboids)],
       ['Ego Pose', pprint.pformat(self.world_to_ego)]
     ]
     html = tabulate.tabulate(table, tablefmt='html')
@@ -521,9 +527,9 @@ class Frame(object):
     for c in self.camera_images:
       table += [[c.to_html()]]
     
-    # table += [['<h2>Point Clouds</h2>']]
-    # for c in self.clouds:
-    #   table += [[c.to_html()]]
+    table += [['<h2>Point Clouds</h2>']]
+    for c in self.clouds:
+      table += [[c.to_html()]]
 
     html += tabulate.tabulate(table, tablefmt='html')
     return html
@@ -546,11 +552,18 @@ class FrameTableBase(object):
   def setup(cls, spark=None):
     if util.missing_or_empty(cls.table_root()):
       with Spark.sess(spark) as spark:
-        df = cls._create_frame_df(spark)
-        df.write.parquet(
-          cls.table_root(),
+        frame_rdds = cls._create_frame_rdds(spark)
+        class FrameDFThunk(object):
+          def __init__(self, frame_rdd):
+            self.frame_rdd = frame_rdd
+          def __call__(self):
+            return cls._frame_rdd_to_frame_df(spark, self.frame_rdd)
+        df_thunks = [FrameDFThunk(frame_rdd) for frame_rdd in frame_rdds]
+        Spark.save_df_thunks(
+          df_thunks,
+          path=cls.table_root(),
+          format='parquet',
           partitionBy=URI.PARTITION_KEYS,
-          mode='append',
           compression='lz4')
 
   @classmethod
@@ -564,32 +577,41 @@ class FrameTableBase(object):
     return df.rdd.map(RowAdapter.from_row)
 
   @classmethod
-  def _create_frame_rdd(cls, spark):
-    """Subclasses should create and return a pyspark RDD containing `Frame`
-    instances."""
-    return spark.parallelize([Frame()])
+  def _create_frame_rdds(cls, spark):
+    """Subclasses should create and return a list of RDD[Frame]s"""
+    return []
 
   @classmethod
-  def _create_frame_df(cls, spark):
-    frame_rdd = cls._create_frame_rdd(spark)
+  def _frame_rdd_to_frame_df(cls, spark, frame_rdd):
+    from pyspark import StorageLevel
+    from pyspark.sql import Row
+    # frame_rdd = cls._create_frame_rdd(spark)
     # def add_id(f):
     #   f.uri = str(f.uri)
     #   return f
     # frame_rdd = frame_rdd.map(stringify_uri)
     
     # frame_row_rdd = frame_rdd.map(RowAdapter.to_row)
-    def to_row(f):
+    def to_pkey_row(f):
+      from collections import OrderedDict
       row = RowAdapter.to_row(f)
       row = row.asDict()
       row['id'] = str(f.uri)
-      row.update(
+      partition = OrderedDict(
         (k, getattr(f.uri, k))
         for k in URI.PARTITION_KEYS)
-      from pyspark.sql import Row
+      # partition_key = tuple(partition.values())
+      row.update(**partition)
+      # return partition_key, Row(**row)
       return Row(**row)
-    frame_row_rdd = frame_rdd.map(to_row)
+    # print('frame_rdd size', frame_rdd.count())
+    pkey_row_rdd = frame_rdd.map(to_pkey_row)
+    # pkey_row_rdd = pkey_row_rdd.partitionBy(1000)
+    # pkey_row_rdd = pkey_row_rdd.persist(StorageLevel.DISK_ONLY)
+    row_rdd = pkey_row_rdd#.map(lambda pkey_row: pkey_row[-1])
     
-    return spark.createDataFrame(frame_row_rdd, samplingRatio=1)
+    df = spark.createDataFrame(row_rdd)#, samplingRatio=1)
+    return df
 
 
 ###

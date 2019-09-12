@@ -38,7 +38,7 @@ class Unslotted(object):
               (k, v) for k, v in self.__dict__.items()
               if not k.startswith('__')
     )
-    return "Unslotted" + str(sorted(attrs.items()))
+    return "Unslotted(%s)" % str(sorted(attrs.items()))
 
 @pytest.mark.slow
 def test_row_adapter():
@@ -47,46 +47,47 @@ def test_row_adapter():
                       'spark_row_adapter_test')
   util.cleandir(TEST_TEMPDIR)
 
+  from pyspark.sql import Row
   import numpy as np
   rows = [
-    {
-      'id': 1,
-      'np_number': np.float32(1.),
-      'a': np.array([1]), 
-      'b': {
+    Row(
+      id=1,
+      np_number=np.float32(1.),
+      a=np.array([1]), 
+      b={
         'foo': np.array( [ [1] ], dtype=np.uint8)
       },
-      'c': [
+      c=[
         np.array([[[1.]], [[2.]], [[3.]]])
       ],
-      'd': Slotted(foo=5, bar="abc", _not_hidden=1),
-      'e': [Slotted(foo=6, bar="def", _not_hidden=1)],
-      'f': Unslotted(meow=4, _not_hidden=1, __hidden=2),
-      'e': Unslotted() # Intentionally empty; adapter should set nothing
-    },
+      d=Slotted(foo=5, bar="abc", _not_hidden=1),
+      e=[Slotted(foo=6, bar="def", _not_hidden=1)],
+      f=Unslotted(meow=4, _not_hidden=1, __hidden=2),
+      g=Unslotted(), # Intentionally empty; adapter should set nothing
+      h=Row(i=1, j=2),
+    ),
 
     # Include a mostly empty row below to exercise Spark type validation.
     # Spark will ensure the row below and row above have the same schema;
     # note that `None` (or 'null') is only allowed for Struct / Row types.
-    {
-      'id': 2,
-      'np_number': np.float32(2.),
-      'a': np.array([]),
-      'b': {},
-      'c': [],
-      'd': None,
-      'e': [],
-      'f': None,
-      'e': None,
-    },
+    Row(
+      id=2,
+      np_number=np.float32(2.),
+      a=np.array([]),
+      b={},
+      c=[],
+      d=None,
+      e=[],
+      f=None,
+      g=None,
+      h=Row(i=3, j=3),
+    ),
   ]
 
-  # Test serialization numpy <-> parquet
+  # Test serialization to and from parquet
   with testutils.LocalSpark.sess() as spark:
-    from pyspark.sql import Row
 
     adapted_rows = [RowAdapter.to_row(r) for r in rows]
-
     df = spark.createDataFrame(adapted_rows)
     df.show()
     outpath = os.path.join(TEST_TEMPDIR, 'rowdata')
@@ -99,7 +100,6 @@ def test_row_adapter():
       RowAdapter.from_row(row)
       for row in decoded_wrapped_rows
     ]
-    decoded_rows = [r.asDict() for r in decoded_rows]
     
     # We can't do assert sorted(rows) == sorted(decoded_rows)
     # because numpy syntatic sugar breaks ==

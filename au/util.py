@@ -66,15 +66,30 @@ def get_size_of_deep(v):
   """(Hacky) Get size of the value `v` in bytes.  Does not rely on a more
   precise library like guppy or pympler.  Intended for values `v` that 
   contain large binary blobs."""
+  import six
+  INTEGRAL_TYPES = tuple(itertools.chain.from_iterable(
+        (six.string_types, six.integer_types, six.class_types,
+        (bytes, bytearray))))
+    # The above types can trigger expensive recursion unless we base case them
+  if isinstance(v, INTEGRAL_TYPES):
+    return sys.getsizeof(v)
   if hasattr(v, 'nbytes'):
     return v.nbytes
   elif hasattr(v, '__iter__'):
-    return sum(get_size_of_deep(el) for el in v)
+    return sum(get_size_of_deep(el) for el in iter(v))
+  elif hasattr(v, '__dict__'):
+    return sum(
+      get_size_of_deep(dk) + get_size_of_deep(dv)
+      for dk, dv in v.__dict__.items())
+  elif hasattr(v, '__slots__'):
+    return sum(get_size_of_deep(getattr(v, k)) for k in v.__slots__)
   else:
     return sys.getsizeof(v)
 
 def stable_hash(x):
-  # NB: ideally we just use __hash__(), but as of Python 3 it's not stable
+  # NB: ideally we just use __hash__(), but as of Python 3 __hash__() is
+  # given a fresh seed every time the interpret starts; hash codes are not
+  # stable across runs of the same program.
   import hashlib
   return int(hashlib.md5(str(x).encode('utf-8')).hexdigest(), 16)
 
@@ -291,7 +306,8 @@ class ThruputObserver(object):
     stats = self.get_stats()
     summary = tabulate.tabulate(stats)
     if self.name:
-      summary = self.name + '\n' + summary
+      prefix = '%s [Pid:%s Id:%s]' % (self.name, os.getpid(), id(self))
+      summary = prefix + '\n' + summary
     return summary
   
   def __del__(self):
@@ -326,6 +342,21 @@ class ThruputObserver(object):
               Observer(tensor.dtype.size), [tf.shape(tensor)], tf.string)
     tf.summary.text(name + '/ThruputObserver', obs_str_tensor)
     return obs_str_tensor
+  
+  @staticmethod
+  def wrap_func(func, **observer_init_kwargs):
+    # TODO unit test ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    class MonitoredFunc(object):
+      def __init__(self, func, observer_init_kwargs):
+        self.func = func
+        self.observer = ThruputObserver(**observer_init_kwargs)
+      def __call__(self, *args, **kwargs):
+        self.observer.start_block()
+        ret = self.func(*args, **kwargs)
+        self.observer.stop_block(n=1, num_bytes=get_size_of_deep(ret))
+        self.observer.maybe_log_progress()
+        return ret
+    return MonitoredFunc(func, observer_init_kwargs)
 
 
 

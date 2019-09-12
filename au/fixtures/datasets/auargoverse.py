@@ -929,7 +929,7 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
 
     idx, _ = self.get_nearest_lidar_sweep_id(timestamp)
     if idx >= len(self.label_list):
-      # This most often happens on test or val split examples where
+      # This most often happens on test split examples where
       # Argoverse does not yet include labels
       util.log.debug(
         "Log %s has %s labels but %s lidar sweeps; idx %s out of range" % (
@@ -1108,6 +1108,9 @@ class Fixtures(object):
   )
 
   SPLITS = ('train', 'test', 'val', 'sample')
+
+  TRAIN_TEST_SPLITS = ('train', 'val')
+    # 'test' has no labels and 'sample' duplicates part of 'train'
 
   ROOT = os.path.join(conf.AU_DATA_CACHE, 'argoverse')
 
@@ -1353,37 +1356,40 @@ class FrameTable(av.FrameTableBase):
   PROJECT_CUBOIDS_TO_CAM = True
   IGNORE_INVISIBLE_CUBOIDS = True
   MOTION_CORRECTED_POINTS = True
+  FILTER_MISSING_POSE = True
+
+  SETUP_URIS_PER_CHUNK = 1000
 
   @classmethod
   def table_root(cls):
     return '/outer_root/media/seagates-ext4/au_datas/frame_table'
 
   @classmethod
-  def _create_frame_rdd(cls, spark):
-    uri_rdd = cls._create_frame_uri_rdd(spark)
+  def _create_frame_rdds(cls, spark):
+    uris = cls._get_uris(spark)
 
-    # We want each pyspark worker to focus on a single Argoverse log
-    # (or segment_id) in order to reduce the total number of log readers
-    # instantiated.  Below, we repartition `uri_rdd` by segment_id so that
-    # workers are more likely to work on one (or a small number) of logs.
-    seg_uri_rdd = uri_rdd.map(lambda uri: (uri.segment_id, uri))
-    seg_uri_rdd = seg_uri_rdd.partitionBy(1000)
-      # Implicily `k` of `RDD[Tuple[k, v]]` is fed into the hash partitioner
-    repart_uri_rdd = seg_uri_rdd.map(lambda seg_uri: seg_uri[-1])
-
-    frame_rdd = repart_uri_rdd.map(cls.create_frame)
-    return frame_rdd
+    frame_rdds = []
+    for uri_chunk in util.ichunked(uris, cls.SETUP_URIS_PER_CHUNK):
+      uri_rdd = spark.sparkContext.parallelize(uri_chunk)
+      # create_frame = util.ThruputObserver.wrap_func(
+      #                       cls.create_frame,
+      #                       name='create_frame',
+      #                       log_on_del=True)
+      frame_rdd = uri_rdd.map(cls.create_frame)
+      frame_rdds.append(frame_rdd)
+    return frame_rdds
 
   ## Support
   
   @classmethod
-  def _create_frame_uri_rdd(cls, spark, splits=None):
+  def _get_uris(cls, spark, splits=None):
     if not splits:
-      splits = cls.FIXTURES.SPLITS
+      splits = cls.FIXTURES.TRAIN_TEST_SPLITS
 
     util.log.info("Building frame table for splits %s" % (splits,))
 
-    # Be careful to hint to Spark how to parallelize reads
+    # Be careful to hint to Spark how to parallelize reads. Instantiating
+    # log readers is expensive, so we have Spark do that in parallel.
     log_uris = list(
               itertools.chain.from_iterable(
                     cls.FIXTURES.get_log_uris(split)
@@ -1391,9 +1397,16 @@ class FrameTable(av.FrameTableBase):
     util.log.info("... reading from %s logs ..." % len(log_uris))
     log_uri_rdd = spark.sparkContext.parallelize(
                             log_uris, numSlices=len(log_uris))
-    uri_rdd = log_uri_rdd.flatMap(cls.FIXTURES.get_image_frame_uris).cache()
-    util.log.info("... read %s URIs ..." % uri_rdd.count())
-    return uri_rdd
+    uri_rdd = log_uri_rdd.flatMap(cls.FIXTURES.get_image_frame_uris)
+
+    if cls.FILTER_MISSING_POSE:
+      def has_missing_ego_pose(uri):
+        return not cls._get_ego_pose(uri).is_identity()
+      uri_rdd = uri_rdd.filter(has_missing_ego_pose)
+
+    uris = uri_rdd.collect()
+    util.log.info("... computed %s URIs." % len(uris))
+    return uris
 
   @classmethod
   def create_frame(cls, uri):
@@ -1403,7 +1416,6 @@ class FrameTable(av.FrameTableBase):
     f.camera_images = cls._get_camera_images(uri)
     # f.clouds = cls._get_clouds(uri)
     # f.cuboids = cls._get_cuboids(uri)
-    print(f.uri) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     return f
 
   @classmethod
@@ -1416,7 +1428,6 @@ class FrameTable(av.FrameTableBase):
               translation=city_to_ego_se3.translation)
     except MissingPose:
       return av.Transform()
-    # TODO weed out these uris ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
   @classmethod
   def _get_camera_images(cls, uri):
@@ -1575,9 +1586,9 @@ class FrameTable(av.FrameTableBase):
   
   @classmethod
   def __fill_pose(cls, calib, cuboid, olr):
-    cuboid.length_meters = olr.length
-    cuboid.width_meters = olr.width
-    cuboid.height_meters = olr.height
+    cuboid.length_meters = float(olr.length)
+    cuboid.width_meters = float(olr.width)
+    cuboid.height_meters = float(olr.height)
 
     from argoverse.utils.transform import quat2rotmat
     rotmat = quat2rotmat(olr.quaternion)

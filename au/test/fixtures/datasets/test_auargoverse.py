@@ -305,16 +305,15 @@ class TestArgoverseImageTable(unittest.TestCase):
 
   @pytest.mark.slow
   def test_av_frame_table(self):
+    import pdb; pdb.set_trace()
     with testutils.LocalSpark.sess() as spark:
       class TestFrameTable(av.FrameTable):
         FIXTURES = self.TestFixtures
 
         @classmethod
-        def _create_frame_uri_rdd(cls, spark, splits=None):
+        def _get_uris(cls, spark, splits=None):
           from au.fixtures.datasets.av import URI
-          uris = [URI.from_str(s) for s in TEST_FIXTURE_URIS_NEW]
-          uri_rdd = spark.sparkContext.parallelize(uris, numSlices=len(uris))
-          return uri_rdd
+          return [URI.from_str(s) for s in TEST_FIXTURE_URIS_NEW]
       
       TestFrameTable.setup(spark)
       

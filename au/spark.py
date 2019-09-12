@@ -345,7 +345,21 @@ class Spark(object):
       df = df.unionByName(df_other)
     return df
 
-
+  @staticmethod
+  def save_df_thunks(df_thunks, compute_df_sizes=True, **save_opts):
+    t = util.ThruputObserver(name='save_df_thunks', n_total=len(df_thunks))
+    util.log.info("Going to write in %s chunks ..." % len(df_thunks))
+    for df_thunk in df_thunks:
+      t.start_block()
+      df = df_thunk()
+      # df = df.persist()
+      # print('df size', df.count())
+      num_bytes = 0
+      if compute_df_sizes:
+        num_bytes = df.rdd.map(util.get_size_of_deep).sum()
+      df.write.save(mode='append', **save_opts)
+      t.stop_block(n=1, num_bytes=num_bytes)
+      t.maybe_log_progress(every_n=1)
 
 
   ### Test Utilities (for unit tests and more!)
@@ -518,7 +532,7 @@ class Tensor(object):
   @staticmethod
   def from_numpy(arr):
     t = Tensor()
-    t.shape = arr.shape
+    t.shape = list(arr.shape)
     t.dtype = arr.dtype.name
     t.order = 'C' # C-style row-major
     t.values = arr.flatten(order='C').tolist()
@@ -564,6 +578,9 @@ class RowAdapter(object):
   Enables saving objects and numpy arrays to Parquet in a format
   """
 
+  IGNORE_PROTECTED = False
+  IGNORE_PRIVATE = True
+
   @staticmethod
   def _get_classname_from_obj(o):
     # Based upon https://stackoverflow.com/a/2020083
@@ -583,9 +600,13 @@ class RowAdapter(object):
     return obj_cls
 
   @classmethod
-  def to_row(cls, obj, ignore_protected=False, ignore_private=True):
+  def to_row(cls, obj):
     from pyspark.sql import Row
     import numpy as np
+    if isinstance(obj, Row):
+      # Row is immutable, so we have to recreate
+      row_dict = obj.asDict()
+      return Row(**cls.to_row(row_dict))
     if isinstance(obj, np.ndarray):
       return cls.to_row(Tensor.from_numpy(obj))
     elif isinstance(obj, np.generic):
@@ -594,9 +615,9 @@ class RowAdapter(object):
     elif hasattr(obj, '__slots__') or hasattr(obj, '__dict__'):
       def is_hidden(fname):
         # Check private first to disambiguate `_` vs `__` prefixes
-        if ignore_private and fname.startswith('__'):
+        if cls.IGNORE_PRIVATE and fname.startswith('__'):
           return True
-        if ignore_protected and fname.startswith('_'):
+        if cls.IGNORE_PROTECTED and fname.startswith('_'):
           return True
         return False
       tag = ('__pyclass__', RowAdapter._get_classname_from_obj(obj))
