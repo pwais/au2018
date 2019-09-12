@@ -1355,15 +1355,15 @@ class FrameTable(av.FrameTableBase):
   MOTION_CORRECTED_POINTS = True
 
   @classmethod
-  def create_frame_rdd(cls, spark):
-    uri_rdd = cls.create_frame_uri_rdd(spark)
+  def _create_frame_rdd(cls, spark):
+    uri_rdd = cls._create_frame_uri_rdd(spark)
     frame_rdd = uri_rdd.map(cls.create_frame)
     return frame_rdd
 
   ## Support
   
   @classmethod
-  def create_frame_uri_rdd(cls, spark, splits=None):
+  def _create_frame_uri_rdd(cls, spark, splits=None):
     if not splits:
       splits = cls.FIXTURES.SPLITS
 

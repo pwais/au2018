@@ -50,13 +50,52 @@ TEST_FIXTURE_URIS = (
   'argoverse://tarball_name=tracking_val.tar.gz&log_id=e17eed4f-3ffd-3532-ab89-41a3f24cf226&split=val&camera=ring_side_left&timestamp=315966971134347704',
 )
 
+TEST_FIXTURE_URIS_NEW = (
+  # Has bikes
+  'avframe://dataset=argoverse&segment_id=tracking_train2.tar.gz|5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936',
+  
+  # Emergency vehicle
+  'avframe://dataset=argoverse&segment_id=tracking_train1.tar.gz|f9fa3960-537f-3151-a1a3-37a9c0d6d7f7&split=train&camera=ring_rear_right&timestamp=315968463537902224',
+  
+  # Pedestrians
+  'avframe://dataset=argoverse&segment_id=tracking_train1.tar.gz|1d676737-4110-3f7e-bec0-0c90f74c248f&split=train&camera=ring_front_left&timestamp=315984810796685856',
+
+  # Night scene
+  'avframe://dataset=argoverse&segment_id=tracking_train1.tar.gz|53037376_5303_5303_5303_553038557184&split=train&camera=ring_front_left&timestamp=315967820634443792',
+
+  # Lens flare
+  'avframe://dataset=argoverse&segment_id=tracking_train1.tar.gz|64c12551-adb9-36e3-a0c1-e43a0e9f3845&split=train&camera=ring_front_center&timestamp=315975339670154704',
+
+  # Complex from val
+  'avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|15c802a9-0f0e-3c87-b516-a3fa02f1ecb0&split=val&camera=ring_front_center&timestamp=315970757222656344',
+  'avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|22160544_2216_2216_2216_722161741824&split=val&camera=ring_front_center&timestamp=315966714291915976',
+
+  # Misc from sample
+  'avframe://dataset=argoverse&segment_id=tracking_sample.tar.gz|c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=stereo_front_left&timestamp=315978417887655552',
+  'avframe://dataset=argoverse&segment_id=tracking_sample.tar.gz|c6911883-1843-3727-8eaa-41dc8cda8993&split=sample&camera=ring_front_right&timestamp=315978410894656888',
+
+  # Misc from train
+  'avframe://dataset=argoverse&segment_id=tracking_train1.tar.gz|1d676737-4110-3f7e-bec0-0c90f74c248f&split=train&camera=ring_front_center&timestamp=315984808032785816',
+  'avframe://dataset=argoverse&segment_id=tracking_train1.tar.gz|53037376_5303_5303_5303_553038557184&split=train&camera=ring_front_center&timestamp=315967813075342440',
+
+  # MISC DELETE ME
+  'avframe://dataset=argoverse&segment_id=tracking_train4.tar.gz|2c07fcda-6671-3ac0-ac23-4a232e0e031e&split=train&camera=ring_rear_left&timestamp=315976049977047120',
+  'avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|043aeba7-14e5-3cde-8a5c-639389b6d3a6&split=val&camera=stereo_front_right&timestamp=315967477824066872',
+  'avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|cb0cba51-dfaf-34e9-a0c2-d931404c3dd8&split=val&camera=ring_front_right&timestamp=315972710098198016',
+  'avframe://dataset=argoverse&segment_id=tracking_train3.tar.gz|02cf0ce1-699a-373b-86c0-eb6fd5f4697a&split=train&camera=ring_rear_right&timestamp=315968508466230352',
+  'avframe://dataset=argoverse&segment_id=tracking_train2.tar.gz|3138907e-1f8a-362f-8f3d-773f795a0d01&split=train&camera=stereo_front_left&timestamp=315968320382681104',
+  'avframe://dataset=argoverse&segment_id=tracking_train1.tar.gz|70d2aea5-dbeb-333d-b21e-76a7f2f1ba1c&split=train&camera=stereo_front_left&timestamp=315976372531658128',
+  'avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|e17eed4f-3ffd-3532-ab89-41a3f24cf226&split=val&camera=ring_side_right&timestamp=315966977261549472',
+  'avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|e17eed4f-3ffd-3532-ab89-41a3f24cf226&split=val&camera=ring_side_left&timestamp=315966971134347704',
+)
+
 FIXTURES_BASE_PATH = os.path.join(conf.AU_ROOT, 'au/test/')
 
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_argoverse')
 
 
 
-def test_ag_hacks_test():
+def test_ag_hacks_test(): # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   
   frame = av.FrameTable.create_frame(
     'avframe://segment_id=tracking_train2.tar.gz|5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936')
@@ -132,10 +171,10 @@ class TestArgoverseImageTable(unittest.TestCase):
       cls.ImageAnnoTable = TestImageAnnoTable
       cls.AnnoReports = TestAnnoReports
     
-    if cls.ImageAnnoTable:
-      # Many tests need this fixture
-      with testutils.LocalSpark.sess() as spark:
-        cls.ImageAnnoTable.setup(spark)
+    # if cls.ImageAnnoTable: ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    #   # Many tests need this fixture
+    #   with testutils.LocalSpark.sess() as spark:
+    #     cls.ImageAnnoTable.setup(spark)
 
 
 
@@ -259,21 +298,52 @@ class TestArgoverseImageTable(unittest.TestCase):
       
       TestCroppedObjectImageTable.setup(spark=spark)
 
-  def test_caasdgadsg(self):
-    frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad', 
-                  FIXTURES=self.TestFixtures)
-    import imageio
-    # TODO create fixture
-    imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
 
-    hnm = av.HardNegativeMiner(frame)
-    for i in range(10):
-      bbox = hnm.next_sample()
-      imageio.imwrite(
-        '/opt/au/tastttt_%s.png' % i,
-        frame.get_cropped(bbox).get_debug_image(),
-        format='png')
-      print('/opt/au/tastttt_%s.png' % i)
+
+
+
+
+  @pytest.mark.slow
+  def test_av_frame_table(self):
+    with testutils.LocalSpark.sess() as spark:
+      class TestFrameTable(av.FrameTable):
+        FIXTURES = self.TestFixtures
+
+        @classmethod
+        def _create_frame_uri_rdd(cls, spark, splits=None):
+          uri_rdd = spark.sparkContext.parallelize(
+                                  TEST_FIXTURE_URIS_NEW,
+                                  numSlices=len(TEST_FIXTURE_URIS_NEW))
+          return uri_rdd
+      
+      TestFrameTable.setup(spark)
+      
+      frame_rdd = TestFrameTable.as_frame_rdd(spark)
+      for frame in frame_rdd.collect():
+        with open('/tmp/' + frame.uri.segment_id + '.html', 'w') as f:
+          f.write(frame.to_html())
+          print(frame.uri.segment_id)
+      print('moof')
+
+
+
+    # frame = av.AVFrame(uri='argoverse://tarball_name=tracking_train2.tar.gz&log_id=5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936&track_id=f53345d4-b540-45f4-8d55-777b54252dad', 
+    #               FIXTURES=self.TestFixtures)
+    # import imageio
+    # # TODO create fixture
+    # imageio.imwrite('/opt/au/tastttt.png', frame.get_debug_image(),format='png')
+
+    # hnm = av.HardNegativeMiner(frame)
+    # for i in range(10):
+    #   bbox = hnm.next_sample()
+    #   imageio.imwrite(
+    #     '/opt/au/tastttt_%s.png' % i,
+    #     frame.get_cropped(bbox).get_debug_image(),
+    #     format='png')
+    #   print('/opt/au/tastttt_%s.png' % i)
+
+
+
 
   # def test_samplexxxxxxx(self):
   #   # if not self.have_fixtures:

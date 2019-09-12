@@ -4,6 +4,7 @@ datasets, e.g. Argoverse, nuScenes, Waymo Open. etc.
 
 import copy
 import math
+import os
 
 import numpy as np
 import six
@@ -11,6 +12,8 @@ import six
 from au import conf
 from au import util
 from au.fixtures.datasets import common
+from au.spark import RowAdapter
+from au.spark import Spark
 
 
 
@@ -65,8 +68,8 @@ class URI(object):
     # specific piece of all Frame data available.
     
     # Frame-level selection
-    'split',        # E.g. 'train'
     'dataset',      # E.g. 'argoverse'
+    'split',        # E.g. 'train'
     'segment_id',     # String identifier for a drive segment, e.g. a UUID
     'timestamp',    # Some integer; either Unix or GPS time
 
@@ -137,9 +140,10 @@ class URI(object):
   def from_str(s):
     if isinstance(s, URI):
       return s
-    assert s.startswith(URI.PREFIX)
+    assert s.startswith(URI.PREFIX), "Missing %s in %s" % (URI.PREFIX, s)
     toks_s = s[len(URI.PREFIX):]
     toks = toks_s.split('&')
+    assert all('=' in tok for tok in toks), "Bad token in %s" % (toks,)
     uri = URI(**dict(tok.split('=') for tok in toks))
     return uri
 
@@ -485,17 +489,18 @@ class Frame(object):
   __slots__ = (
     'uri',                  # type: URI or str
     'camera_images',        # type: List[CameraImage]
-    'clouds',               # type: List[PointCloud]
-    'cuboids',              # type: List[Cuboid]
+    # 'clouds',               # type: List[PointCloud]
+    # 'cuboids',              # type: List[Cuboid]
     'world_to_ego',         # type: Transform; the pose of the robot in the
                             #   global frame (typicaly the city frame)
   )
 
   def __init__(self, **kwargs):
     DEFAULTS = {
+      'uri': URI(),
       'camera_images': [],
-      'clouds': [],
-      'cuboids': [],
+      # 'clouds': [],
+      # 'cuboids': [],
       'world_to_ego': Transform(),
     }
     _set_defaults(self, kwargs, DEFAULTS)
@@ -508,7 +513,7 @@ class Frame(object):
     import pprint
     table = [
       ['URI', str(self.uri)],
-      ['Num Labels', len(self.cuboids)],
+      # ['Num Labels', len(self.cuboids)],
       ['Ego Pose', pprint.pformat(self.world_to_ego)]
     ]
     html = tabulate.tabulate(table, tablefmt='html')
@@ -516,9 +521,9 @@ class Frame(object):
     for c in self.camera_images:
       table += [[c.to_html()]]
     
-    table += [['<h2>Point Clouds</h2>']]
-    for c in self.clouds:
-      table += [[c.to_html()]]
+    # table += [['<h2>Point Clouds</h2>']]
+    # for c in self.clouds:
+    #   table += [[c.to_html()]]
 
     html += tabulate.tabulate(table, tablefmt='html')
     return html
@@ -541,7 +546,7 @@ class FrameTableBase(object):
   def setup(cls, spark=None):
     if util.missing_or_empty(cls.table_root()):
       with Spark.sess(spark) as spark:
-        df = cls.create_frame_df(spark)
+        df = cls._create_frame_df(spark)
         df.write.parquet(
           cls.table_root(),
           partitionBy=URI.PARTITION_KEYS,
@@ -554,11 +559,37 @@ class FrameTableBase(object):
     return df
   
   @classmethod
-  def create_frame_rdd(cls, spark):
+  def as_frame_rdd(cls, spark):
+    df = cls.as_df(spark)
+    return df.rdd.map(RowAdapter.from_row)
+
+  @classmethod
+  def _create_frame_rdd(cls, spark):
     """Subclasses should create and return a pyspark RDD containing `Frame`
     instances."""
     return spark.parallelize([Frame()])
 
+  @classmethod
+  def _create_frame_df(cls, spark):
+    frame_rdd = cls._create_frame_rdd(spark)
+    # def add_id(f):
+    #   f.uri = str(f.uri)
+    #   return f
+    # frame_rdd = frame_rdd.map(stringify_uri)
+    
+    # frame_row_rdd = frame_rdd.map(RowAdapter.to_row)
+    def to_row(f):
+      row = RowAdapter.to_row(f)
+      row = row.asDict()
+      row['id'] = str(f.uri)
+      row.update(
+        (k, getattr(f.uri, k))
+        for k in URI.PARTITION_KEYS)
+      from pyspark.sql import Row
+      return Row(**row)
+    frame_row_rdd = frame_rdd.map(to_row)
+    
+    return spark.createDataFrame(frame_row_rdd, samplingRatio=1)
 
 
 ###
