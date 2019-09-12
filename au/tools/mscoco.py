@@ -4,8 +4,9 @@ from au.fixtures.datasets import mscoco
 
 if __name__ == '__main__':
   from au.fixtures.datasets import auargoverse as av
-  av.ImageAnnoTable.setup()
-  av.CroppedObjectImageTable.setup()
+  # av.ImageAnnoTable.setup()
+  # av.CroppedObjectImageTable.setup()
+  av.FrameTable.setup()
   # av.AnnoReports.create_reports()
 
   # # NB: We can't embed this into the mscoco module due to a bug in

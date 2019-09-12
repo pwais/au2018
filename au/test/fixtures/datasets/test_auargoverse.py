@@ -311,9 +311,9 @@ class TestArgoverseImageTable(unittest.TestCase):
 
         @classmethod
         def _create_frame_uri_rdd(cls, spark, splits=None):
-          uri_rdd = spark.sparkContext.parallelize(
-                                  TEST_FIXTURE_URIS_NEW,
-                                  numSlices=len(TEST_FIXTURE_URIS_NEW))
+          from au.fixtures.datasets.av import URI
+          uris = [URI.from_str(s) for s in TEST_FIXTURE_URIS_NEW]
+          uri_rdd = spark.sparkContext.parallelize(uris, numSlices=len(uris))
           return uri_rdd
       
       TestFrameTable.setup(spark)

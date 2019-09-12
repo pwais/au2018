@@ -1355,8 +1355,22 @@ class FrameTable(av.FrameTableBase):
   MOTION_CORRECTED_POINTS = True
 
   @classmethod
+  def table_root(cls):
+    return '/outer_root/media/seagates-ext4/au_datas/frame_table'
+
+  @classmethod
   def _create_frame_rdd(cls, spark):
     uri_rdd = cls._create_frame_uri_rdd(spark)
+
+    # We want each pyspark worker to focus on a single Argoverse log
+    # (or segment_id) in order to reduce the total number of log readers
+    # instantiated.  Below, we repartition `uri_rdd` by segment_id, and
+    # then 100 partitions per segment, so that workers are more likely to
+    # work on one (or a small number) of logs.
+    uri_rdd = uri_rdd.map(lambda x: (x, x)).partitionBy(
+                100, lambda uri: util.stable_hash(uri.segment_id)).map(
+                  lambda xx: xx[0])
+
     frame_rdd = uri_rdd.map(cls.create_frame)
     return frame_rdd
 
@@ -1377,8 +1391,7 @@ class FrameTable(av.FrameTableBase):
     util.log.info("... reading from %s logs ..." % len(log_uris))
     log_uri_rdd = spark.sparkContext.parallelize(
                             log_uris, numSlices=len(log_uris))
-    uri_rdd = log_uri_rdd.flatMap(cls.FIXTURES.get_image_frame_uris)
-    uri_rdd = uri_rdd.partitionBy(100, lambda uri: uri.segment_id)
+    uri_rdd = log_uri_rdd.flatMap(cls.FIXTURES.get_image_frame_uris).cache()
     util.log.info("... read %s URIs ..." % uri_rdd.count())
     return uri_rdd
 
