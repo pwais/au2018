@@ -1364,14 +1364,14 @@ class FrameTable(av.FrameTableBase):
 
     # We want each pyspark worker to focus on a single Argoverse log
     # (or segment_id) in order to reduce the total number of log readers
-    # instantiated.  Below, we repartition `uri_rdd` by segment_id, and
-    # then 100 partitions per segment, so that workers are more likely to
-    # work on one (or a small number) of logs.
-    uri_rdd = uri_rdd.map(lambda x: (x, x)).partitionBy(
-                100, lambda uri: util.stable_hash(uri.segment_id)).map(
-                  lambda xx: xx[0])
+    # instantiated.  Below, we repartition `uri_rdd` by segment_id so that
+    # workers are more likely to work on one (or a small number) of logs.
+    seg_uri_rdd = uri_rdd.map(lambda uri: (uri.segment_id, uri))
+    seg_uri_rdd = seg_uri_rdd.partitionBy(1000)
+      # Implicily `k` of `RDD[Tuple[k, v]]` is fed into the hash partitioner
+    repart_uri_rdd = seg_uri_rdd.map(lambda seg_uri: seg_uri[-1])
 
-    frame_rdd = uri_rdd.map(cls.create_frame)
+    frame_rdd = repart_uri_rdd.map(cls.create_frame)
     return frame_rdd
 
   ## Support
@@ -1403,15 +1403,20 @@ class FrameTable(av.FrameTableBase):
     f.camera_images = cls._get_camera_images(uri)
     # f.clouds = cls._get_clouds(uri)
     # f.cuboids = cls._get_cuboids(uri)
+    print(f.uri) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     return f
 
   @classmethod
   def _get_ego_pose(cls, uri):
     loader = cls.FIXTURES.get_loader(uri)
-    city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
-    return av.Transform(
-            rotation=city_to_ego_se3.rotation,
-            translation=city_to_ego_se3.translation)
+    try:
+      city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
+      return av.Transform(
+              rotation=city_to_ego_se3.rotation,
+              translation=city_to_ego_se3.translation)
+    except MissingPose:
+      return av.Transform()
+    # TODO weed out these uris ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
   @classmethod
   def _get_camera_images(cls, uri):
