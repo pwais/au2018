@@ -788,6 +788,7 @@ def spark_df_to_tf_dataset(
       shard_col,
       spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
       tf_element_types, # E.g. [tf.int64]
+      tf_output_shapes=None,
       non_deterministic_element_order=True,
       num_reader_threads=-1,
       logging_name='spark_tf_dataset'):
@@ -811,6 +812,10 @@ def spark_df_to_tf_dataset(
       tf_element_types (tuple):
         The types of the elements that `spark_row_to_tf_element` returns;
         e.g. (tf.float32, tf.string).
+      tf_output_shapes (tuple):
+        Optionally specify the shape of the output of `spark_row_to_tf_element`;
+        e.g. (tf.TensorShape([]), tf.TensorShape([None])) (where the former
+        return element is a single scalar and the latter is a list)
       non_deterministic_element_order (bool):
         Allow the resulting tf.data.Dataset to have elements in
         non-deterministic order for speed gains.
@@ -864,11 +869,11 @@ def spark_df_to_tf_dataset(
         if isinstance(pid, np.generic):
           pid = pid.item()
 
-        part_df = df.filter(df['shard'] == pid)
+        part_df = df.filter(df[shard_col] == pid)
         # part_df = df.filter('part == %s' % pid)
           # Careful! This can be a linear scan :(
-        rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()
-        util.log.info("Reading partition %s " % pid)#had %s rows" % (pid, len(rows)))
+        rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()
+        util.log.info("Reading partition %s " % pid)
         t = util.ThruputObserver(name='Partition %s' % pid, log_on_del=True)
         t.start_block()
         for row in rows:
@@ -898,7 +903,8 @@ def spark_df_to_tf_dataset(
          tf.data.Dataset.from_generator(
            PartitionToRows(), 
            args=(pid_t,),
-           output_types=tf_element_types),
+           output_types=tf_element_types,
+           output_shapes=tf_output_shapes),
        cycle_length=num_reader_threads,
        num_parallel_calls=num_reader_threads)
     #ds = pid_ds.apply(

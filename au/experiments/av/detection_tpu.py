@@ -99,6 +99,7 @@ def main():
   spark = Spark.getOrCreate()
   df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/frame_table')
 
+
   # frames = [avse.FrameTable.create_frame(uri) for uri in uris]
   # print('loaded %s frames' % len(frames))
 

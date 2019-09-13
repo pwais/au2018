@@ -703,19 +703,32 @@ def frame_df_to_tf_example_ds(frame_df, label_map_dict):
 
   SHARD_COL = 'segment_id'
 
-  def row_to_tf_examples(row):
-    frame = RowAdapter.from_row(row)
-    return [
-      camera_image_to_tf_example(
-                        frame.uri,
-                        ci,
-                        label_map_dict).SerializeToString()
-      for ci in frame.camera_images
-    ]
+  class RowToTFExamples(object):
+    def __init__(self, label_map_dict):
+      self.label_map_dict = label_map_dict
+    def __call__(self, row):
+      frame = RowAdapter.from_row(row)
+      ret = [
+        camera_image_to_tf_example(
+                          frame.uri,
+                          ci,
+                          self.label_map_dict).SerializeToString()
+        for ci in frame.camera_images
+      ]
+      return (ret[0],) # NB: we must tuple-ize for Tensorflow
+      # return (camera_image_to_tf_example(
+      #                     frame.uri,
+      #                     frame.camera_images[0],
+      #                     self.label_map_dict).SerializeToString()[:100],)
   
   import tensorflow as tf
-  ds = spark_df_to_tf_dataset(frame_df, SHARD_COL, row_to_tf_examples, [tf.string])
-  ds = ds.apply(tf.data.experimental.unbatch())
+  ds = spark_df_to_tf_dataset(
+          frame_df,
+          SHARD_COL,
+          RowToTFExamples(label_map_dict),
+          (tf.string,),
+          tf_output_shapes=(tf.TensorShape([]),))
+  # ds = ds.apply(tf.data.experimental.unbatch())
   return ds
 
 
