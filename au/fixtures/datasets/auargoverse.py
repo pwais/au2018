@@ -1358,7 +1358,7 @@ class FrameTable(av.FrameTableBase):
   MOTION_CORRECTED_POINTS = True
   FILTER_MISSING_POSE = True
 
-  SETUP_URIS_PER_CHUNK = 1000
+  SETUP_URIS_PER_CHUNK = 200
 
   @classmethod
   def table_root(cls):

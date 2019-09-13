@@ -1136,7 +1136,7 @@ def main_tpu():
     tdf = df.filter(df.split == 'train')
     def train_input_fn(params=None):
       with tf.device('/job:coordinator/task:0'):
-        train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int32), logging_name='train')
+        train_ds = spark_df_to_tf_dataset(tdf, 'shard', to_example, (tf.uint8, tf.int32), logging_name='train')
         
         def to_bfloat(images, labels):
           images = tf.cast(images, tf.bfloat16)
@@ -1296,7 +1296,7 @@ def main_tpu():
 
     edf = df.filter(df.split == 'val')
     def eval_input_fn(params=None):
-      eval_ds = spark_df_to_tf_dataset(edf, to_example, (tf.float32, tf.int32), logging_name='test')
+      eval_ds = spark_df_to_tf_dataset(edf, 'shard', to_example, (tf.float32, tf.int32), logging_name='test')
       
       eval_ds = eval_ds.batch(BATCH_SIZE)
       eval_ds = set_shapes(eval_ds)
@@ -1429,7 +1429,7 @@ def main():
     BATCH_SIZE = 20
     tdf = df.filter(df.split == 'train')
     def train_input_fn():
-      train_ds = spark_df_to_tf_dataset(tdf, to_example, (tf.uint8, tf.int64), logging_name='train')
+      train_ds = spark_df_to_tf_dataset(tdf, 'shard', to_example, (tf.uint8, tf.int64), logging_name='train')
       
       # train_ds = train_ds.cache()
       train_ds = train_ds.repeat(10)
@@ -1445,7 +1445,7 @@ def main():
 
     edf = df.filter(df.split == 'val')#spark.createDataFrame(df.filter(df.split == 'val').take(3000))
     def eval_input_fn():
-      eval_ds = spark_df_to_tf_dataset(edf, to_example, (tf.uint8, tf.int64), logging_name='test')
+      eval_ds = spark_df_to_tf_dataset(edf, 'shard', to_example, (tf.uint8, tf.int64), logging_name='test')
       eval_ds = eval_ds.batch(BATCH_SIZE)
 
       eval_ds = eval_ds.take(100)

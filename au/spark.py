@@ -785,6 +785,7 @@ def get_balanced_sample(spark_df, col, n_per_category=None, seed=1337):
 
 def spark_df_to_tf_dataset(
       spark_df,
+      shard_col,
       spark_row_to_tf_element, # E.g. lambda r: (np.array[0],),
       tf_element_types, # E.g. [tf.int64]
       non_deterministic_element_order=True,
@@ -800,7 +801,9 @@ def spark_df_to_tf_dataset(
     do the read scheduling).
 
     Args:
-      spark_df (pyspark.sql.DataFrame): Read from this Dataframe
+      spark_df (pyspark.sql.DataFrame): Read from this Dataframe.
+      shard_col (str): Implicly shard the dataset using this column; read
+        one shard per reader thread at a time to conserve memory.
       spark_row_to_tf_element (func): 
         Use this function to map each pyspark.sql.Row in `spark_df`
         to a tuple that represents a single element of the
@@ -822,25 +825,11 @@ def spark_df_to_tf_dataset(
         row in `spark_df`.
     """
 
-    ## Somewhat slower
-    #import tensorflow as tf
-    #tuple_rdd = spark_df.rdd.map(spark_row_to_tf_element)
-    #tuple_rdd = tuple_rdd.persist(pyspark.StorageLevel.MEMORY_AND_DISK)
-    #ds = tf.data.Dataset.from_generator(
-    #          tuple_rdd.toLocalIterator, tf_element_types)
-    #return ds
-
-
-
-
-
-
-
 
     if num_reader_threads < 1:
       import multiprocessing
       num_reader_threads = multiprocessing.cpu_count()
-    num_reader_threads = 8
+    num_reader_threads = 8 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     df = spark_df
 
     # Each Tensorflow reader thread will read a single Spark partition
@@ -853,7 +842,7 @@ def spark_df_to_tf_dataset(
     # df = spark_df
     # pids = df.select('_spark_part_id').distinct().rdd.flatMap(lambda x: x).collect()
     print('getting shards')
-    pids = df.select('shard').distinct().rdd.flatMap(lambda x: x).collect()
+    pids = df.select(shard_col).distinct().rdd.flatMap(lambda x: x).collect()
     print(len(pids), pids)
 
 
@@ -871,7 +860,11 @@ def spark_df_to_tf_dataset(
         self.lock = threading.Lock()
       
       def __call__(self, pid):
-        part_df = df.filter(df['shard'] == int(pid))
+        # Convert pesky numpy types
+        if isinstance(pid, np.generic):
+          pid = pid.item()
+
+        part_df = df.filter(df['shard'] == pid)
         # part_df = df.filter('part == %s' % pid)
           # Careful! This can be a linear scan :(
         rows = part_df.rdd.repartition(1000).map(spark_row_to_tf_element).toLocalIterator()#persist(pyspark.StorageLevel.MEMORY_AND_DISK).toLocalIterator()#collect()

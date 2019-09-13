@@ -495,8 +495,7 @@ class Frame(object):
   __slots__ = (
     'uri',                  # type: URI or str
     'camera_images',        # type: List[CameraImage]
-    'clouds',               # type: List[PointCloud]
-    'cuboids',              # type: List[Cuboid]
+    # 'clouds',               # type: List[PointCloud]
     'world_to_ego',         # type: Transform; the pose of the robot in the
                             #   global frame (typicaly the city frame)
   )
@@ -505,8 +504,7 @@ class Frame(object):
     DEFAULTS = {
       'uri': URI(),
       'camera_images': [],
-      'clouds': [],
-      'cuboids': [],
+      # 'clouds': [],
       'world_to_ego': Transform(),
     }
     _set_defaults(self, kwargs, DEFAULTS)
@@ -607,10 +605,10 @@ class FrameTableBase(object):
     # print('frame_rdd size', frame_rdd.count())
     pkey_row_rdd = frame_rdd.map(to_pkey_row)
     # pkey_row_rdd = pkey_row_rdd.partitionBy(1000)
-    # pkey_row_rdd = pkey_row_rdd.persist(StorageLevel.DISK_ONLY)
+    pkey_row_rdd = pkey_row_rdd.persist(StorageLevel.DISK_ONLY)
     row_rdd = pkey_row_rdd#.map(lambda pkey_row: pkey_row[-1])
     
-    df = spark.createDataFrame(row_rdd)#, samplingRatio=1)
+    df = spark.createDataFrame(row_rdd, samplingRatio=1)
     return df
 
 
@@ -699,3 +697,26 @@ def camera_image_to_tf_example(
   import tensorflow as tf
   example = tf.train.Example(features=tf.train.Features(feature=feature_dict))
   return example
+
+def frame_df_to_tf_example_ds(frame_df, label_map_dict):
+  from au.spark import spark_df_to_tf_dataset
+
+  SHARD_COL = 'segment_id'
+
+  def row_to_tf_examples(row):
+    frame = RowAdapter.from_row(row)
+    return [
+      camera_image_to_tf_example(
+                        frame.uri,
+                        ci,
+                        label_map_dict).SerializeToString()
+      for ci in frame.camera_images
+    ]
+  
+  import tensorflow as tf
+  ds = spark_df_to_tf_dataset(frame_df, SHARD_COL, row_to_tf_examples, [tf.string])
+  ds = ds.apply(tf.data.experimental.unbatch())
+  return ds
+
+
+  

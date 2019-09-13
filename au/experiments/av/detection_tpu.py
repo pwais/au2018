@@ -7,13 +7,19 @@ sys.path = [
   '/opt/au/external/tensorflow_tpu/models',
   '/opt/au/external/tensorflow_tpu/models/official/detection'] + sys.path
 
+from au.fixtures.datasets.auargoverse import AV_OBJ_CLASS_TO_COARSE
+AV_OBJ_CLASS_NAME_TO_ID = dict(
+  (cname, i + 1)
+  for i, cname in enumerate(sorted(AV_OBJ_CLASS_TO_COARSE.keys())))
+AV_OBJ_CLASS_NAME_TO_ID['background'] = 0
+
 class TFExampleDSInputFn(object):
   """Based upon TPU object detection InputFn:
   https://github.com/tensorflow/tpu/blob/246a41ef611b3129b6468e7ab778e6837dbfc785/models/official/detection/dataloader/input_reader.py#L23
   """
 
-  def __init__(self, tf_example_ds, params, mode):
-    self._tf_example_ds = tf_example_ds
+  def __init__(self, frame_df, params, mode):
+    self._frame_df = frame_df
     self._mode = mode
     self._is_training = (mode == 'train')
 
@@ -25,7 +31,11 @@ class TFExampleDSInputFn(object):
   def __call__(self, params):
     batch_size = params['batch_size']
     # dataset = self._tf_example_ds
-    dataset = tf.data.Dataset.from_tensor_slices(tf.convert_to_tensor(self._tf_example_ds))
+    # dataset = tf.data.Dataset.from_tensor_slices(tf.convert_to_tensor(self._tf_example_ds))
+    
+    from au.fixtures.datasets import av
+    dataset = av.frame_df_to_tf_example_ds(
+                  self._frame_df, AV_OBJ_CLASS_NAME_TO_ID)
 
     if self._is_training:
       dataset = dataset.repeat()
@@ -84,47 +94,25 @@ retinanet_parser:
 
 def main():
 
-  from au.fixtures.datasets import auargoverse as avse
-  uris = (
-    'avframe://segment_id=tracking_train2.tar.gz|5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936',
-    'avframe://segment_id=tracking_train1.tar.gz|f9fa3960-537f-3151-a1a3-37a9c0d6d7f7&split=train&camera=ring_rear_right&timestamp=315968463537902224',
-    'avframe://segment_id=tracking_train1.tar.gz|1d676737-4110-3f7e-bec0-0c90f74c248f&split=train&camera=ring_front_left&timestamp=315984810796685856',
-    'avframe://segment_id=tracking_train2.tar.gz|3138907e-1f8a-362f-8f3d-773f795a0d01&split=train&camera=stereo_front_left&timestamp=315968320382681104',
-    'avframe://segment_id=tracking_train1.tar.gz|70d2aea5-dbeb-333d-b21e-76a7f2f1ba1c&split=train&camera=stereo_front_left&timestamp=315976372531658128',
+  from au.spark import Spark
+  from au.spark import spark_df_to_tf_dataset
+  spark = Spark.getOrCreate()
+  df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/frame_table')
 
-    # dupes
-    'avframe://segment_id=tracking_train2.tar.gz|5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936',
-    'avframe://segment_id=tracking_train1.tar.gz|f9fa3960-537f-3151-a1a3-37a9c0d6d7f7&split=train&camera=ring_rear_right&timestamp=315968463537902224',
-    'avframe://segment_id=tracking_train1.tar.gz|1d676737-4110-3f7e-bec0-0c90f74c248f&split=train&camera=ring_front_left&timestamp=315984810796685856',
-    'avframe://segment_id=tracking_train2.tar.gz|3138907e-1f8a-362f-8f3d-773f795a0d01&split=train&camera=stereo_front_left&timestamp=315968320382681104',
-    'avframe://segment_id=tracking_train1.tar.gz|70d2aea5-dbeb-333d-b21e-76a7f2f1ba1c&split=train&camera=stereo_front_left&timestamp=315976372531658128',
-    'avframe://segment_id=tracking_train2.tar.gz|5c251c22-11b2-3278-835c-0cf3cdee3f44&split=train&camera=ring_front_center&timestamp=315967787401035936',
-    'avframe://segment_id=tracking_train1.tar.gz|f9fa3960-537f-3151-a1a3-37a9c0d6d7f7&split=train&camera=ring_rear_right&timestamp=315968463537902224',
-    'avframe://segment_id=tracking_train1.tar.gz|1d676737-4110-3f7e-bec0-0c90f74c248f&split=train&camera=ring_front_left&timestamp=315984810796685856',
-    'avframe://segment_id=tracking_train2.tar.gz|3138907e-1f8a-362f-8f3d-773f795a0d01&split=train&camera=stereo_front_left&timestamp=315968320382681104',
-    'avframe://segment_id=tracking_train1.tar.gz|70d2aea5-dbeb-333d-b21e-76a7f2f1ba1c&split=train&camera=stereo_front_left&timestamp=315976372531658128',
-  )
-  # uris = tuple()
-  frames = [avse.FrameTable.create_frame(uri) for uri in uris]
-  print('loaded %s frames' % len(frames))
-  
-  from au.fixtures.datasets.auargoverse import AV_OBJ_CLASS_TO_COARSE
-  AV_OBJ_CLASS_NAME_TO_ID = dict(
-    (cname, i + 1)
-    for i, cname in enumerate(sorted(AV_OBJ_CLASS_TO_COARSE.keys())))
-  AV_OBJ_CLASS_NAME_TO_ID['background'] = 0
+  # frames = [avse.FrameTable.create_frame(uri) for uri in uris]
+  # print('loaded %s frames' % len(frames))
 
-  from au.fixtures.datasets import av
-  tf_examples = [
-    av.camera_image_to_tf_example(
-      frame.uri,
-      frame.camera_images[0],
-      AV_OBJ_CLASS_NAME_TO_ID).SerializeToString()
-    for frame in frames
-  ]
+  # from au.fixtures.datasets import av
+  # tf_examples = [
+  #   av.camera_image_to_tf_example(
+  #     frame.uri,
+  #     frame.camera_images[0],
+  #     AV_OBJ_CLASS_NAME_TO_ID).SerializeToString()
+  #   for frame in frames
+  # ]
 
-  ds = tf.data.Dataset.from_tensor_slices(tf.convert_to_tensor(tf_examples))
-  ds = tf_examples
+  # ds = tf.data.Dataset.from_tensor_slices(tf.convert_to_tensor(tf_examples))
+  # ds = tf_examples
   
 
 
@@ -192,9 +180,9 @@ def main():
 
   # Prepares input functions for train and eval.
   train_input_fn = TFExampleDSInputFn(
-      ds, params, mode=ModeKeys.TRAIN)
+      df, params, mode=ModeKeys.TRAIN)
   eval_input_fn = TFExampleDSInputFn(
-      ds, params, mode=ModeKeys.PREDICT_WITH_GT)
+      df, params, mode=ModeKeys.PREDICT_WITH_GT)
 
   # Runs the model.
   save_config(params, params.model_dir)
