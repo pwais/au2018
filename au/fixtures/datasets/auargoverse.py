@@ -1358,7 +1358,7 @@ class FrameTable(av.FrameTableBase):
   MOTION_CORRECTED_POINTS = True
   FILTER_MISSING_POSE = True
 
-  SETUP_URIS_PER_CHUNK = 200
+  SETUP_URIS_PER_CHUNK = 2000
 
   @classmethod
   def table_root(cls):
@@ -1375,7 +1375,20 @@ class FrameTable(av.FrameTableBase):
       #                       cls.create_frame,
       #                       name='create_frame',
       #                       log_on_del=True)
-      frame_rdd = uri_rdd.map(cls.create_frame)
+      # frame_rdd = uri_rdd.map(cls.create_frame)
+
+      def iter_frames(uris):
+        # FIXME spark schema ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        for uri in uris:
+          f = cls.create_frame(uri)
+          if sum(len(ci.bboxes) for ci in f.camera_images) == 0:
+            print('has no boxes', f.uri)
+            continue
+          yield f
+      frame_rdd = uri_rdd.mapPartitions(iter_frames)
+      # if frame_rdd.isEmpty():
+      #   continue
+
       frame_rdds.append(frame_rdd)
     return frame_rdds
 

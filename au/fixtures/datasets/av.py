@@ -88,19 +88,26 @@ class URI(object):
                     
 
     # Object-level selection
-    'track_id',     # A string identifier of a specific track    
+    'track_id',     # A string identifier of a specific track 
+
+    'shard',
   )
 
   # Partition all frames by Drive
-  PARTITION_KEYS = ('dataset', 'split', 'segment_id')
+  PARTITION_KEYS = ('dataset', 'split', 'segment_id', 'shard')
 
   PREFIX = 'avframe://'
 
   def __init__(self, **kwargs):
     for k in self.__slots__:
       setattr(self, k, kwargs.get(k, ''))
-    if self.timestamp is not '':
+    if self.timestamp is '':
+      self.timestamp = 0
+    else:
       self.timestamp = int(self.timestamp)
+    
+    # FIXME ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    self.shard = str(self.segment_id + '|' + str(int(self.timestamp * 1e-9)))
   
   def to_str(self):
     path = '&'.join(
