@@ -1,6 +1,219 @@
 """
 
 ctpu up --zone us-central1-a --tpu-size v3-8 --machine-type n1-standard-4
+ctpu --zone us-central1-a --project academic-actor-248218 list
+
+indefinite hang:
+
+2019-09-15 11:38:32.466701: I tensorflow/core/platform/cpu_feature_guard.cc:142] Your CPU supports instructions that this TensorFlow binary was not compiled to use: AVX2 FMA
+2019-09-15 11:38:32.475523: I tensorflow/core/platform/profile_utils/cpu_utils.cc:94] CPU Frequency: 2300000000 Hz
+2019-09-15 11:38:32.476009: I tensorflow/compiler/xla/service/service.cc:168] XLA service 0x4ece150 executing computations on platform Host. Devices:
+2019-09-15 11:38:32.476045: I tensorflow/compiler/xla/service/service.cc:175]   StreamExecutor device (0): <undefined>, <undefined>
+2019-09-15 11:38:32.478664: I tensorflow/core/distributed_runtime/rpc/grpc_channel.cc:250] Initialize GrpcChannelCache for job local -> {0 -> localhost:34375}
+2019-09-15 11:38:32.480175: I tensorflow/core/distributed_runtime/rpc/grpc_server_lib.cc:365] Started server with target: grpc://localhost:34375
+From /opt/au/external/tensorflow_tpu/models/official/detection/executor/tpu_executor.py:55: The name tf.Session is deprecated. Please use tf.compat.v1.Session instead.
+
+^C^CTerminated
+
+
+
+
+
+30 minutes for an OOM!
+
+[Stage 267:(56 + 4) / 356][Stage 270:>  (0 + 0) / 1][Stage 272:>  (0 + 0) / 1]TPUPollingThread found TPU b'au2018-3' in state READY, and health HEALTHY.
+[Stage 267:(190 + 4) / 356][Stage 270:>  (0 + 0) / 1][Stage 272:>  (0 + 0) / 1]TPUPollingThread found TPU b'au2018-3' in state READY, and health HEALTHY.
+[Stage 267:(332 + 4) / 356][Stage 270:>  (0 + 0) / 1][Stage 272:>  (0 + 0) / 1]TPUPollingThread found TPU b'au2018-3' in state READY, and health HEALTHY.
+Error recorded from infeed: Step was cancelled by an explicit call to `Session::Close()`.
+Error recorded from training_loop: From /job:worker/replica:0/task:0:
+Compilation failure: Ran out of memory in memory space hbm. Used 17.60G of 16.00G hbm. Exceeded hbm capacity by 1.60G.
+
+Total hbm usage >= 17.60G:
+    reserved        528.00M 
+    program          17.08G 
+    arguments       unknown size 
+
+Output size unknown.
+
+Program hbm requirement 17.08G:
+    reserved          12.0K
+    global           980.0K
+    scoped            5.41M
+    HLO temp         17.08G (92.8% utilization, 0.3% fragmentation (53.61M))
+
+  Largest program allocations in hbm:
+
+  1. Size: 512.00M
+     Operator: op_type="OneHot" op_name="one_hot"
+     Shape: f32[4,128,128,9,18]{4,3,0,2,1:T(8,128)}
+     Unpadded size: 40.50M
+     Extra memory due to padding: 471.50M (12.6x expansion)
+     XLA label: %fusion.1668 = f32[4,128,128,9,18]{4,3,0,2,1:T(8,128)} fusion(s32[4,128,128,9]{3,0,2,1:T(4,128)} %copy.130), kind=kLoop, calls=%fused_computation.1304, metadata={op_type="OneHot" op_name="one_hot"}
+     Allocation type: HLO temp
+     ==========================
+
+  2. Size: 256.00M
+     Shape: bf16[4,512,512,64]{3,0,2,1:T(4,128)(2,1)}
+     Unpadded size: 128.00M
+     Extra memory due to padding: 128.00M (2.0x expansion)
+     XLA label: %fusion.20231 = (bf16[4,512,512,64]{3,0,2,1:T(4,128)(2,1)}) fusion(f32[64]{0:T(256)} %get-tuple-element.73199, f32[64]{0:T(256)} %get-tuple-element.73198, f32[64]{0:T(256)} %get-tuple-element.63973, f32[64]{0:T(256)} %get-tuple-element.67355, bf16[4,512,51...
+     Allocation type: HLO temp
+     ==========================
+
+  3. Size: 256.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_11"
+     Shape: f32[4,256,256,256]{3,0,2,1:T(4,128)}
+     Unpadded size: 256.00M
+     XLA label: %reduce-window.989 = f32[4,256,256,256]{3,0,2,1:T(4,128)} reduce-window(f32[4,256,256,256]{3,0,2,1:T(4,128)} %get-tuple-element.63433, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2010, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  4. Size: 256.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_8"
+     Shape: f32[4,256,256,256]{3,0,2,1:T(4,128)}
+     Unpadded size: 256.00M
+     XLA label: %reduce-window.979 = f32[4,256,256,256]{3,0,2,1:T(4,128)} reduce-window(f32[4,256,256,256]{3,0,2,1:T(4,128)} %get-tuple-element.63434, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.3330, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  5. Size: 256.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool"
+     Shape: f32[4,256,256,256]{3,0,2,1:T(4,128)}
+     Unpadded size: 256.00M
+     XLA label: %reduce-window.981 = f32[4,256,256,256]{3,0,2,1:T(4,128)} reduce-window(f32[4,256,256,256]{3,0,2,1:T(4,128)} %get-tuple-element.63418, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.1906, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  6. Size: 256.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_3"
+     Shape: f32[4,256,256,256]{3,0,2,1:T(4,128)}
+     Unpadded size: 256.00M
+     XLA label: %reduce-window.983 = f32[4,256,256,256]{3,0,2,1:T(4,128)} reduce-window(f32[4,256,256,256]{3,0,2,1:T(4,128)} %get-tuple-element.63417, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2890, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  7. Size: 256.00M
+     Operator: op_type="FusedBatchNormV2" op_name="resnet152/batch_normalization/FusedBatchNormV2"
+     Shape: bf16[4,512,512,64]{3,0,2,1:T(4,128)(2,1)}
+     Unpadded size: 128.00M
+     Extra memory due to padding: 128.00M (2.0x expansion)
+     XLA label: %fusion.1235 = (f32[64]{0:T(256)}, f32[64]{0:T(256)}, bf16[4,512,512,64]{3,0,2,1:T(4,128)(2,1)}) fusion(bf16[1024,1024,3,4]{3,2,1,0:T(4,128)(2,1)} %reshape.4895, bf16[7,7,3,64]{3,2,1,0:T(4,128)(2,1)} %get-tuple-element.73977), kind=kOutput, calls=%fused_co...
+     Allocation type: HLO temp
+     ==========================
+
+  8. Size: 256.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_7"
+     Shape: f32[4,256,256,256]{3,0,2,1:T(4,128)}
+     Unpadded size: 256.00M
+     XLA label: %reduce-window.986 = f32[4,256,256,256]{3,0,2,1:T(4,128)} reduce-window(f32[4,256,256,256]{3,0,2,1:T(4,128)} %get-tuple-element.63422, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.3242, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  9. Size: 256.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_4"
+     Shape: f32[4,256,256,256]{3,0,2,1:T(4,128)}
+     Unpadded size: 256.00M
+     XLA label: %reduce-window.980 = f32[4,256,256,256]{3,0,2,1:T(4,128)} reduce-window(f32[4,256,256,256]{3,0,2,1:T(4,128)} %get-tuple-element.63421, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2978, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  10. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_20"
+     Shape: f32[4,128,128,512]{3,0,2,1:T(4,128)}
+     Unpadded size: 128.00M
+     XLA label: %reduce-window.976 = f32[4,128,128,512]{3,0,2,1:T(4,128)} reduce-window(f32[4,128,128,512]{3,0,2,1:T(4,128)} %get-tuple-element.63464, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2810, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  11. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_6"
+     Shape: f32[4,256,256,64]{3,0,2,1:T(4,128)}
+     Unpadded size: 64.00M
+     Extra memory due to padding: 64.00M (2.0x expansion)
+     XLA label: %reduce-window.987 = f32[4,256,256,64]{3,0,2,1:T(4,128)} reduce-window(f32[4,256,256,64]{3,0,2,1:T(4,128)} %get-tuple-element.63431, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.3154, metadata={op_type="MaxP...
+     Allocation type: HLO temp
+     ==========================
+
+  12. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_27"
+     Shape: f32[4,128,128,512]{3,0,2,1:T(4,128)}
+     Unpadded size: 128.00M
+     XLA label: %reduce-window.1001 = f32[4,128,128,512]{3,0,2,1:T(4,128)} reduce-window(f32[4,128,128,512]{3,0,2,1:T(4,128)} %get-tuple-element.63463, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2866, metadata={op_type="M...
+     Allocation type: HLO temp
+     ==========================
+
+  13. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_24"
+     Shape: f32[4,128,128,512]{3,0,2,1:T(4,128)}
+     Unpadded size: 128.00M
+     XLA label: %reduce-window.975 = f32[4,128,128,512]{3,0,2,1:T(4,128)} reduce-window(f32[4,128,128,512]{3,0,2,1:T(4,128)} %get-tuple-element.63465, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2842, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  14. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_39"
+     Shape: f32[4,128,128,512]{3,0,2,1:T(4,128)}
+     Unpadded size: 128.00M
+     XLA label: %reduce-window.1010 = f32[4,128,128,512]{3,0,2,1:T(4,128)} reduce-window(f32[4,128,128,512]{3,0,2,1:T(4,128)} %get-tuple-element.63466, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2970, metadata={op_type="M...
+     Allocation type: HLO temp
+     ==========================
+
+  15. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_12"
+     Shape: f32[4,128,128,512]{3,0,2,1:T(4,128)}
+     Unpadded size: 128.00M
+     XLA label: %reduce-window.978 = f32[4,128,128,512]{3,0,2,1:T(4,128)} reduce-window(f32[4,128,128,512]{3,0,2,1:T(4,128)} %get-tuple-element.63499, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2098, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  16. Size: 128.00M
+     Operator: op_type="Relu" op_name="resnet152/Relu_6"
+     Shape: bf16[4,256,256,256]{3,0,2,1:T(4,128)(2,1)}
+     Unpadded size: 128.00M
+     XLA label: %fusion.1504 = bf16[4,256,256,256]{3,0,2,1:T(4,128)(2,1)} fusion(bf16[4,256,256,256]{3,0,2,1:T(4,128)(2,1)} %fusion.1503, bf16[]{:T(512)(2,1)} %multiply.40609, bf16[]{:T(512)(2,1)} %multiply.40649, f32[256]{0:T(256)} %get-tuple-element.73687, f32[256]{0:T(...
+     Allocation type: HLO temp
+     ==========================
+
+  17. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_15"
+     Shape: f32[4,128,128,512]{3,0,2,1:T(4,128)}
+     Unpadded size: 128.00M
+     XLA label: %reduce-window.992 = f32[4,128,128,512]{3,0,2,1:T(4,128)} reduce-window(f32[4,128,128,512]{3,0,2,1:T(4,128)} %get-tuple-element.63501, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2362, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  18. Size: 128.00M
+     Operator: op_type="Relu" op_name="resnet152/Relu_3"
+     Shape: bf16[4,256,256,256]{3,0,2,1:T(4,128)(2,1)}
+     Unpadded size: 128.00M
+     XLA label: %fusion.1503 = bf16[4,256,256,256]{3,0,2,1:T(4,128)(2,1)} fusion(bf16[]{:T(512)(2,1)} %multiply.40610, bf16[]{:T(512)(2,1)} %multiply.40624, f32[256]{0:T(256)} %get-tuple-element.73203, f32[256]{0:T(256)} %get-tuple-element.73202, f32[256]{0:T(256)} %rsqrt...
+     Allocation type: HLO temp
+     ==========================
+
+  19. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_23"
+     Shape: f32[4,128,128,512]{3,0,2,1:T(4,128)}
+     Unpadded size: 128.00M
+     XLA label: %reduce-window.998 = f32[4,128,128,512]{3,0,2,1:T(4,128)} reduce-window(f32[4,128,128,512]{3,0,2,1:T(4,128)} %get-tuple-element.63493, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2834, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+  20. Size: 128.00M
+     Operator: op_type="MaxPool" op_name="resnet152/MaxPool_36"
+     Shape: f32[4,128,128,512]{3,0,2,1:T(4,128)}
+     Unpadded size: 128.00M
+     XLA label: %reduce-window.972 = f32[4,128,128,512]{3,0,2,1:T(4,128)} reduce-window(f32[4,128,128,512]{3,0,2,1:T(4,128)} %get-tuple-element.63475, f32[]{:T(256)} %constant.41841), window={size=1x7x7x1 pad=0_0x3_3x3_3x0_0}, to_apply=%max_F32.2946, metadata={op_type="Ma...
+     Allocation type: HLO temp
+     ==========================
+
+
+        TPU compilation failed
+         [[node TPUReplicateMetadata (defined at /opt/au/external/tensorflow_tpu/models/official/detection/executor/tpu_executor.py:105) ]]
+Hint: If you want to see a list of allocated tensors when OOM happens, add report_tensor_allocations_upon_oom to RunOptions for current allocation info.
+
+
+
+
 
 """
 
@@ -43,18 +256,15 @@ class TFExampleDSInputFn(object):
     with tf.device('/job:coordinator/task:0'):
 
       from au.fixtures.datasets import av
+      from au.spark import Spark
+      spark = Spark.getOrCreate()
+      # df = spark.read.parquet('/opt/au/frame_table')
+      df = spark.read.parquet(self._frame_df)
       dataset = av.frame_df_to_tf_example_ds(
-                    self._frame_df, AV_OBJ_CLASS_NAME_TO_ID)
-      # dataset = dataset.cache()
+                    df, AV_OBJ_CLASS_NAME_TO_ID)
 
-      if self._is_training:
-        dataset = dataset.repeat()
-
-      # dataset = dataset.apply(
-      #     tf.data.experimental.parallel_interleave(
-      #         lambda file_name: self._dataset_fn(file_name).prefetch(1),
-      #         cycle_length=32,
-      #         sloppy=self._is_training))
+      # if self._is_training:
+      #   dataset = dataset.repeat()
 
       if self._is_training:
         dataset = dataset.shuffle(64)
@@ -155,13 +365,13 @@ CONF = """
 enable_summary: True
 
 train:
-  train_batch_size: 64
+  train_batch_size: 16
   total_steps: 90000
   gradient_clip_norm: 10
   learning_rate:
-    init_learning_rate: 0.08
-    learning_rate_levels: [0.008, 0.0008]
-    learning_rate_steps: [60000, 80000]
+    init_learning_rate: 0.0008
+    learning_rate_levels: [0.08, 0.008, 0.0008]
+    learning_rate_steps: [1000, 60000, 80000]
 
 architecture:
   multilevel_features: 'nasfpn'
@@ -197,7 +407,7 @@ nasfpn:
 retinanet_parser:
   aug_scale_min: 0.8
   aug_scale_max: 1.2
-  output_size: [1024, 1024]
+  output_size: [960, 960]
   aug_rand_hflip: True
   use_bfloat16: True
 
@@ -239,11 +449,12 @@ TPU_PARAMS = {
 
 def main():
 
-  from au.spark import Spark
-  from au.spark import spark_df_to_tf_dataset
-  spark = Spark.getOrCreate()
-  # df = spark.read.parquet('/opt/au/frame_table')
-  df = spark.read.parquet('/opt/au/frame_table_broken_shard/')
+  # from au.spark import Spark
+  # from au.spark import spark_df_to_tf_dataset
+  # spark = Spark.getOrCreate()
+  # # df = spark.read.parquet('/opt/au/frame_table')
+  # df = spark.read.parquet('/opt/au/frame_table_broken_shard/')
+  df = '/opt/au/frame_table_broken_shard/'
 
 
   # frames = [avse.FrameTable.create_frame(uri) for uri in uris]

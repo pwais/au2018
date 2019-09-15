@@ -708,7 +708,7 @@ def camera_image_to_tf_example(
 def frame_df_to_tf_example_ds(frame_df, label_map_dict):
   from au.spark import spark_df_to_tf_dataset
 
-  SHARD_COL = 'segment_id'
+  SHARD_COL = 'shard'
 
   class RowToTFExamples(object):
     def __init__(self, label_map_dict):
