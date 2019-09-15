@@ -45,7 +45,7 @@ class TFExampleDSInputFn(object):
       from au.fixtures.datasets import av
       dataset = av.frame_df_to_tf_example_ds(
                     self._frame_df, AV_OBJ_CLASS_NAME_TO_ID)
-      dataset = dataset.cache()
+      # dataset = dataset.cache()
 
       if self._is_training:
         dataset = dataset.repeat()
@@ -151,16 +151,41 @@ CONF = """
 # ---------- RetianNet + NAS-FPN ----------
 # Expected accuracy with using NAS-FPN l3-l7 and image size 640x640: 39.5
 # train batch size 64
+
+enable_summary: True
+
 train:
-  train_batch_size: 8
+  train_batch_size: 64
   total_steps: 90000
+  gradient_clip_norm: 10
   learning_rate:
-    init_learning_rate: 0.0008
+    init_learning_rate: 0.08
     learning_rate_levels: [0.008, 0.0008]
     learning_rate_steps: [60000, 80000]
 
 architecture:
   multilevel_features: 'nasfpn'
+  use_bfloat16: True
+
+anchor:
+  min_level: 3
+  max_level: 7
+  num_scales: 3
+  aspect_ratios: [0.5, 1.0, 2.0]
+  anchor_size: 4.0
+
+resnet:
+  resnet_depth: 152
+  dropblock:
+    dropblock_keep_prob: 0.9
+    dropblock_size: 7
+
+retinanet_head:
+  num_classes: {num_classes}
+retinanet_loss:
+  num_classes: {num_classes}
+postprocess:
+  num_classes: {num_classes}
 
 nasfpn:
   fpn_feat_dims: 256
@@ -172,7 +197,11 @@ nasfpn:
 retinanet_parser:
   aug_scale_min: 0.8
   aug_scale_max: 1.2
-"""
+  output_size: [1024, 1024]
+  aug_rand_hflip: True
+  use_bfloat16: True
+
+""".format(num_classes=len(AV_OBJ_CLASS_NAME_TO_ID))
 
 DEFAULT_PARAMS = {
     'platform': {
@@ -200,7 +229,7 @@ TPU_PARAMS = {
     },
     'tpu_job_name': 'worker',
     'use_tpu': True,
-    'iterations_per_loop': 100,
+    'iterations_per_loop': 50,
     'model_dir': 'gs://au2018-3/tpu_test_detection/test_%s' % time.time(),
       #'/tmp/tpu_tast_detection',
     'train': {
@@ -213,7 +242,8 @@ def main():
   from au.spark import Spark
   from au.spark import spark_df_to_tf_dataset
   spark = Spark.getOrCreate()
-  df = spark.read.parquet('/opt/au/frame_table')
+  # df = spark.read.parquet('/opt/au/frame_table')
+  df = spark.read.parquet('/opt/au/frame_table_broken_shard/')
 
 
   # frames = [avse.FrameTable.create_frame(uri) for uri in uris]
@@ -248,7 +278,7 @@ def main():
       params_dict.save_params_dict_to_yaml(
           params, os.path.join(model_dir, 'params.yaml'))
 
-  tf.logging.set_verbosity(tf.logging.INFO)
+  tf.logging.set_verbosity(tf.logging.DEBUG)
 
   params = params_dict.ParamsDict(
       retinanet_config.RETINANET_CFG, retinanet_config.RETINANET_RESTRICTIONS)
@@ -298,9 +328,10 @@ def main():
     current_cycle_last_train_step = ((cycle + 1)
                                       * params.eval.num_steps_per_eval)
     executor.train(train_input_fn, current_cycle_last_train_step)
-    executor.evaluate(
-        eval_input_fn,
-        params.eval.eval_samples // params.predict.predict_batch_size)
+    print('want to eval but eval segfaults')
+    # executor.evaluate(
+    #     eval_input_fn,
+    #     params.eval.eval_samples // params.predict.predict_batch_size)
 
 if __name__ == '__main__':
   main()
