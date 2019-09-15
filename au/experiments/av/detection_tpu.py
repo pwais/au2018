@@ -45,6 +45,7 @@ class TFExampleDSInputFn(object):
       from au.fixtures.datasets import av
       dataset = av.frame_df_to_tf_example_ds(
                     self._frame_df, AV_OBJ_CLASS_NAME_TO_ID)
+      dataset = dataset.cache()
 
       if self._is_training:
         dataset = dataset.repeat()
@@ -58,19 +59,19 @@ class TFExampleDSInputFn(object):
       if self._is_training:
         dataset = dataset.shuffle(64)
 
-      # Parses the fetched records to input tensors for model function.
-      dataset = dataset.map(self._parser_fn, num_parallel_calls=64)
+      # # Parses the fetched records to input tensors for model function.
+      # dataset = dataset.map(self._parser_fn, num_parallel_calls=64)
       dataset = dataset.prefetch(tf.contrib.data.AUTOTUNE)
-      dataset = dataset.batch(batch_size, drop_remainder=True)
+      # dataset = dataset.batch(batch_size, drop_remainder=True)
 
-      # Transpose the input images from [N,H,W,C] to [H,W,C,N] since reshape on
-      # TPU is expensive.
-      if self._transpose_input and self._is_training:
+      # # Transpose the input images from [N,H,W,C] to [H,W,C,N] since reshape on
+      # # TPU is expensive.
+      # if self._transpose_input and self._is_training:
 
-        def _transpose_images(images, labels):
-          return tf.transpose(images, [1, 2, 3, 0]), labels
+      #   def _transpose_images(images, labels):
+      #     return tf.transpose(images, [1, 2, 3, 0]), labels
 
-        dataset = dataset.map(_transpose_images, num_parallel_calls=64)
+      #   dataset = dataset.map(_transpose_images, num_parallel_calls=64)
 
 
       source_dataset = dataset
@@ -123,7 +124,23 @@ class TFExampleDSInputFn(object):
       # Undo the batching used during the transfer.
       # output_dataset = output_dataset.apply(batching.unbatch()).prefetch(1)
       
-      output_dataset = set_shapes(output_dataset)
+      # output_dataset = set_shapes(output_dataset)
+
+
+      # Parses the fetched records to input tensors for model function.
+      output_dataset = output_dataset.map(self._parser_fn, num_parallel_calls=64)
+      output_dataset = output_dataset.prefetch(tf.contrib.data.AUTOTUNE)
+      output_dataset = output_dataset.batch(batch_size, drop_remainder=True)
+
+      # Transpose the input images from [N,H,W,C] to [H,W,C,N] since reshape on
+      # TPU is expensive.
+      if self._transpose_input and self._is_training:
+
+        def _transpose_images(images, labels):
+          return tf.transpose(images, [1, 2, 3, 0]), labels
+
+        output_dataset = output_dataset.map(_transpose_images, num_parallel_calls=64)
+
 
     return output_dataset
 
@@ -135,10 +152,10 @@ CONF = """
 # Expected accuracy with using NAS-FPN l3-l7 and image size 640x640: 39.5
 # train batch size 64
 train:
-  train_batch_size: 64
+  train_batch_size: 8
   total_steps: 90000
   learning_rate:
-    init_learning_rate: 0.08
+    init_learning_rate: 0.0008
     learning_rate_levels: [0.008, 0.0008]
     learning_rate_steps: [60000, 80000]
 
@@ -176,12 +193,14 @@ import time
 TPU_PARAMS = {
     'platform': {
       'eval_master': '',
-      'tpu': 'au2018',
+      'tpu': 'au2018-3',
       'tpu_zone': 'us-central1-a',
       'gcp_project': 'academic-actor-248218',
+      'coordinator_name': 'coordinator',
     },
     'tpu_job_name': 'worker',
     'use_tpu': True,
+    'iterations_per_loop': 100,
     'model_dir': 'gs://au2018-3/tpu_test_detection/test_%s' % time.time(),
       #'/tmp/tpu_tast_detection',
     'train': {
@@ -194,7 +213,7 @@ def main():
   from au.spark import Spark
   from au.spark import spark_df_to_tf_dataset
   spark = Spark.getOrCreate()
-  df = spark.read.parquet('/outer_root/media/seagates-ext4/au_datas/frame_table')
+  df = spark.read.parquet('/opt/au/frame_table')
 
 
   # frames = [avse.FrameTable.create_frame(uri) for uri in uris]
@@ -213,7 +232,6 @@ def main():
   # ds = tf_examples
   
 
-
   # From tensorflow/tpu
   from configs import retinanet_config
   from dataloader import input_reader
@@ -229,6 +247,8 @@ def main():
         tf.gfile.MakeDirs(model_dir)
       params_dict.save_params_dict_to_yaml(
           params, os.path.join(model_dir, 'params.yaml'))
+
+  tf.logging.set_verbosity(tf.logging.INFO)
 
   params = params_dict.ParamsDict(
       retinanet_config.RETINANET_CFG, retinanet_config.RETINANET_RESTRICTIONS)

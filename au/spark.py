@@ -651,7 +651,8 @@ class RowAdapter(object):
 
         if hasattr(obj, '__slots__'):
           for k in obj.__slots__:
-            setattr(obj, k, cls.from_row(row[k]))
+            if k in row:
+              setattr(obj, k, cls.from_row(row[k]))
         elif hasattr(obj, '__dict__'):
           for k, v in row.asDict().items():
             if k == '__pyclass__':
