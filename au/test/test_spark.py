@@ -89,6 +89,7 @@ def test_row_adapter():
 
     adapted_rows = [RowAdapter.to_row(r) for r in rows]
     df = spark.createDataFrame(adapted_rows)
+            # Automatically samples both rows to get schema
     df.show()
     outpath = os.path.join(TEST_TEMPDIR, 'rowdata')
     df.write.parquet(outpath)
@@ -107,6 +108,28 @@ def test_row_adapter():
     def sorted_row_str(rowz):
       return pprint.pformat(sorted(rowz, key=lambda row: row['id']))
     assert sorted_row_str(rows) == sorted_row_str(decoded_rows)
+
+    ## Test Schema Deduction
+    schema = RowAdapter.to_schema(rows[0])
+    r = Row(
+      id=2,
+      np_number=None,
+      a=None,
+      b=None,
+      c=None,
+      d=None,
+      e=None,
+      f=None,
+      g=None,
+      h=None,
+    )
+    rows2 = rows + [r] # No data, can't deduce schame
+    df3 = spark.createDataFrame(
+            [RowAdapter.to_row(row) for row in rows2],
+            schema=schema,
+            verifySchema=False)
+    import pdb; pdb.set_trace()
+    df3.show()
 
 
 

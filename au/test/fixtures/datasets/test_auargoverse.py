@@ -305,7 +305,7 @@ class TestArgoverseImageTable(unittest.TestCase):
 
   @pytest.mark.slow
   def test_av_frame_table(self):
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
     with testutils.LocalSpark.sess() as spark:
       class TestFrameTable(av.FrameTable):
         FIXTURES = self.TestFixtures

@@ -354,6 +354,7 @@ class Spark(object):
       df = df_thunk()
       # df = df.persist()
       # print('df size', df.count())
+      # df.show()
       num_bytes = 0
       if compute_df_sizes:
         num_bytes = df.rdd.map(util.get_size_of_deep).sum()
@@ -600,6 +601,12 @@ class RowAdapter(object):
     return obj_cls
 
   @classmethod
+  def to_schema(cls, obj):
+    row = cls.to_row(obj)
+    import pyspark.sql.types as pst
+    return pst._infer_schema(row)
+
+  @classmethod
   def to_row(cls, obj):
     from pyspark.sql import Row
     import numpy as np
@@ -834,8 +841,9 @@ def spark_df_to_tf_dataset(
 
     if num_reader_threads < 1:
       import multiprocessing
-      num_reader_threads = multiprocessing.cpu_count()
-    num_reader_threads = 8 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      num_reader_threads = max(1, int(0.5 * multiprocessing.cpu_count()))
+        # NB: Tensorflow prefetch appears to launch twice as many threads
+        # as you ask for :P
     df = spark_df
 
     # Each Tensorflow reader thread will read a single Spark partition

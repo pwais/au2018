@@ -21,7 +21,7 @@ from au.spark import Spark
 ### Utils
 ###
 
-def _set_defaults(obj, vals, defaults, DEFAULT_FOR_MISSING=''):
+def _set_defaults(obj, vals, defaults, DEFAULT_FOR_MISSING=None):
   for k in obj.__slots__:
     v = vals.get(k, defaults.get(k, DEFAULT_FOR_MISSING))
     setattr(obj, k, v)
@@ -75,8 +75,8 @@ class URI(object):
     # Frame-level selection
     'dataset',      # E.g. 'argoverse'
     'split',        # E.g. 'train'
-    'segment_id',     # String identifier for a drive segment, e.g. a UUID
-    'timestamp',    # Some integer; either Unix or GPS time
+    'segment_id',   # String identifier for a drive segment, e.g. a UUID
+    'timestamp',    # Some integer in nanoseconds; either Unix or GPS time
 
     # Sensor-level selection
     'camera',       # Address an image from a specific camera
@@ -88,39 +88,33 @@ class URI(object):
                     
 
     # Object-level selection
-    'track_id',     # A string identifier of a specific track 
-
-    'shard',
+    'track_id',     # A string identifier of a specific track
   )
-
-  # Partition all frames by Drive
-  PARTITION_KEYS = ('dataset', 'split', 'segment_id', 'shard')
 
   PREFIX = 'avframe://'
 
+  # DEFAULTS = {
+  #   'timestamp': 0,
+  #   'camera_timestamp': 0,
+  #   'crop_x': -1, 'crop_y': -1,
+  #   'crop_w': -1, 'crop_h': -1,
+  # }
+
   def __init__(self, **kwargs):
-    for k in self.__slots__:
-      setattr(self, k, kwargs.get(k, ''))
-    if self.timestamp is '':
-      self.timestamp = 0
-    else:
+    _set_defaults(self, kwargs, {})#self.DEFAULTS)~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    if isinstance(self.timestamp, six.string_types):
       self.timestamp = int(self.timestamp)
-    
-    # FIXME ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    self.shard = str(self.segment_id + '|' + str(int(self.timestamp * 1e-9)))
+    if isinstance(self.camera_timestamp, six.string_types):
+      self.camera_timestamp = int(self.camera_timestamp)
   
   def to_str(self):
-    path = '&'.join(
-      attr + '=' + str(getattr(self, attr))
-      for attr in self.__slots__
-      if getattr(self, attr))
+    kvs = ((attr, getattr(self, attr)) for attr in self.__slots__)
+    path = '&'.join((k + '=' + str(v)) for (k, v) in kvs if v)
     return self.PREFIX + path
   
   def __str__(self):
     return self.to_str()
-
-  # def to_dict(self):
-  #   return dict((k, getattr(self, k, '')) for k in self.__slots__)~~~~~~~~~~~~~~
 
   def update(self, **kwargs):
     for k in self.__slots__:
@@ -136,7 +130,7 @@ class URI(object):
 
   def has_crop(self):
     return all(
-      getattr(self, 'crop_%s' % a) is not ''
+      getattr(self, 'crop_%s' % a)
       for a in ('x', 'y', 'w', 'h'))
 
   def get_crop_bbox(self):
@@ -149,15 +143,58 @@ class URI(object):
       return self.get_crop_bbox()
 
   @staticmethod
-  def from_str(s):
+  def from_str(s, **overrides):
     if isinstance(s, URI):
       return s
     assert s.startswith(URI.PREFIX), "Missing %s in %s" % (URI.PREFIX, s)
     toks_s = s[len(URI.PREFIX):]
     toks = toks_s.split('&')
     assert all('=' in tok for tok in toks), "Bad token in %s" % (toks,)
-    uri = URI(**dict(tok.split('=') for tok in toks))
-    return uri
+    kwargs = dict(tok.split('=') for tok in toks)
+    kwargs.update(**overrides)
+    return URI(**kwargs)
+
+class Cuboid(object):
+  """An 8-vertex cuboid"""
+  __slots__ = (
+    ## Core
+    'track_id',             # String identifier; same object across many frames
+                            #   has same track_id
+    'category_name',        # String category name
+    'timestamp',            # Lidar timestamp associated with this cuboid
+
+    ## Points
+    'box3d',                # Points in ego / robot frame defining the cuboid.
+                            # Given in order:
+                            #   (+x +y +z)  [Front face CW about +x axis]
+                            #   (+x -y +z)
+                            #   (+x -y -z)
+                            #   (+x +y -z)
+                            #   (-x +y +z)  [Rear face CW about +x axis]
+                            #   (-x -y +z)
+                            #   (-x -y -z)
+                            #   (-x +y -z)
+    'motion_corrected',     # Is `3d_box` corrected for ego motion?
+
+    ## In robot / ego frame
+    'length_meters',        # Cuboid frame: +x forward
+    'width_meters',         #               +y left
+    'height_meters',        #               +z up    
+    'distance_meters',      # Dist from ego to closest cuboid point
+    
+    # TODO
+    # 'yaw',                  # +yaw to the left (right-handed)
+    # 'pitch',                # +pitch up from horizon
+    # 'roll',                 # +roll towards y axis (?); usually 0
+
+    'obj_from_ego',         # type: Transform from ego / robot frame to object
+    
+    'extra',                # type: string -> string extra metadata
+  )
+
+  def __init__(self, **kwargs):
+    _set_defaults(self, kwargs, {})
+      # Default all to None
 
 class BBox(common.BBox):
   __slots__ = tuple(
@@ -169,7 +206,7 @@ class BBox(common.BBox):
       'has_offscreen',      # Does the cuboid have off-screen points?
       'is_visible',         # Is at least one point of the cuboid visible?
       
-      'cuboid_from_cam',    # Transform from camera center to cuboid pose
+      'cuboid_from_cam',    # Vector from camera center to cuboid pose
       
       'ypr_camera_local',   # Pose (in yaw, pitch roll) of object relative to a
                             #   ray cast from camera center to object centroid
@@ -177,17 +214,8 @@ class BBox(common.BBox):
   )
   def __init__(self, **kwargs):
     super(BBox, self).__init__(**kwargs)
-
-    DEFAULTS = {
-      'cuboid': None,
-      'cuboid_pts': None,
-      'cuboid_from_cam': Transform(),
-      'ypr_camera_local': None
-    }
-    _set_defaults(self, kwargs, DEFAULTS)
-
-    self.has_offscreen = bool(self.has_offscreen)
-    self.is_visible = bool(self.is_visible)
+    _set_defaults(self, kwargs, {})
+      # Default all to None
 
   def draw_in_image(
         self,
@@ -219,36 +247,6 @@ class BBox(common.BBox):
     ]
     return tabulate.tabulate(table, tablefmt='html')
 
-class Cuboid(object):
-  """TODO describe point order"""
-  __slots__ = (
-    ## Core
-    'track_id',             # String identifier; same object across many frames
-                            #   has same track_id
-    'category_name',        # String category name
-    'timestamp',            # Lidar timestamp associated with this cuboid
-
-    ## Points
-    'box3d',                # Points in ego / robot frame defining the cuboid.
-                            # Given in order described above.
-    'motion_corrected',     # Is `3d_box` corrected for ego motion?
-
-    ## In robot / ego frame
-    'length_meters',        # Cuboid frame: +x forward
-    'width_meters',         #               +y left
-    'height_meters',        #               +z up
-    'distance_meters',      # Dist from ego to closest cuboid point
-    
-    # TODO
-    # 'yaw',                  # +yaw to the left (right-handed)
-    # 'pitch',                # +pitch up from horizon
-    # 'roll',                 # +roll towards y axis (?); usually 0
-
-    'obj_from_ego',         # type: Transform from ego / robot frame to object
-    
-    'extra',                # type: string -> ?  Extra metadata
-  )
-
 class PointCloud(object):
   __slots__ = (
     'sensor_name',          # type: string
@@ -259,14 +257,8 @@ class PointCloud(object):
   )
 
   def __init__(self, **kwargs):
-    DEFAULTS = {
-      'timestamp': 0,
-      'cloud': np.array([]),
-      'ego_to_sensor': Transform(),
-    }
-    _set_defaults(self, kwargs, DEFAULTS)
-
-    self.motion_corrected = bool(self.motion_corrected)
+    _set_defaults(self, kwargs, {})
+      # Default all to None
   
   def to_html(self):
     import tabulate
@@ -304,21 +296,15 @@ class CameraImage(object):
     'cam_from_ego',           # type: Transform
     'K',                      # type: np.ndarray, Camera matrix
     # 'P',                      # type: np.ndarray, Camera projective matrix
-    'principal_axis_in_ego',  # type: np.ndarray, pose of camera *device* in
-                              #   ego frame; may be different from
-                              #   `cam_from_ego`, which often has axis change
-
+    'principal_axis_in_ego',  # type: np.ndarray, A 3d Vector expressing the
+                              #   pose of camera *device* in ego frame; may be
+                              #   different from `cam_from_ego`, which often
+                              #   has an embedded axis change.
   )
 
   def __init__(self, **kwargs):
     DEFAULTS = {
-      'image_jpeg': bytearray(b''),
-      'timestamp': 0,
-      'cloud': PointCloud(),
       'bboxes': [],
-      'cam_from_ego': Transform(),
-      'K': np.array([]),
-      'principal_axis_in_ego': np.array([])
     }
     _set_defaults(self, kwargs, DEFAULTS)
   
@@ -463,7 +449,8 @@ class CroppedCameraImage(CameraImage):
 
   def __init__(self, **kwargs):
     super(CroppedCameraImage, self).__init__(**kwargs)
-    self.viewport = self.viewport or None
+    self.viewport = \
+      self.viewport or common.BBox.of_size(self.width, self.height)
 
   @property
   def image(self):
@@ -502,7 +489,7 @@ class Frame(object):
   __slots__ = (
     'uri',                  # type: URI or str
     'camera_images',        # type: List[CameraImage]
-    # 'clouds',               # type: List[PointCloud]
+    'clouds',               # type: List[PointCloud]
     'world_to_ego',         # type: Transform; the pose of the robot in the
                             #   global frame (typicaly the city frame)
   )
@@ -511,7 +498,7 @@ class Frame(object):
     DEFAULTS = {
       'uri': URI(),
       'camera_images': [],
-      # 'clouds': [],
+      'clouds': [],
       'world_to_ego': Transform(),
     }
     _set_defaults(self, kwargs, DEFAULTS)
@@ -524,7 +511,6 @@ class Frame(object):
     import pprint
     table = [
       ['URI', str(self.uri)],
-      ['Num Labels', len(self.cuboids)],
       ['Ego Pose', pprint.pformat(self.world_to_ego)]
     ]
     html = tabulate.tabulate(table, tablefmt='html')
@@ -542,12 +528,125 @@ class Frame(object):
 
 
 ###
+### Prototypes
+###
+
+# Spark (and `RowAdapter`) can automatically deduce schemas from object
+# heirarchies, but these tools need non-null, non-empty members to deduce
+# proper types.  Creating a DataFrame with an explicit schema can also
+# improve efficiently dramatically, because then Spark can skip row sampling
+# and parallelized auto-deduction.  The Prototypes below serve to provide
+# enough type information for `RowAdapter` to deduce the full av.Frame schema.
+# In the future, Spark may perhaps add support for reading Python 3 type
+# annotations, in which case the Protoypes will be obviated.
+
+URI_PROTO = URI(
+  # Core spec; most URIs will have these set
+  dataset='proto',
+  split='train',
+  segment_id='proto_segment',
+  timestamp=int(100 * 1e9), # In nanoseconds
+  
+  # Uris can identify more specific things in a Frame
+  camera='camera_1',
+  camera_timestamp=int(100 * 1e9), # In nanoseconds
+  
+  crop_x=0, crop_y=0,
+  crop_w=10, crop_h=10,
+  
+  track_id='track-001',
+)
+
+CUBOID_PROTO = Cuboid(
+  track_id='track-01',
+  category_name='vehicle',
+  timestamp=int(100 * 1e9), # In nanoseconds
+
+  box3d=np.array([
+    [1.,  1.,  1.],
+    [1., -1.,  1.],
+    [1., -1., -1.],
+    [1.,  1., -1.],
+
+    [-1.,  1.,  1.],
+    [-1., -1.,  1.],
+    [-1., -1., -1.],
+    [-1.,  1., -1.],
+  ]),
+  motion_corrected=True,
+  length_meters=2.,
+  width_meters=2.,
+  height_meters=2.,
+  distance_meters=10.,
+
+  obj_from_ego=Transform(),
+  extra={
+    'key': 'value',
+  },
+)
+
+BBOX_PROTO = BBox(
+  x=0, y=0,
+  width=10, height=10,
+  im_width=100, im_height=100,
+  category_name='vehicle',
+
+  cuboid=CUBOID_PROTO,
+  cuboid_pts=np.ones((8, 3)),
+
+  has_offscreen=False,
+  is_visible=True,
+
+  cuboid_from_cam=np.array([1., 0., 1.]),
+  ypr_camera_local=np.ones((1, 3)),
+)
+
+POINTCLOUD_PROTO = PointCloud(
+  sensor_name='lidar',
+  timestamp=int(100 * 1e9), # In nanoseconds
+  cloud=np.ones((10, 10, 10)),
+  motion_corrected=True,
+  ego_to_sensor=Transform(),
+)
+
+CAMERAIMAGE_PROTO = CameraImage(
+  camera_name='front_center',
+  image_jpeg=bytearray(b''),
+  height=0,
+  width=0,
+  timestamp=int(100 * 1e9), # In nanoseconds
+  
+  cloud=POINTCLOUD_PROTO,
+  
+  bboxes=[BBOX_PROTO],
+
+  cam_from_ego=Transform(),
+  K=np.zeros((3, 3)),
+  principal_axis_in_ego=np.array([0., 0., 0.]),
+)
+
+FRAME_PROTO = Frame(
+  uri=URI_PROTO,
+  camera_images=[CAMERAIMAGE_PROTO],
+  clouds=[POINTCLOUD_PROTO],
+  world_to_ego=Transform(),
+)
+
+###
 ### Tables
 ###
 
 class FrameTableBase(object):
 
   ## Public API
+
+  PARTITION_KEYS = ('dataset', 'split', 'shard')
+
+  @classmethod
+  def get_shard(cls, uri):
+    if isinstance(uri, six.string_types):
+      uri = URI.from_str(uri)
+    return uri.segment_id + '|' + str(int(uri.timestamp * 1e9))
 
   @classmethod
   def table_root(cls):
@@ -568,7 +667,7 @@ class FrameTableBase(object):
           df_thunks,
           path=cls.table_root(),
           format='parquet',
-          partitionBy=URI.PARTITION_KEYS,
+          partitionBy=cls.PARTITION_KEYS,
           compression='lz4')
 
   @classmethod
@@ -601,21 +700,28 @@ class FrameTableBase(object):
       from collections import OrderedDict
       row = RowAdapter.to_row(f)
       row = row.asDict()
+      
       row['id'] = str(f.uri)
-      partition = OrderedDict(
-        (k, getattr(f.uri, k))
-        for k in URI.PARTITION_KEYS)
+      row['dataset'] = f.uri.dataset
+      row['split'] = f.uri.split
+      row['shard'] = cls.get_shard(f.uri)
+      # partition = OrderedDict(
+      #   (k, getattr(f.uri, k))
+      #   for k in URI.PARTITION_KEYS)
       # partition_key = tuple(partition.values())
-      row.update(**partition)
+      # row.update(**partition)
       # return partition_key, Row(**row)
       return Row(**row)
+
     # print('frame_rdd size', frame_rdd.count())
     pkey_row_rdd = frame_rdd.map(to_pkey_row)
     # pkey_row_rdd = pkey_row_rdd.partitionBy(1000)
     pkey_row_rdd = pkey_row_rdd.persist(StorageLevel.DISK_ONLY)
     row_rdd = pkey_row_rdd#.map(lambda pkey_row: pkey_row[-1])
     
-    df = spark.createDataFrame(row_rdd, samplingRatio=1)
+    schema = RowAdapter.to_schema(to_pkey_row(FRAME_PROTO))
+
+    df = spark.createDataFrame(row_rdd, schema=schema)
     return df
 
 

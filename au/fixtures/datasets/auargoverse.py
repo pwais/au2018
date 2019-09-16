@@ -1308,10 +1308,10 @@ class Fixtures(object):
   @classmethod
   def get_image_frame_uris(cls, log_frame_uri):
     loader = cls.get_loader(log_frame_uri)
+    base_uri = str(log_frame_uri)
     for camera, ts_to_path in loader.timestamp_image_dict.items():
       for ts in ts_to_path.keys():
-        uri = copy.deepcopy(log_frame_uri)
-        uri.update(camera=camera, timestamp=ts)
+        uri = av.URI.from_str(base_uri, camera=camera, timestamp=ts)
         yield uri
 
   
@@ -1360,9 +1360,9 @@ class FrameTable(av.FrameTableBase):
 
   SETUP_URIS_PER_CHUNK = 2000
 
-  @classmethod
-  def table_root(cls):
-    return '/outer_root/media/seagates-ext4/au_datas/frame_table'
+  # @classmethod
+  # def table_root(cls):
+  #   return '/outer_root/media/seagates-ext4/au_datas/frame_table'
 
   @classmethod
   def _create_frame_rdds(cls, spark):
@@ -1377,15 +1377,15 @@ class FrameTable(av.FrameTableBase):
       #                       log_on_del=True)
       # frame_rdd = uri_rdd.map(cls.create_frame)
 
-      def iter_frames(uris):
-        # FIXME spark schema ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        for uri in uris:
-          f = cls.create_frame(uri)
-          if sum(len(ci.bboxes) for ci in f.camera_images) == 0:
-            print('has no boxes', f.uri)
-            continue
-          yield f
-      frame_rdd = uri_rdd.mapPartitions(iter_frames)
+      # def iter_frames(uris):
+      #   # FIXME spark schema ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      #   for uri in uris:
+      #     f = cls.create_frame(uri)
+      #     if sum(len(ci.bboxes) for ci in f.camera_images) == 0:
+      #       print('has no boxes', f.uri)
+      #       continue
+      #     yield f
+      frame_rdd = uri_rdd.map(cls.create_frame)
       # if frame_rdd.isEmpty():
       #   continue
 
@@ -1406,7 +1406,7 @@ class FrameTable(av.FrameTableBase):
     log_uris = list(
               itertools.chain.from_iterable(
                     cls.FIXTURES.get_log_uris(split)
-                    for split in splits))
+                    for split in splits))[:2]
     util.log.info("... reading from %s logs ..." % len(log_uris))
     log_uri_rdd = spark.sparkContext.parallelize(
                             log_uris, numSlices=len(log_uris))
@@ -1576,7 +1576,7 @@ class FrameTable(av.FrameTableBase):
     cuboid.category_name = olr.label_class
     cuboid.timestamp = olr.timestamp
     cuboid.extra = {
-      'argoverse_occlusion': olr.occlusion,
+      'argoverse_occlusion': str(olr.occlusion),
         # In practice, the value in this field is not meaningful
     }
 
