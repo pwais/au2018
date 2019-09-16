@@ -357,10 +357,12 @@ class Spark(object):
       # df.show()
       num_bytes = 0
       if compute_df_sizes:
+        df = df.persist()
         num_bytes = df.rdd.map(util.get_size_of_deep).sum()
       df.write.save(mode='append', **save_opts)
       t.stop_block(n=1, num_bytes=num_bytes)
       t.maybe_log_progress(every_n=1)
+      df.unpersist()
 
 
   ### Test Utilities (for unit tests and more!)

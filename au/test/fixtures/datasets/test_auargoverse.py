@@ -311,9 +311,10 @@ class TestArgoverseImageTable(unittest.TestCase):
         FIXTURES = self.TestFixtures
 
         @classmethod
-        def _get_uris(cls, spark, splits=None):
+        def _get_uri_rdd(cls, spark, splits=None):
           from au.fixtures.datasets.av import URI
-          return [URI.from_str(s) for s in TEST_FIXTURE_URIS_NEW]
+          uris = [URI.from_str(s) for s in TEST_FIXTURE_URIS_NEW]
+          return spark.parallelize(uris)
       
       TestFrameTable.setup(spark)
       

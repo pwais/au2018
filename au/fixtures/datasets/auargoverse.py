@@ -1358,36 +1358,35 @@ class FrameTable(av.FrameTableBase):
   MOTION_CORRECTED_POINTS = True
   FILTER_MISSING_POSE = True
 
-  SETUP_URIS_PER_CHUNK = 2000
+  SETUP_URIS_PER_CHUNK = 1000
 
-  # @classmethod
-  # def table_root(cls):
-  #   return '/outer_root/media/seagates-ext4/au_datas/frame_table'
+  @classmethod
+  def table_root(cls):
+    return '/outer_root/media/seagates-ext4/au_datas/frame_table'
 
   @classmethod
   def _create_frame_rdds(cls, spark):
-    uris = cls._get_uris(spark)
+    uri_rdd = cls._get_uri_rdd(spark)
 
+    # Try to group frames from segments together to make partitioning easier
+    # and result in fewer files
+    uri_rdd = uri_rdd.sortBy(lambda uri: uri.segment_id)
+    
     frame_rdds = []
+    uris = uri_rdd.toLocalIterator()
     for uri_chunk in util.ichunked(uris, cls.SETUP_URIS_PER_CHUNK):
-      uri_rdd = spark.sparkContext.parallelize(uri_chunk)
+      chunk_uri_rdd = spark.sparkContext.parallelize(uri_chunk)
       # create_frame = util.ThruputObserver.wrap_func(
       #                       cls.create_frame,
       #                       name='create_frame',
       #                       log_on_del=True)
-      # frame_rdd = uri_rdd.map(cls.create_frame)
 
-      # def iter_frames(uris):
-      #   # FIXME spark schema ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-      #   for uri in uris:
-      #     f = cls.create_frame(uri)
-      #     if sum(len(ci.bboxes) for ci in f.camera_images) == 0:
-      #       print('has no boxes', f.uri)
-      #       continue
-      #     yield f
-      frame_rdd = uri_rdd.map(cls.create_frame)
-      # if frame_rdd.isEmpty():
-      #   continue
+      frame_rdd = chunk_uri_rdd.map(cls.create_frame)
+
+      if cls.FILTER_MISSING_POSE:
+        def has_valid_ego_pose(frame):
+          return not frame.world_to_ego.is_identity()
+        frame_rdd = frame_rdd.filter(has_valid_ego_pose)
 
       frame_rdds.append(frame_rdd)
     return frame_rdds
@@ -1395,7 +1394,7 @@ class FrameTable(av.FrameTableBase):
   ## Support
   
   @classmethod
-  def _get_uris(cls, spark, splits=None):
+  def _get_uri_rdd(cls, spark, splits=None):
     if not splits:
       splits = cls.FIXTURES.TRAIN_TEST_SPLITS
 
@@ -1406,20 +1405,14 @@ class FrameTable(av.FrameTableBase):
     log_uris = list(
               itertools.chain.from_iterable(
                     cls.FIXTURES.get_log_uris(split)
-                    for split in splits))[:2]
+                    for split in splits))
     util.log.info("... reading from %s logs ..." % len(log_uris))
     log_uri_rdd = spark.sparkContext.parallelize(
                             log_uris, numSlices=len(log_uris))
-    uri_rdd = log_uri_rdd.flatMap(cls.FIXTURES.get_image_frame_uris)
+    uri_rdd = log_uri_rdd.flatMap(cls.FIXTURES.get_image_frame_uris).cache()
 
-    if cls.FILTER_MISSING_POSE:
-      def has_missing_ego_pose(uri):
-        return not cls._get_ego_pose(uri).is_identity()
-      uri_rdd = uri_rdd.filter(has_missing_ego_pose)
-
-    uris = uri_rdd.collect()
-    util.log.info("... computed %s URIs." % len(uris))
-    return uris
+    util.log.info("... computed %s URIs." % uri_rdd.count())
+    return uri_rdd
 
   @classmethod
   def create_frame(cls, uri):

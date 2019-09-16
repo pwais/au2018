@@ -640,13 +640,13 @@ class FrameTableBase(object):
 
   ## Public API
 
-  PARTITION_KEYS = ('dataset', 'split', 'shard')
+  PARTITION_KEYS = ('dataset', 'split', 'segment_id')
 
-  @classmethod
-  def get_shard(cls, uri):
-    if isinstance(uri, six.string_types):
-      uri = URI.from_str(uri)
-    return uri.segment_id + '|' + str(int(uri.timestamp * 1e9))
+  # @classmethod
+  # def get_shard(cls, uri):
+  #   if isinstance(uri, six.string_types):
+  #     uri = URI.from_str(uri)
+  #   return uri.segment_id + '|' + str(int(uri.timestamp * 1e9))
 
   @classmethod
   def table_root(cls):
@@ -704,7 +704,8 @@ class FrameTableBase(object):
       row['id'] = str(f.uri)
       row['dataset'] = f.uri.dataset
       row['split'] = f.uri.split
-      row['shard'] = cls.get_shard(f.uri)
+      row['segment_id'] = f.uri.segment_id
+      # row['shard'] = cls.get_shard(f.uri)
       # partition = OrderedDict(
       #   (k, getattr(f.uri, k))
       #   for k in URI.PARTITION_KEYS)
@@ -716,8 +717,8 @@ class FrameTableBase(object):
     # print('frame_rdd size', frame_rdd.count())
     pkey_row_rdd = frame_rdd.map(to_pkey_row)
     # pkey_row_rdd = pkey_row_rdd.partitionBy(1000)
-    pkey_row_rdd = pkey_row_rdd.persist(StorageLevel.DISK_ONLY)
-    row_rdd = pkey_row_rdd#.map(lambda pkey_row: pkey_row[-1])
+    # pkey_row_rdd = pkey_row_rdd.persist(StorageLevel.DISK_ONLY)
+    row_rdd = pkey_row_rdd #.map(lambda pkey_row: pkey_row[-1])
     
     schema = RowAdapter.to_schema(to_pkey_row(FRAME_PROTO))
 
