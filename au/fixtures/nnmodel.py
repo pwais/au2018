@@ -484,7 +484,7 @@ class ActivationsTable(object):
         irow.attrs['activations'] = acts
         return irow
 
-      to_imagerow(joined.rdd.collect()[0])
+      # to_imagerow(joined.rdd.collect()[0])
       return joined.rdd.map(to_imagerow)
 
   @classmethod

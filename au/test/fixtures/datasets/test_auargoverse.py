@@ -314,16 +314,30 @@ class TestArgoverseImageTable(unittest.TestCase):
         def _get_uri_rdd(cls, spark, splits=None):
           from au.fixtures.datasets.av import URI
           uris = [URI.from_str(s) for s in TEST_FIXTURE_URIS_NEW]
-          return spark.parallelize(uris)
+          return spark.sparkContext.parallelize(uris)
       
       TestFrameTable.setup(spark)
       
-      frame_rdd = TestFrameTable.as_frame_rdd(spark)
-      for frame in frame_rdd.collect():
-        with open('/tmp/' + frame.uri.segment_id + '.html', 'w') as f:
-          f.write(frame.to_html())
-          print(frame.uri.segment_id)
-      print('moof')
+      from au.fixtures.datasets.av import frame_table_to_object_detection_tfrecords
+
+      from au.fixtures.datasets.auargoverse import AV_OBJ_CLASS_TO_COARSE
+      AV_OBJ_CLASS_NAME_TO_ID = dict(
+        (cname, i + 1)
+        for i, cname in enumerate(sorted(AV_OBJ_CLASS_TO_COARSE.keys())))
+      AV_OBJ_CLASS_NAME_TO_ID['background'] = 0
+
+      frame_table_to_object_detection_tfrecords(
+        spark,
+        TestFrameTable,
+        TEST_TEMPDIR + '/tfrecords/',
+        AV_OBJ_CLASS_NAME_TO_ID)
+
+      # frame_rdd = TestFrameTable.as_frame_rdd(spark)
+      # for frame in frame_rdd.collect():
+      #   with open('/tmp/' + frame.uri.segment_id + '.html', 'w') as f:
+      #     f.write(frame.to_html())
+      #     print(frame.uri.segment_id)
+      # print('moof')
 
 
 

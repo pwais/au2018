@@ -676,9 +676,8 @@ class FrameTableBase(object):
     return df
   
   @classmethod
-  def as_frame_rdd(cls, spark):
-    df = cls.as_df(spark)
-    return df.rdd.map(RowAdapter.from_row)
+  def row_to_frame(cls, frame_df_row):
+    return RowAdapter.from_row(frame_df_row)
 
   @classmethod
   def _create_frame_rdds(cls, spark):
@@ -845,5 +844,53 @@ def frame_df_to_tf_example_ds(frame_df, label_map_dict):
   # ds = ds.apply(tf.data.experimental.unbatch())
   return ds
 
+
+
+def frame_table_to_object_detection_tfrecords(
+        spark,
+        frame_table, 
+        output_base_dir,
+        label_map_dict):
+  
+  def partition_to_tfrecords(partition_id, iter_rows):
+    import tensorflow as tf
+    
+    t = util.ThruputObserver(name="tf_record_writer_%s" % partition_id)
+
+    dest_to_writer = {}
+    for row in iter_rows:
+      with t.observe():
+        frame = frame_table.row_to_frame(row)
+        dest_fname = 'part-%s.tfrecords' % partition_id
+        dest = os.path.join(
+                  output_base_dir,
+                  frame.uri.segment_id,
+                  dest_fname)
+        if dest not in dest_to_writer:
+          if 'gs://' not in dest:
+            util.mkdir(os.path.dirname(dest))
+          dest_to_writer[dest] = tf.io.TFRecordWriter(dest)
+        
+        writer = dest_to_writer[dest]
+        for ci in frame.camera_images:
+          tf_example = camera_image_to_tf_example(frame.uri, ci, label_map_dict)
+          example_str = tf_example.SerializeToString()
+          writer.write(example_str)
+          t.update_tallies(n=1, num_bytes=len(example_str))
+        writer.flush()
+      t.maybe_log_progress()
+    
+    for writer in dest_to_writer.values():
+      writer.close()
+    if t.n > 0:
+      util.log.info(
+        "Partition %s complete with thruput: \n %s" % (partition_id, str(t)))
+    return [t.n]
+  
+  util.log.info("Writing TFRecords to %s ..." % output_base_dir)
+  frame_df = frame_table.as_df(spark)
+  num_written_rdd = frame_df.rdd.mapPartitionsWithIndex(partition_to_tfrecords)
+  num_written = num_written_rdd.sum()
+  util.log.info("Wrote %s records to %s ." % (num_written, output_base_dir))
 
   
