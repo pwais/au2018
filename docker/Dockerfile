@@ -175,6 +175,9 @@ RUN \
   pip3 install -e argoverse-api && \
   cd -
 
+## Nuscenes
+RUN pip3 install nuscenes-devkit==1.0.2
+
 ## Kubespray
 # See docker/kubespray_requirements.txt for notes
 COPY docker/kubespray_requirements.txt /tmp/kubespray_requirements.txt

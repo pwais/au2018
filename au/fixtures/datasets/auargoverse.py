@@ -1152,10 +1152,6 @@ class Fixtures(object):
     return os.path.join(cls.ROOT, 'index')
 
   @classmethod
-  def loader_cache_file(cls):
-    return os.path.join(cls.index_root(), 'loader_cache')
-
-  @classmethod
   def image_annos_reports_root(cls):
     return os.path.join(cls.index_root(), 'image_annos')
 
@@ -1210,14 +1206,6 @@ class Fixtures(object):
     # # cache that can be shared *across Spark workers.*  The user may need to
     # # bust this cache in the event of code change.  TODO: build a spark thing so this can be done once per run ~~~~~~~
     
-    # # Shelve is not concurrent
-    # lock = util.SystemLock(abspath=cls.loader_cache_file() + '.aulock')
-    # with lock:
-    #   if not hasattr(cls, '_loader_cache_map'):
-    #     import shelve
-    #     import pickle
-    #     util.mkdir(os.path.dirname(cls.loader_cache_file()))  
-    #     cls._loader_cache_map = shelve.open(cls.loader_cache_file())
     
     #   key = tarball_name + '.' + log_id
     #   if key not in cls._loader_cache_map:
