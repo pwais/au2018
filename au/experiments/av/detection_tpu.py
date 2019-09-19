@@ -3,6 +3,18 @@
 ctpu up --zone us-central1-a --tpu-size v3-8 --machine-type n1-standard-4
 ctpu --zone us-central1-a --project academic-actor-248218 list
 
+bad hangs:
+ * gave it malformed file pattern for TFRecords.  took 10 minutes to
+ actually report error and crash.
+ * starting a run on fresh TFRecords took like 10 mins to just start TPUs and
+ then i see "File signature has been changed. Refreshing the cache. Path: gs://au2018-3/frame_table_broken_shard_tfrecords/tracking_train1.tar.gz|26d141ec-f952-3908-b4cc-ae359377424e/part-4635.tfrecords"
+ in stackdriver.  training appears to take forever to start as gcs_filesystem
+ seems to want to pull and 'check integrity' of all tfrecords files :P
+ * worker reported having gcs cache of 171798691840 bytes -> 172GB
+ * "Cloud TPU: Restarting TPU host due to cancelled compilation."
+    for 10-15 minutes but no bug shown client-side.
+    docker stop tensorflow, docker rm tensorflow :P 
+
 indefinite hang:
 
 2019-09-15 11:38:32.466701: I tensorflow/core/platform/cpu_feature_guard.cc:142] Your CPU supports instructions that this TensorFlow binary was not compiled to use: AVX2 FMA
@@ -226,11 +238,80 @@ sys.path = [
   '/opt/au/external/tensorflow_tpu/models',
   '/opt/au/external/tensorflow_tpu/models/official/detection'] + sys.path
 
-from au.fixtures.datasets.auargoverse import AV_OBJ_CLASS_TO_COARSE
-AV_OBJ_CLASS_NAME_TO_ID = dict(
-  (cname, i + 1)
-  for i, cname in enumerate(sorted(AV_OBJ_CLASS_TO_COARSE.keys())))
-AV_OBJ_CLASS_NAME_TO_ID['background'] = 0
+# from au.fixtures.datasets.auargoverse import AV_OBJ_CLASS_TO_COARSE
+# AV_OBJ_CLASS_NAME_TO_ID = dict(
+#   (cname, i + 1)
+#   for i, cname in enumerate(sorted(AV_OBJ_CLASS_TO_COARSE.keys())))
+# AV_OBJ_CLASS_NAME_TO_ID['background'] = 0
+
+AV_OBJ_CLASS_NAME_TO_ID = {'ANIMAL': 1, 'BICYCLE': 2, 'BICYCLIST': 3, 'BUS': 4, 'EMERGENCY_VEHICLE': 5, 'LARGE_VEHICLE': 6, 'MOPED': 7, 'MOTORCYCLE': 8, 'MOTORCYCLIST': 9, 'ON_ROAD_OBSTACLE': 10, 'OTHER_MOVER': 11, 'PEDESTRIAN': 12, 'SCHOOL_BUS': 13, 'STROLLER': 14, 'TRAILER': 15, 'VEHICLE': 16, 'WHEELCHAIR': 17, 'background': 0}
+
+class TFRecordsInputFn(object):
+  """Input function for tf.Estimator."""
+
+  def __init__(self, file_pattern, params, mode):
+    self._file_pattern = file_pattern
+    self._mode = mode
+    self._is_training = (mode == 'train')
+    from dataloader import factory
+    self._parser_fn = factory.parser_generator(params, mode)
+    self._dataset_fn = tf.data.TFRecordDataset
+    self._transpose_input = hasattr(params, 'train') and hasattr(
+        params.train, 'transpose_input') and params.train.transpose_input
+
+  def __call__(self, params):
+    batch_size = params['batch_size']
+    dataset = tf.data.Dataset.list_files(
+        self._file_pattern, shuffle=self._is_training)
+
+    if self._is_training:
+      dataset = dataset.repeat()
+
+    dataset = dataset.apply(
+        tf.data.experimental.parallel_interleave(
+            lambda file_name: self._dataset_fn(file_name).prefetch(1),
+            cycle_length=32,
+            sloppy=self._is_training))
+
+    if self._is_training:
+      dataset = dataset.shuffle(64)
+
+    # Parses the fetched records to input tensors for model function.
+    dataset = dataset.apply(
+        tf.contrib.data.map_and_batch(
+            self._parser_fn,
+            batch_size=batch_size,
+            num_parallel_batches=64,
+            drop_remainder=True))
+    dataset = dataset.prefetch(tf.contrib.data.AUTOTUNE)
+
+    # Transpose the input images from [N,H,W,C] to [H,W,C,N] since reshape on
+    # TPU is expensive.
+    if self._transpose_input and self._is_training:
+
+      def _transpose_images(images, labels):
+        return tf.transpose(images, [1, 2, 3, 0]), labels
+
+      dataset = dataset.map(_transpose_images, num_parallel_calls=64)
+
+    return dataset
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class TFExampleDSInputFn(object):
   """Based upon TPU object detection InputFn:
@@ -354,7 +435,72 @@ class TFExampleDSInputFn(object):
 
     return output_dataset
 
+# resnet50 : batch 128
+# resnet101: batch 64
+# resnet 152 with drop blocks: batch 16
 
+RESNET_200 = """
+# ---------- RetianNet + NAS-FPN ----------
+# Expected accuracy with using NAS-FPN l3-l7 and image size 640x640: 39.5
+# train batch size 64
+
+enable_summary: True
+
+train:
+  train_batch_size: 16
+  total_steps: 90000
+  gradient_clip_norm: 10
+  learning_rate:
+    init_learning_rate: 0.01
+    learning_rate_levels: [0.008, 0.0008]
+    learning_rate_steps: [20000, 80000]
+
+architecture:
+  multilevel_features: 'nasfpn'
+  use_bfloat16: True
+
+anchor:
+  min_level: 3
+  max_level: 7
+  num_scales: 3
+  aspect_ratios: [0.5, 1.0, 2.0]
+  anchor_size: 4.0
+
+#resnet:
+#  resnet_depth: 152
+#  dropblock:
+#    dropblock_keep_prob: 0.9
+#    dropblock_size: 7
+resnet:
+  resnet_depth: 200
+  #dropblock:
+  #  dropblock_keep_prob: 0.9
+  #  dropblock_size: 7
+
+retinanet_head:
+  num_classes: {num_classes}
+retinanet_loss:
+  num_classes: {num_classes}
+postprocess:
+  num_classes: {num_classes}
+
+nasfpn:
+  #fpn_feat_dims: 256
+  fpn_feat_dims: 512
+  min_level: 3
+  max_level: 7
+  #num_repeats: 5
+  num_repeats: 7
+  use_separable_conv: False
+
+retinanet_parser:
+  aug_scale_min: 0.8
+  aug_scale_max: 1.2
+  output_size: [960, 960]
+  aug_rand_hflip: True
+  use_bfloat16: True
+
+"""
 
 # https://github.com/tensorflow/tpu/blob/246a41ef611b3129b6468e7ab778e6837dbfc785/models/official/detection/configs/yaml/retinanet_nasfpn.yaml
 CONF = """
@@ -369,9 +515,9 @@ train:
   total_steps: 90000
   gradient_clip_norm: 10
   learning_rate:
-    init_learning_rate: 0.0008
-    learning_rate_levels: [0.08, 0.008, 0.0008]
-    learning_rate_steps: [1000, 60000, 80000]
+    init_learning_rate: 0.01
+    learning_rate_levels: [0.008, 0.0008]
+    learning_rate_steps: [20000, 80000]
 
 architecture:
   multilevel_features: 'nasfpn'
@@ -384,10 +530,15 @@ anchor:
   aspect_ratios: [0.5, 1.0, 2.0]
   anchor_size: 4.0
 
+#resnet:
+#  resnet_depth: 152
+#  dropblock:
+#    dropblock_keep_prob: 0.9
+#    dropblock_size: 7
 resnet:
-  resnet_depth: 152
+  resnet_depth: 200
   dropblock:
-    dropblock_keep_prob: 0.9
+    dropblock_keep_prob: 0.7
     dropblock_size: 7
 
 retinanet_head:
@@ -399,9 +550,11 @@ postprocess:
 
 nasfpn:
   fpn_feat_dims: 256
+  #fpn_feat_dims: 512
   min_level: 3
   max_level: 7
   num_repeats: 5
+  #num_repeats: 7
   use_separable_conv: False
 
 retinanet_parser:
@@ -426,8 +579,9 @@ DEFAULT_PARAMS = {
     'train': {
       'num_shards': 1,
     },
-  }
+}
 
+MSOCO_FORMAT_EVAL_JSON_PATH = 'mscoco_format_eval.json'
 import time
 TPU_PARAMS = {
     'platform': {
@@ -439,15 +593,83 @@ TPU_PARAMS = {
     },
     'tpu_job_name': 'worker',
     'use_tpu': True,
-    'iterations_per_loop': 50,
-    'model_dir': 'gs://au2018-3/tpu_test_detection/test_%s' % time.time(),
+    'iterations_per_loop': 2000,
+    'model_dir': 'gs://au2018-3/tpu_test_detection2/test_%s' % time.time(),
       #'/tmp/tpu_tast_detection',
     'train': {
       'num_shards': 8,
     },
+    'eval': {
+      'val_json_file': MSOCO_FORMAT_EVAL_JSON_PATH,
+      # 'eval_file_pattern':
+      #   'gs://au2018-3/frame_table_broken_shard_tfrecords/**/*.tfrecords',
+      'eval_samples': 40000,
+      # 'num_steps_per_eval': 10,
+    },
+    'predict': {
+      'predict_batch_size': 32,
+    }
   }
 
+def create_tfrecords():
+  from au.fixtures.datasets import auargoverse as av
+  class LocalFrameTable(av.FrameTable):
+    @classmethod
+    def table_root(cls):
+      return '/opt/au/frame_table_broken_shard'
+
+  from au.fixtures.datasets.av import frame_table_to_object_detection_tfrecords
+
+  from au.fixtures.datasets.auargoverse import AV_OBJ_CLASS_TO_COARSE
+  AV_OBJ_CLASS_NAME_TO_ID = dict(
+    (cname, i + 1)
+    for i, cname in enumerate(sorted(AV_OBJ_CLASS_TO_COARSE.keys())))
+  AV_OBJ_CLASS_NAME_TO_ID['background'] = 0
+
+  from au.spark import Spark
+  spark = Spark.getOrCreate()
+  frame_table_to_object_detection_tfrecords(
+    spark,
+    LocalFrameTable,
+    'gs://au2018-3/frame_table_broken_shard_tfrecords',
+    AV_OBJ_CLASS_NAME_TO_ID)
+
 def main():
+
+  # create_tfrecords()
+  # return
+
+  if not os.path.exists(MSOCO_FORMAT_EVAL_JSON_PATH):
+    print('building eval file %s' % MSOCO_FORMAT_EVAL_JSON_PATH)
+    from evaluation import coco_utils
+
+    class COCOGroundtruthGeneratorForAll(coco_utils.COCOGroundtruthGenerator):
+      def __call__(self):
+        # Parent class only converts `num_examples`; this subclass does all
+        with tf.Graph().as_default():
+          dataset = self._build_pipeline()
+          groundtruth = dataset.make_one_shot_iterator().get_next()
+
+          with tf.Session() as sess:
+            i = 0
+            while True:
+              try:
+                groundtruth_result = sess.run(groundtruth)
+                yield groundtruth_result
+                i += 1
+                if i % 100 == 0:
+                  print('progress ', i)
+              except (tf.errors.OutOfRangeError, StopIteration):
+                break
+
+    groundtruth_generator = COCOGroundtruthGeneratorForAll(
+      'gs://au2018-3/frame_table_broken_shard_tfrecords/**/*.tfrecords',
+      None, # num_samples Ignored
+      False)
+    coco_utils.generate_annotation_file(
+      groundtruth_generator, MSOCO_FORMAT_EVAL_JSON_PATH)
+    
+    print("created anno file %s" % MSOCO_FORMAT_EVAL_JSON_PATH)
 
   # from au.spark import Spark
   # from au.spark import spark_df_to_tf_dataset
@@ -525,21 +747,33 @@ def main():
   executor = tpu_executor.TpuExecutor(model_fn, params)
 
   # Prepares input functions for train and eval.
-  train_input_fn = TFExampleDSInputFn(
-      df, params, mode=ModeKeys.TRAIN)
-  eval_input_fn = TFExampleDSInputFn(
-      df, params, mode=ModeKeys.PREDICT_WITH_GT)
+  # train_input_fn = TFExampleDSInputFn(
+  #     df, params, mode=ModeKeys.TRAIN)
+  # eval_input_fn = TFExampleDSInputFn(
+  #     df, params, mode=ModeKeys.PREDICT_WITH_GT)
+
+  train_input_fn = TFRecordsInputFn(
+      'gs://au2018-3/frame_table_broken_shard_tfrecords/**/*.tfrecords',
+      # 'gs://au2018-3/frame_table_broken_shard_tfrecords/tracking_train1.tar.gz|26d141ec-f952-3908-b4cc-ae359377424e/part-3994.tfrecords',
+      params, mode=ModeKeys.TRAIN)
+  eval_input_fn = TFRecordsInputFn(
+      'gs://au2018-3/frame_table_broken_shard_tfrecords/**/*.tfrecords',
+      params, mode=ModeKeys.PREDICT_WITH_GT)
+
+  
 
   # Runs the model.
   save_config(params, params.model_dir)
-  # executor.prepare_evaluation()
+  executor.prepare_evaluation()
   num_cycles = int(params.train.total_steps / params.eval.num_steps_per_eval)
   for cycle in range(num_cycles):
     tf.logging.info('Start training cycle %d.' % cycle)
     current_cycle_last_train_step = ((cycle + 1)
                                       * params.eval.num_steps_per_eval)
     executor.train(train_input_fn, current_cycle_last_train_step)
-    print('want to eval but eval segfaults')
+    # print('want to eval but eval segfaults')
+    print('cycle done')
+    print('skipping eval cuz it broken')
     # executor.evaluate(
     #     eval_input_fn,
     #     params.eval.eval_samples // params.predict.predict_batch_size)

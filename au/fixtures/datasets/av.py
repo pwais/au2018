@@ -58,6 +58,15 @@ class Transform(object):
     pts = maybe_make_homogeneous(pts)
     return transform.dot(pts.T)
 
+  def get_transformation_matrix(self, homogeneous=True):
+    if homogeneous:
+      RT = np.eye(4, 4)
+    else:
+      RT = np.eye(3, 4)
+    RT[:3, :3] = self.rotation
+    RT[:3, 3] = self.translation
+    return RT
+
   def __str__(self):
     return 'Transform(rotation=%s;translation=%s)' % (
       self.rotation, self.translation)
@@ -796,7 +805,10 @@ def camera_image_to_tf_example(
     'image/filename':
         dataset_util.bytes_feature(str(camera_uri).encode('utf8')),
     'image/source_id':
-        dataset_util.bytes_feature(str(frame_uri).encode('utf8')),
+        dataset_util.bytes_feature(
+          str(util.stable_hash(frame_uri)).encode('utf8')),
+            # COCO wants a numeric ID and sadly Tensorflow convention is
+            # to us a string-typed field here.
     'image/key/sha256':
         dataset_util.bytes_feature(key.encode('utf8')),
     

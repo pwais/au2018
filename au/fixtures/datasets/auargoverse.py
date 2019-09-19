@@ -1348,6 +1348,8 @@ class FrameTable(av.FrameTableBase):
 
   SETUP_URIS_PER_CHUNK = 1000
 
+  ## Subclass API
+
   @classmethod
   def table_root(cls):
     return '/outer_root/media/seagates-ext4/au_datas/frame_table'
@@ -1573,7 +1575,7 @@ class FrameTable(av.FrameTableBase):
                                   target_timestamp)
         cuboid.motion_corrected = True
       except MissingPose:
-        # Garbage!  Ignore.
+        # Garbage! Ignore.
         pass
     
     cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
