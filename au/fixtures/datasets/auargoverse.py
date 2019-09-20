@@ -1,4 +1,8 @@
 """
+
+*** track ID df33e853-f5d1-4e49-b0c7-b5523cfe75cd is used for two
+ different annotations :( in the same image
+
 NB: every track is visible for at least a few frames:
   (where data is `ImageAnnoTable`)
 spark.sql('''
@@ -1350,9 +1354,9 @@ class FrameTable(av.FrameTableBase):
 
   ## Subclass API
 
-  @classmethod
-  def table_root(cls):
-    return '/outer_root/media/seagates-ext4/au_datas/frame_table'
+  # @classmethod
+  # def table_root(cls):
+  #   return '/outer_root/media/seagates-ext4/au_datas/frame_table'
 
   @classmethod
   def _create_frame_rdds(cls, spark):
@@ -1449,6 +1453,7 @@ class FrameTable(av.FrameTableBase):
       if not viewport:
         viewport = common.BBox.of_size(w, h)
 
+      K = calib.K[:3, :3]
       ci = av.CameraImage(
         camera_name=camera,
         image_jpeg=bytearray(open(path, 'rb').read()),
@@ -1457,7 +1462,7 @@ class FrameTable(av.FrameTableBase):
         viewport=viewport,
         timestamp=timestamp,
         cam_from_ego=cam_from_ego,
-        K=calib.K,
+        K=K,
         principal_axis_in_ego=get_camera_normal(calib),
       )
 
@@ -1481,7 +1486,6 @@ class FrameTable(av.FrameTableBase):
     
     # Put the cloud in the camera frame
     cloud = camera_image.project_ego_to_image(cloud, omit_offscreen=True)
-    
     camera_image.cloud = av.PointCloud(
         sensor_name='lidar_in_' + camera_image.camera_name,
         timestamp=timestamp, # NB: use *real* lidar timestamp if given

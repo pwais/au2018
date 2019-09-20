@@ -94,6 +94,10 @@ class Fixtures(object):
 
   ## Derived Data
   
+  # @classmethod
+  # def dataroot(cls):
+  #   return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
+
   @classmethod
   def dataroot(cls):
     return os.path.join(cls.ROOT, 'nuscenes_dataroot')
@@ -161,6 +165,9 @@ class FrameTable(av.FrameTableBase):
     scene_to_ts_to_sample_token = cls._scene_to_ts_to_sample_token()
     sample_token = scene_to_ts_to_sample_token[uri.segment_id][uri.timestamp]
     sample = nusc.get('sample', sample_token)
+
+    nusc.render_sample_data(sample['data']['CAM_FRONT'])
+
     return cls._create_frame_from_sample(uri, sample)
 
   @classmethod

@@ -6,10 +6,8 @@ def test_nuscenes():
 
   FrameTable.NUSC_VERSION = 'v1.0-mini'
   uris = FrameTable._get_camera_uris()
-
+  print(len(uris))
   for uri in uris[:10]:
-    if not (uri.timestamp == 1532402928698048 and uri.camera == 'CAM_FRONT'):
-      continue
     frame = FrameTable.create_frame(uri)
     fname = frame.uri.segment_id + str(frame.uri.timestamp) + frame.uri.camera
     with open('/tmp/' + fname + '.html', 'w') as f:

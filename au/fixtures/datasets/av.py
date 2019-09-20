@@ -344,7 +344,9 @@ class CameraImage(object):
     return img
   
   def project_ego_to_image(self, pts, omit_offscreen=True):
-    """ TODO return 3 x n, where 3 = (x, y, depth)"""
+    """Given a cloud of `pts` of shape n x (x, y, z) in the ego frame, project
+    the points to the camera image plane and return points of the form 
+    n x (x, y, depth)"""
     pts_from_cam = self.cam_from_ego.apply(pts)
     uvd = self.K.dot(pts_from_cam)
     uvd[0:2, :] /= uvd[2, :]
@@ -367,6 +369,58 @@ class CameraImage(object):
 
     return uvd
   
+  def _has_edge_in_fov(self, cuboid):
+    
+    f_x = self.K[0, 0]
+    f_y = self.K[1, 1]
+    fov_h = 2. * math.atan(.5 * self.width / f_x)
+    fov_v = 2. * math.atan(.5 * self.height / f_y)
+
+    def l2_normalized(v):
+      if len(v.shape) > 1:
+        # Normalize row-wise
+        return v / np.linalg.norm(v, axis=1)[:, np.newaxis]
+      else:
+        return v / np.linalg.norm(v)
+
+    def theta_signed(cam_h, cuboid_h):
+      return np.arctan2(
+        np.cross(cam_h, cuboid_h),
+        np.dot(cam_h, cuboid_h.T))
+
+    def intervals_overlap(i1, i2):
+      (s1, e1), (s2, e2) = (i1, i2)
+      return max(s1, s2) <= min(e1, e2)
+
+    # Check in x-y (horizontal) plane
+    cuboid_pts_h_hat = l2_normalized(cuboid.box3d[:, :2])
+    camera_pov_h_hat = l2_normalized(self.principal_axis_in_ego[:2])
+    theta_h = theta_signed(camera_pov_h_hat, cuboid_pts_h_hat)
+    is_in_fov_h = intervals_overlap(
+                    (-.5 * fov_h, .5 * fov_h),
+                    (theta_h.min(), theta_h.max()))
+
+    # Check in x-z (vertical) plane
+    XZ = np.array([0, 2])
+    cuboid_pts_v_hat = l2_normalized(cuboid.box3d[:, XZ])
+    camera_pov_v_hat = l2_normalized(self.principal_axis_in_ego[XZ])
+    theta_v = theta_signed(camera_pov_v_hat, cuboid_pts_v_hat)
+    is_in_fov_v = intervals_overlap(
+                    (-.5 * fov_v, .5 * fov_v),
+                    (theta_v.min(), theta_v.max()))
+
+    # if cuboid.track_id == 'df33e853-f5d1-4e49-b0c7-b5523cfe75cd':
+    #   print('offscreen', is_in_fov_h, is_in_fov_v)
+    #   print(cuboid.box3d)
+    #   import pdb; pdb.set_trace()
+    # elif cuboid.track_id == '79f92a80-93dc-442b-8cce-1c8da11fbe3b':
+    #   print('ON', is_in_fov_h, is_in_fov_v)
+    #   print(cuboid.box3d)
+    #   import pdb; pdb.set_trace()
+    # return True
+
+    return is_in_fov_h and is_in_fov_v
+
   def project_cuboid_to_bbox(self, cuboid):
     bbox = BBox(
             im_width=self.width,
@@ -387,14 +441,13 @@ class CameraImage(object):
     z = float(np.max(uvd[:, 2]))
     num_onscreen = bbox.get_num_onscreen_corners()
     bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
-    
-    print('z ', z, 'num_onscreen ', num_onscreen, ' ', cuboid.extra, cuboid.length_meters)
 
     # While none of the points or cuboid points may be onscreen, if the object
     # is very close to the camera then a single edge of the cuboid or bbox
-    # may intersect the screen.
-    bbox.is_visible = (z > 0 and
-      bbox.overlaps_with(common.BBox.of_size(self.width, self.height)))
+    # may intersect the screen.  TODO: proper frustum clipping for objects
+    # that are beyond FoV and yet very slightly in front of the image plane.
+    bbox.is_visible = (z > 0 and self._has_edge_in_fov(cuboid))
+      # bbox.overlaps_with(common.BBox.of_size(self.width, self.height)))
 
     bbox.clamp_to_screen()
 
