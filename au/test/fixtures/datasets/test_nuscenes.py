@@ -8,7 +8,7 @@ def test_nuscenes():
   uris = FrameTable._get_camera_uris()
 
   for uri in uris[:10]:
-    if uri.timestamp != 1532402928698048 and uri.camera != 'CAM_FRONT':
+    if not (uri.timestamp == 1532402928698048 and uri.camera == 'CAM_FRONT'):
       continue
     frame = FrameTable.create_frame(uri)
     fname = frame.uri.segment_id + str(frame.uri.timestamp) + frame.uri.camera

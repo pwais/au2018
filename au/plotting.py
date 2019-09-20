@@ -138,6 +138,8 @@ def img_to_img_tag(
 
   if image_viewport_hw is not None:
     th, tw = get_hw_in_viewport(img.shape[:2], image_viewport_hw)
+    th = max(1, th)
+    tw = max(1, tw)
     import cv2
     img = cv2.resize(img, (tw, th), interpolation=cv2.INTER_NEAREST)
   

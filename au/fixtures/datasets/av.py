@@ -387,8 +387,14 @@ class CameraImage(object):
     z = float(np.max(uvd[:, 2]))
     num_onscreen = bbox.get_num_onscreen_corners()
     bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
-    print('z ', z, 'num_onscreen ', num_onscreen)
-    bbox.is_visible = num_onscreen > 0#(z > 0 and num_onscreen > 0)
+    
+    print('z ', z, 'num_onscreen ', num_onscreen, ' ', cuboid.extra, cuboid.length_meters)
+
+    # While none of the points or cuboid points may be onscreen, if the object
+    # is very close to the camera then a single edge of the cuboid or bbox
+    # may intersect the screen.
+    bbox.is_visible = (z > 0 and
+      bbox.overlaps_with(common.BBox.of_size(self.width, self.height)))
 
     bbox.clamp_to_screen()
 
