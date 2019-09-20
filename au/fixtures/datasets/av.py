@@ -52,20 +52,23 @@ class Transform(object):
   def apply(self, pts):
     """Apply this transform (i.e. right-multiply) to `pts` and return
     tranformed *homogeneous* points."""
-    transform = np.eye(4)
-    transform[:3, :3] = self.rotation
-    transform[:3, 3] = self.translation
+    transform = self.get_transformation_matrix()
     pts = maybe_make_homogeneous(pts)
     return transform.dot(pts.T)
 
-  def get_transformation_matrix(self, homogeneous=True):
+  def get_transformation_matrix(self, homogeneous=False):
     if homogeneous:
       RT = np.eye(4, 4)
     else:
       RT = np.eye(3, 4)
     RT[:3, :3] = self.rotation
-    RT[:3, 3] = self.translation
+    RT[:3, 3] = self.translation.reshape(3)
     return RT
+
+  def get_inverse(self):
+    return Transform(
+      rotation=self.rotation.T,
+      translation=self.rotation.T.dot(-self.translation))
 
   def __str__(self):
     return 'Transform(rotation=%s;translation=%s)' % (
@@ -205,6 +208,14 @@ class Cuboid(object):
     _set_defaults(self, kwargs, {})
       # Default all to None
 
+  def to_html(self):
+    import tabulate
+    table = [
+      [attr, '<pre>' + str(getattr(self, attr)) + '</pre>']
+      for attr in self.__slots__
+    ]
+    return tabulate.tabulate(table, tablefmt='html')
+
 class BBox(common.BBox):
   __slots__ = tuple(
     list(common.BBox.__slots__) + [
@@ -250,8 +261,15 @@ class BBox(common.BBox):
 
   def to_html(self):
     import tabulate
+    
+    def to_display(v):
+      if hasattr(v, 'to_html'):
+        return v.to_html()
+      else:
+        return '<pre>' + str(v) + '</pre>'
+    
     table = [
-      [attr, getattr(self, attr)]
+      [attr, to_display(getattr(self, attr))]
       for attr in self.__slots__
     ]
     return tabulate.tabulate(table, tablefmt='html')
@@ -369,7 +387,8 @@ class CameraImage(object):
     z = float(np.max(uvd[:, 2]))
     num_onscreen = bbox.get_num_onscreen_corners()
     bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
-    bbox.is_visible = (z > 0 and num_onscreen > 0)
+    print('z ', z, 'num_onscreen ', num_onscreen)
+    bbox.is_visible = num_onscreen > 0#(z > 0 and num_onscreen > 0)
 
     bbox.clamp_to_screen()
 
@@ -380,6 +399,8 @@ class CameraImage(object):
     cuboid_from_cam_hat = \
       bbox.cuboid_from_cam / np.linalg.norm(bbox.cuboid_from_cam)
     
+    cuboid_from_cam_hat = cuboid_from_cam_hat.reshape(3)
+
     from scipy.spatial.transform import Rotation as R
     X_HAT = np.array([1, 0, 0])
     obj_normal = cuboid.obj_from_ego.rotation.dot(X_HAT)
@@ -438,11 +459,12 @@ class CameraImage(object):
       ]
       html += tabulate.tabulate(table, tablefmt='html')
 
+      html += '<br /><b>Boxes</b><br />'
       table = [
         [aupl.img_to_img_tag(
             bbox.get_crop(image),
             image_viewport_hw=(300, 300)),
-         bbox.to_html()]
+         bbox.to_html() + '<br /><hr />']
         for bbox in self.bboxes
       ]
       html += tabulate.tabulate(table, tablefmt='html')
@@ -520,7 +542,7 @@ class Frame(object):
     import pprint
     table = [
       ['URI', str(self.uri)],
-      ['Ego Pose', pprint.pformat(self.world_to_ego)]
+      ['Ego Pose', '<pre>' + str(self.world_to_ego) + '</pre>']
     ]
     html = tabulate.tabulate(table, tablefmt='html')
     table = [['<h2>Camera Images</h2>']]

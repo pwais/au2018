@@ -1,7 +1,12 @@
 
+import os
+
+import numpy as np
 import klepto # For a cache of NuScenes readers
 
+from au import conf
 from au.fixtures.datasets import av
+
 
 ## Utils
 
@@ -11,13 +16,15 @@ def transform_from_record(rec):
           rotation=Quaternion(rec['rotation']).rotation_matrix,
           translation=np.array(rec['translation']).reshape((3, 1)))
 
-def get_camera_normal(K, extrinstic):
+def get_camera_normal(K, extrinsic):
     """FMI see au.fixtures.datasets.auargoverse.get_camera_normal()"""
 
     # Build P
-    # P = K * | R |T|
-    #         |000 1|
-    P = K.dot(extrinsic)
+    # P = |K 0| * | R |T|
+    #             |000 1|
+    K_h = np.zeros((3, 4))
+    K_h[:3, :3] = K
+    P = K_h.dot(extrinsic)
 
     # Zisserman pg 161 The principal axis vector.
     # P = [M | p4]; M = |..|
@@ -26,6 +33,7 @@ def get_camera_normal(K, extrinstic):
     pv = np.linalg.det(P[:3,:3]) * P[2,:3].T
     pv_hat = pv / np.linalg.norm(pv)
     return pv_hat
+
 
 ## Data
 
@@ -115,6 +123,9 @@ class Fixtures(object):
   @classmethod
   def get_split_for_scene(cls, scene):
     if not hasattr(cls, '_scene_to_split'):
+      from nuscenes.utils.splits import create_splits_scenes
+      split_to_scenes = create_splits_scenes()
+
       scene_to_split = {}
       for split, scenes in split_to_scenes.items():
         # Ignore mini splits because they duplicate train/val
@@ -171,7 +182,7 @@ class FrameTable(av.FrameTableBase):
     uris = []
     for sample in nusc.sample:
       scene_record = nusc.get('scene', sample['scene_token'])
-      scene_split = cls.FIXTURES.get_split_for_scene[scene_record['name']]
+      scene_split = cls.FIXTURES.get_split_for_scene(scene_record['name'])
       if scene_split not in splits:
         continue
 
@@ -182,7 +193,7 @@ class FrameTable(av.FrameTableBase):
                   dataset='nuscenes',
                   split=scene_split,
                   timestamp=sample['timestamp'],
-                  segment_id=scene['name'],
+                  segment_id=scene_record['name'],
                   camera=sensor)
           uris.append(uri)
     return uris
@@ -220,13 +231,12 @@ class FrameTable(av.FrameTableBase):
     # in nuscenes.  (They probably localize mostly from lidar anyways).
     token = sample['data']['LIDAR_TOP']
     sd_record = nusc.get('sample_data', token)
-    sensor_record = nusc.get('sensor', cs_record['sensor_token'])
     pose_record = nusc.get('ego_pose', sd_record['ego_pose_token'])
     
     f.world_to_ego = transform_from_record(pose_record)
 
   @classmethod
-  def _fill_camera_images(uri, sample, f):
+  def _fill_camera_images(cls, uri, sample, f):
     nusc = cls.get_nusc()
     if uri.camera:
       camera_token = sample['data'][uri.camera]
@@ -236,7 +246,7 @@ class FrameTable(av.FrameTableBase):
       raise ValueError("Grouping multiple cameras etc into frames TODO")
   
   @classmethod
-  def _get_camera_image(uri, camera_token, f):
+  def _get_camera_image(cls, uri, camera_token, f):
     nusc = cls.get_nusc()
     sd_record = nusc.get('sample_data', camera_token)
     cs_record = nusc.get(
@@ -250,15 +260,15 @@ class FrameTable(av.FrameTableBase):
     viewport = uri.get_viewport()
     w, h = sd_record['width'], sd_record['height']
     if not viewport:
+      from au.fixtures.datasets import common
       viewport = common.BBox.of_size(w, h)
 
     timestamp = sd_record['timestamp']
 
-    cam_from_ego = transform_from_record(cs_record)
-
-    principal_axis_in_ego = get_camera_normal(
-                              cam_intrinsic,
-                              cam_from_ego.get_transformation_matrix())
+    ego_from_cam = transform_from_record(cs_record)
+    cam_from_ego = ego_from_cam.get_inverse()
+    RT_h = cam_from_ego.get_transformation_matrix(homogeneous=True)
+    principal_axis_in_ego = get_camera_normal(cam_intrinsic, RT_h)
     
     ci = av.CameraImage(
           camera_name=uri.camera,
@@ -274,8 +284,9 @@ class FrameTable(av.FrameTableBase):
     
     if cls.PROJECT_CLOUDS_TO_CAM:
       for sensor in ('LIDAR_TOP',):
+        sample = nusc.get('sample', sd_record['sample_token'])
         pc = cls._get_point_cloud_in_ego(sample, sensor=sensor)
-        
+
         # Project to image
         pc.cloud = ci.project_ego_to_image(pc.cloud, omit_offscreen=True)
         pc.sensor_name = pc.sensor_name + '_in_cam'
@@ -289,85 +300,89 @@ class FrameTable(av.FrameTableBase):
         if cls.IGNORE_INVISIBLE_CUBOIDS and not bbox.is_visible:
           continue
         ci.bboxes.append(bbox)
-
-    @classmethod
-    def _get_point_cloud_in_ego(cls.sample, sensor='LIDAR_TOP'):
-      # Based upon nuscenes.py#map_pointcloud_to_image()
-      import os.path as osp
-      
-      from pyquaternion import Quaternion
-
-      from nuscenes.utils.data_classes import LidarPointCloud
-      from nuscenes.utils.data_classes import RadarPointCloud
-      
-      nusc = cls.get_nusc()
-      pointsensor_token = sample['data'][sensor]
-      pointsensor = nusc.get('sample_data', pointsensor_token)
-      pcl_path = osp.join(nusc.dataroot, pointsensor['filename'])
-      if pointsensor['sensor_modality'] == 'lidar':
-        pc = LidarPointCloud.from_file(pcl_path)
-      else:
-        pc = RadarPointCloud.from_file(pcl_path)
-
-      # Points live in the point sensor frame, so transform to ego frame
-      cs_record = nusc.get(
-        'calibrated_sensor', pointsensor['calibrated_sensor_token'])
-      pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix)
-      pc.translate(np.array(cs_record['translation']))
-      return av.PointCloud(
-        sensor_name=sensor,
-        timestamp=pointsensor['timestamp'],
-        cloud=pc.points,
-        ego_to_sensor=transform_from_record(cs_record),
-        motion_corrected=False, # TODO interpolation for cam ~~~~~~~~~~~~~~~~~~~~~~~
-      )
     
-    @classmethod
-    def _get_cuboids_in_ego(cls, sample_data_token):
-      nusc = cls.get_nusc()
-      boxes = nusc.get_boxes(sample_data_token)
+    return ci
+
+  @classmethod
+  def _get_point_cloud_in_ego(cls, sample, sensor='LIDAR_TOP'):
+    # Based upon nuscenes.py#map_pointcloud_to_image()
+    import os.path as osp
     
-      # Boxes are in world frame.  Move all to ego frame.
-      from pyquaternion import Quaternion
-      sd_record = nusc.get('sample_data', sample_data_token)
-      pose_record = nusc.get('ego_pose', sd_record['ego_pose_token'])
-      for box in boxes:
-        # Move box to ego vehicle coord system
-        box.translate(-np.array(pose_record['translation']))
-        box.rotate(Quaternion(pose_record['rotation']).inverse)
+    from pyquaternion import Quaternion
 
-      cuboids = []
-      for box in boxes:
-        cuboid = av.Cuboid()
+    from nuscenes.utils.data_classes import LidarPointCloud
+    from nuscenes.utils.data_classes import RadarPointCloud
+    
+    nusc = cls.get_nusc()
+    pointsensor_token = sample['data'][sensor]
+    pointsensor = nusc.get('sample_data', pointsensor_token)
+    pcl_path = osp.join(nusc.dataroot, pointsensor['filename'])
+    if pointsensor['sensor_modality'] == 'lidar':
+      pc = LidarPointCloud.from_file(pcl_path)
+    else:
+      pc = RadarPointCloud.from_file(pcl_path)
 
-        # Core
-        sample_anno = nusc.get('sample_annotation', box.token)
-        cuboid.track_id = \
-          'nuscenes_instance_token:' +sample_anno['instance_token']
-        cuboid.category_name = box.name
-        cuboid.timestamp = sd_record['timestamp']
-        
-        attribs = [
-          nusc.get('attribute', attrib_token)
-          for attrib_token in sample_anno['attribute_tokens']
-        ]
-        cuboid.extra = {
-          'nuscenes_token': box.token,
-          'nuscenes_attribs': '|'.join(attrib['name'] for attrib in attribs),
-        }
+    # Points live in the point sensor frame, so transform to ego frame
+    cs_record = nusc.get(
+      'calibrated_sensor', pointsensor['calibrated_sensor_token'])
+    pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix)
+    pc.translate(np.array(cs_record['translation']))
+    n_xyz = pc.points[:3, :].T
+      # Throw out intensity (lidar) and ... other stuff (radar)
+    return av.PointCloud(
+      sensor_name=sensor,
+      timestamp=pointsensor['timestamp'],
+      cloud=n_xyz,
+      ego_to_sensor=transform_from_record(cs_record),
+      motion_corrected=False, # TODO interpolation for cam ~~~~~~~~~~~~~~~~~~~~~~~
+    )
+    
+  @classmethod
+  def _get_cuboids_in_ego(cls, sample_data_token):
+    nusc = cls.get_nusc()
+    boxes = nusc.get_boxes(sample_data_token)
+  
+    # Boxes are in world frame.  Move all to ego frame.
+    from pyquaternion import Quaternion
+    sd_record = nusc.get('sample_data', sample_data_token)
+    pose_record = nusc.get('ego_pose', sd_record['ego_pose_token'])
+    for box in boxes:
+      # Move box to ego vehicle coord system
+      box.translate(-np.array(pose_record['translation']))
+      box.rotate(Quaternion(pose_record['rotation']).inverse)
 
-        # Points
-        cuboid.box3d = box.corners().T
-        cuboid.motion_corrected = False # TODO interpolation ? ~~~~~~~~~~~~~~~~~~~~
-        cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
-        
-        # Pose
-        cuboid.width_meters = float(box.wlh[0])
-        cuboid.length_meters = float(box.wlh[1])
-        cuboid.height_meters = float(box.wlh[3])
+    cuboids = []
+    for box in boxes:
+      cuboid = av.Cuboid()
 
-        cuboid.obj_from_ego = av.Transform(
-            rotation=box.orientation.rotation_matrix,
-            translation=box.center.reshape((3, 1)))
-        cuboids.append(cuboid)
-      return cuboids
+      # Core
+      sample_anno = nusc.get('sample_annotation', box.token)
+      cuboid.track_id = \
+        'nuscenes_instance_token:' + sample_anno['instance_token']
+      cuboid.category_name = box.name
+      cuboid.timestamp = sd_record['timestamp']
+      
+      attribs = [
+        nusc.get('attribute', attrib_token)
+        for attrib_token in sample_anno['attribute_tokens']
+      ]
+      cuboid.extra = {
+        'nuscenes_token': box.token,
+        'nuscenes_attribs': '|'.join(attrib['name'] for attrib in attribs),
+      }
+
+      # Points
+      cuboid.box3d = box.corners().T
+      cuboid.motion_corrected = False # TODO interpolation ? ~~~~~~~~~~~~~~~~~~~~
+      cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
+      
+      # Pose
+      cuboid.width_meters = float(box.wlh[0])
+      cuboid.length_meters = float(box.wlh[1])
+      cuboid.height_meters = float(box.wlh[2])
+
+      cuboid.obj_from_ego = av.Transform(
+          rotation=box.orientation.rotation_matrix,
+          translation=box.center.reshape((3, 1)))
+      cuboids.append(cuboid)
+    return cuboids

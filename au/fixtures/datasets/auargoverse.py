@@ -165,8 +165,8 @@ def get_camera_normal(calib):
 
   """
   # Build P
-  # P = K * | R |T|
-  #         |000 1|
+  # P = |K 0| * | R |T|
+  #             |000 1|
   P = calib.K.dot(calib.extrinsic)
 
   # Zisserman pg 161 The principal axis vector.
