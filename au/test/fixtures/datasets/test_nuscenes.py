@@ -1,4 +1,10 @@
+TEST_URIS = (
+  # Bike in front cam
+  'avframe://dataset=nuscenes&split=val&segment_id=scene-0553&timestamp=1535489296047917&camera=CAM_FRONT',
 
+  # Front cam with person in truck and with cone way off to side
+  'avframe://dataset=nuscenes&split=train&segment_id=scene-0061&timestamp=1532402928147847&camera=CAM_FRONT',
+)
 
 def test_nuscenes():
 
@@ -6,13 +12,26 @@ def test_nuscenes():
 
   FrameTable.NUSC_VERSION = 'v1.0-mini'
   uris = FrameTable._get_camera_uris()
-  print(len(uris))
-  for uri in uris[:10]:
+  nusc = FrameTable.get_nusc()
+  # x = [a for a in nusc.sample_annotation if 'bicycle' in a['category_name']]
+  # scen_toks = set([nusc.get('sample', xx['sample_token'])['scene_token'] for xx in x])
+
+  # scene_name_to_token = dict(
+  #       (scene['name'], scene['token']) for scene in nusc.scene)
+
+  # scen_uris = [u for u in uris if scene_name_to_token[u.segment_id] in scen_toks]
+  # scen_uris = [u for u in uris 
+  #   if u.segment_id == 'scene-0553' and u.timestamp == 1535489297047675]# and abs(u.timestamp - 1535489297047675) <= 1]
+  # import random
+  # random.shuffle(scen_uris)
+  
+  # print(len(uris))
+  for uri in uris[:20]:
     frame = FrameTable.create_frame(uri)
-    fname = frame.uri.segment_id + str(frame.uri.timestamp) + frame.uri.camera
+    fname = '|'.join((frame.uri.segment_id , str(frame.uri.timestamp) , frame.uri.camera))
     with open('/tmp/' + fname + '.html', 'w') as f:
       f.write(frame.to_html())
-      print(fname)
+      print(str(frame.uri), fname)
 
   return
   import pdb; pdb.set_trace()

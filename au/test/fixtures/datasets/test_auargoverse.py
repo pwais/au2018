@@ -316,27 +316,26 @@ class TestArgoverseImageTable(unittest.TestCase):
           uris = [URI.from_str(s) for s in TEST_FIXTURE_URIS_NEW]
           return spark.sparkContext.parallelize(uris)
       
-      x = TestFrameTable.create_frame('avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|22160544_2216_2216_2216_722161741824&split=val&camera=ring_front_center&timestamp=315966714291915976')
-      with open('/tmp/' + x.uri.segment_id + '.html', 'w') as f:
-          f.write(x.to_html())
-          print(x.uri.segment_id)
-          return
+      # x = TestFrameTable.create_frame('avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|22160544_2216_2216_2216_722161741824&split=val&camera=ring_front_center&timestamp=315966714291915976')
+      # with open('/tmp/' + x.uri.segment_id + '.html', 'w') as f:
+      #     f.write(x.to_html())
+      #     print(x.uri.segment_id)
+      #     return
 
       TestFrameTable.setup(spark)
       
       from au.fixtures.datasets.av import frame_table_to_object_detection_tfrecords
 
-      from au.fixtures.datasets.auargoverse import AV_OBJ_CLASS_TO_COARSE
-      AV_OBJ_CLASS_NAME_TO_ID = dict(
-        (cname, i + 1)
-        for i, cname in enumerate(sorted(AV_OBJ_CLASS_TO_COARSE.keys())))
-      AV_OBJ_CLASS_NAME_TO_ID['background'] = 0
+      # from au.fixtures.datasets.auargoverse import AV_OBJ_CLASS_TO_COARSE
+      # AV_OBJ_CLASS_NAME_TO_ID = dict(
+      #   (cname, i + 1)
+      #   for i, cname in enumerate(sorted(AV_OBJ_CLASS_TO_COARSE.keys())))
+      # AV_OBJ_CLASS_NAME_TO_ID['background'] = 0
 
       frame_table_to_object_detection_tfrecords(
         spark,
         TestFrameTable,
-        TEST_TEMPDIR + '/tfrecords/',
-        AV_OBJ_CLASS_NAME_TO_ID)
+        TEST_TEMPDIR + '/tfrecords/')
 
       frame_rdd = TestFrameTable.as_df(spark).rdd.map(TestFrameTable.row_to_frame)
       def save_frame(frame):

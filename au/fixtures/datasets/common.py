@@ -168,7 +168,7 @@ class BBox(object):
     c, r, w, h = self.x, self.y, self.width, self.height
     return img[r:r+h, c:c+w, :]
 
-  def draw_in_image(self, img, color=None, thickness=2):
+  def draw_in_image(self, img, color=None, thickness=2, category=None):
     assert self.im_height == img.shape[0], (self.im_height, img.shape)
     assert self.im_width == img.shape[1], (self.im_width, img.shape)
 
@@ -178,6 +178,8 @@ class BBox(object):
 
     # Tensorflow takes BGR
     color = tuple(reversed(color))
+
+    category = category or self.category_name
 
     # Use Tensorflow Models; it handles category string text nicely
     from object_detection.utils.visualization_utils import \
@@ -190,5 +192,5 @@ class BBox(object):
         self.x + self.width,
         color=color,
         thickness=thickness,
-        display_str_list=[self.category_name],
+        display_str_list=[category],
         use_normalized_coordinates=False)

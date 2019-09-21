@@ -15,6 +15,84 @@ from au.fixtures.datasets import common
 from au.spark import RowAdapter
 from au.spark import Spark
 
+###
+### Constants
+###
+
+AU_AV_CATEGORIES = (
+  'background',
+  'car',
+  'ped',
+  'bike_with_rider',
+  'bike_no_rider',
+  'motorcycle_with_rider',
+  'motorcycle_no_rider',
+  'obstacle',
+)
+AU_AV_CATEGORY_TO_ID = dict((c, i) for i, c in enumerate(AU_AV_CATEGORIES))
+
+ARGOVERSE_CATEGORY_TO_AU_AV_CATEGORY = {
+  # Cars
+  "BUS":                'car',
+  "EMERGENCY_VEHICLE":  'car',
+  "LARGE_VEHICLE":      'car',
+  "SCHOOL_BUS":         'car',
+  "TRAILER":            'car',
+  "VEHICLE":            'car',
+
+  # Peds
+  "ANIMAL":             'ped',
+  "PEDESTRIAN":         'ped',
+  "STROLLER":           'ped',
+  "WHEELCHAIR":         'ped',
+
+  # These labels get transformed / merged
+  "BICYCLE":            'car',
+  "BICYCLIST":          'ped',
+  "MOTORCYCLE":         'car',
+  "MOTORCYCLIST":       'ped',
+  "MOPED":              'car',
+
+  # Misc
+  "ON_ROAD_OBSTACLE":   'obstacle',
+  "OTHER_MOVER":        'obstacle',
+}
+
+NUSCENES_CATEGORY_TO_AU_AV_CATEGORY = {
+  # Cars
+  'vehicle.car': 'car',
+  'vehicle.bus.bendy': 'car',
+  'vehicle.bus.rigid': 'car',
+  'vehicle.truck': 'car',
+  'vehicle.construction': 'car',
+  'vehicle.emergency.ambulance': 'car',
+  'vehicle.emergency.police': 'car',
+  'vehicle.trailer': 'car',
+
+  # Peds
+  'human.pedestrian.adult': 'ped',
+  'human.pedestrian.child': 'ped',
+  'human.pedestrian.wheelchair': 'ped',
+  'human.pedestrian.stroller': 'ped',
+  'human.pedestrian.personal_mobility': 'ped',
+  'human.pedestrian.police_officer': 'ped',
+  'human.pedestrian.construction_worker': 'ped',
+  'animal': 'ped',
+
+  # Assume no rider unless nuscenes attribute says otherwise
+  'vehicle.motorcycle': 'motorcycle_no_rider',
+  'vehicle.bicycle': 'bike_no_rider',
+
+  # Misc
+  'movable_object.barrier': 'obstacle',
+  'movable_object.trafficcone': 'obstacle',
+  'movable_object.pushable_pullable': 'obstacle',
+  'movable_object.debris': 'obstacle',
+
+  # Ignore
+  'static_object.bicycle_rack': 'background',
+}
+
 
 
 ###
@@ -78,6 +156,8 @@ class Transform(object):
     return (
       np.array_equal(self.rotation, np.eye(3, 3)) and
       np.array_equal(self.translation, np.zeros((3, 1))))
+
+
 
 class URI(object):
   __slots__ = (
@@ -166,6 +246,8 @@ class URI(object):
     kwargs.update(**overrides)
     return URI(**kwargs)
 
+
+
 class Cuboid(object):
   """An 8-vertex cuboid"""
   __slots__ = (
@@ -173,6 +255,7 @@ class Cuboid(object):
     'track_id',             # String identifier; same object across many frames
                             #   has same track_id
     'category_name',        # String category name
+    'au_category',          # AU AV Category (coarser)
     'timestamp',            # Lidar timestamp associated with this cuboid
 
     ## Points
@@ -215,10 +298,83 @@ class Cuboid(object):
       for attr in self.__slots__
     ]
     return tabulate.tabulate(table, tablefmt='html')
+  
+  @staticmethod
+  def get_merged(c1, c2):
+    ## Find new box3d, maintaining orientation of old box.
+    # Step 1: Compute mean centroid and pose
+
+    merged_translation = .5 * (
+      c1.obj_from_ego.translation + c2.obj_from_ego.translation)
+    
+    from scipy.spatial.transform import Rotation as R
+    from scipy.spatial.transform import Slerp
+    rots = R.from_dcm([
+      c1.obj_from_ego.rotation,
+      c2.obj_from_ego.rotation,
+    ])
+    slerp = Slerp([0, 1], rots)
+    merged_rot = slerp([0.5]).as_dcm()
+
+    merged_transform = Transform(
+      rotation=merged_rot,
+      translation=merged_translation.reshape((3, 1)),
+    )
+
+    # Step 2: Compute cuboid bounds given pose
+    cube_in_merged_frame = merged_transform.apply(
+      # Send the unit cube into the object frame
+      np.array([
+        [1,  1.,  1.],
+        [1, -1.,  1.],
+        [1, -1., -1.],
+        [1,  1., -1.],
+
+        [-1,  1.,  1.],
+        [-1, -1.,  1.],
+        [-1, -1., -1.],
+        [-1,  1., -1.],
+      ])
+    )
+    cube_in_merged_frame = cube_in_merged_frame.T
+
+    # Stretch the cuboid to fit all points
+    all_pts = np.concatenate((c1.box3d, c2.box3d))
+    merged_box3d = []
+    for i in range(8):
+      corner = cube_in_merged_frame[i, :3]
+      corner /= np.linalg.norm(corner)
+      merged_box3d.append(
+        # Scale corner by the existing point with the greatest projection
+        corner * all_pts.dot(corner).max()
+      )
+    merged_box3d = np.array(merged_box3d)
+
+    width = np.linalg.norm(merged_box3d[1] - merged_box3d[0])
+    length = np.linalg.norm(merged_box3d[4] - merged_box3d[0])
+    height = np.linalg.norm(merged_box3d[3] - merged_box3d[0])
+
+    return Cuboid(
+      track_id=c1.track_id + '+' + c2.track_id,
+      category_name=c1.category_name,
+      au_category=c1.au_category,
+      timestamp=c1.timestamp,
+      box3d=merged_box3d,
+      motion_corrected=c1.motion_corrected or c2.motion_corrected,
+      length_meters=float(length),
+      width_meters=float(width),
+      height_meters=float(height),
+      distance_meters=float(np.min(np.linalg.norm(merged_box3d, axis=-1))),
+      obj_from_ego=merged_transform,
+      extra=dict(list(c1.extra.items()) + list(c2.extra.items())),
+    )
+
+
 
 class BBox(common.BBox):
   __slots__ = tuple(
     list(common.BBox.__slots__) + [
+      'au_category',        # Coarser than category_name
       'cuboid',             # Reference parent cuboid, if available
       
       'cuboid_pts',         # Points of parent cuboid projected into image;
@@ -247,12 +403,13 @@ class BBox(common.BBox):
     """Draw this BBox in `img`, and optionally include visualization of the
     box's cuboid if available"""
     
-    super(BBox, self).draw_in_image(img, color=color, thickness=thickness)
+    super(BBox, self).draw_in_image(
+      img, color=color, thickness=thickness, category=self.au_category)
 
     if hasattr(self.cuboid_pts, 'shape'):
       # Use category color
       from au import plotting as aupl
-      base_color = aupl.hash_to_rbg(self.category_name)
+      base_color = aupl.hash_to_rbg(self.au_category)
       
       pts = self.cuboid_pts[:, :2]
 
@@ -273,6 +430,8 @@ class BBox(common.BBox):
       for attr in self.__slots__
     ]
     return tabulate.tabulate(table, tablefmt='html')
+
+
 
 class PointCloud(object):
   __slots__ = (
@@ -304,6 +463,8 @@ class PointCloud(object):
       [len(self.cloud), '']
     ])
     return tabulate.tabulate(table, tablefmt='html')
+
+
 
 class CameraImage(object):
   __slots__ = (
@@ -426,6 +587,7 @@ class CameraImage(object):
             im_width=self.width,
             im_height=self.height,
             category_name=cuboid.category_name,
+            au_category=cuboid.au_category,
             cuboid=cuboid)
     
     ## Fill Points
@@ -463,7 +625,7 @@ class CameraImage(object):
     from scipy.spatial.transform import Rotation as R
     X_HAT = np.array([1, 0, 0])
     obj_normal = cuboid.obj_from_ego.rotation.dot(X_HAT)
-    cos_theta = cuboid_from_cam_hat.dot(obj_normal)
+    cos_theta = cuboid_from_cam_hat.dot(obj_normal.reshape(3))
     rot_axis = np.cross(cuboid_from_cam_hat, obj_normal)
     obj_from_ray = R.from_rotvec(
           math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
@@ -530,6 +692,8 @@ class CameraImage(object):
 
     return html
 
+
+
 class CroppedCameraImage(CameraImage):
   __slots__ = tuple(list(CameraImage.__slots__) + [
     # Viewport of camera; this image is potentially a crop of a (maybe shared)
@@ -573,6 +737,8 @@ class CroppedCameraImage(CameraImage):
     # Correct for moved image origin
     uvd -= np.array([self.viewport.x, self.viewport.y, 0])
     return uvd
+
+
 
 class Frame(object):
 
@@ -650,6 +816,7 @@ URI_PROTO = URI(
 CUBOID_PROTO = Cuboid(
   track_id='track-01',
   category_name='vehicle',
+  au_category='car',
   timestamp=int(100 * 1e9), # In nanoseconds
 
   box3d=np.array([
@@ -680,6 +847,7 @@ BBOX_PROTO = BBox(
   width=10, height=10,
   im_width=100, im_height=100,
   category_name='vehicle',
+  au_category='car',
 
   cuboid=CUBOID_PROTO,
   cuboid_pts=np.ones((8, 3)),
@@ -822,7 +990,7 @@ class FrameTableBase(object):
 def camera_image_to_tf_example(
     frame_uri,
     camera_image,
-    label_map_dict):
+    label_map_dict=AU_AV_CATEGORY_TO_ID):
   """TODO TODO
 
   Based upon tensorflow/models
@@ -850,7 +1018,7 @@ def camera_image_to_tf_example(
     xmaxs.append(xmax)
     ymaxs.append(ymax)
 
-    c = bbox.category_name
+    c = bbox.au_category
     classes.append(int(label_map_dict[c]))
     classes_text.append(c.encode('utf-8'))
   n_annos = len(xmins)
@@ -887,9 +1055,10 @@ def camera_image_to_tf_example(
         dataset_util.bytes_feature(str(camera_uri).encode('utf8')),
     'image/source_id':
         dataset_util.bytes_feature(
-          str(util.stable_hash(frame_uri)).encode('utf8')),
+          str(util.stable_hash(frame_uri) % (1 << 32)).encode('utf8')),
             # COCO wants a numeric ID and sadly Tensorflow convention is
-            # to us a string-typed field here.
+            # to us a string-typed field here.  Also, we need for the int
+            # to be a reasonable size verus a bigint
     'image/key/sha256':
         dataset_util.bytes_feature(key.encode('utf8')),
     
@@ -904,7 +1073,7 @@ def camera_image_to_tf_example(
   example = tf.train.Example(features=tf.train.Features(feature=feature_dict))
   return example
 
-def frame_df_to_tf_example_ds(frame_df, label_map_dict):
+def frame_df_to_tf_example_ds(frame_df, label_map_dict=AU_AV_CATEGORY_TO_ID):
   from au.spark import spark_df_to_tf_dataset
 
   SHARD_COL = 'shard'
@@ -943,7 +1112,7 @@ def frame_table_to_object_detection_tfrecords(
         spark,
         frame_table, 
         output_base_dir,
-        label_map_dict):
+        label_map_dict=AU_AV_CATEGORY_TO_ID):
   
   def partition_to_tfrecords(partition_id, iter_rows):
     import tensorflow as tf

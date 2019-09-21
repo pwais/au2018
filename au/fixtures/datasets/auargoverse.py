@@ -1350,6 +1350,9 @@ class FrameTable(av.FrameTableBase):
   MOTION_CORRECTED_POINTS = True
   FILTER_MISSING_POSE = True
 
+  MERGE_AND_REPLACE_BIKES = True
+  MAX_RIDDEN_BIKE_DISTANCE_METERS = 5
+
   SETUP_URIS_PER_CHUNK = 1000
 
   ## Subclass API
@@ -1446,7 +1449,8 @@ class FrameTable(av.FrameTableBase):
     for camera in cameras:
       path, timestamp = loader.get_nearest_image_path(camera, uri.timestamp)
       calib = loader.get_calibration(camera)
-      cam_from_ego = av.Transform(rotation=calib.R, translation=calib.T)
+      cam_from_ego = av.Transform(
+                        rotation=calib.R, translation=calib.T.reshape((3, 1)))
 
       viewport = uri.get_viewport()
       w, h = get_image_width_height(camera)
@@ -1470,7 +1474,7 @@ class FrameTable(av.FrameTableBase):
         cls.__fill_cloud_in_cam(loader, timestamp, ci)
       
       if cls.PROJECT_CUBOIDS_TO_CAM:
-        cls.__fill_cuboids_in_cam(loader, timestamp, ci)
+        cls.__fill_cuboids_in_cam(uri, timestamp, ci)
 
       cis.append(ci)
     return cis
@@ -1498,15 +1502,9 @@ class FrameTable(av.FrameTableBase):
       )
   
   @classmethod
-  def __fill_cuboids_in_cam(cls, loader, timestamp, camera_image):
-    calib = loader.get_calibration(camera_image.camera_name)
-    olrs = loader.get_nearest_label_objects(timestamp)
-    for olr in olrs:
-      cuboid = av.Cuboid()
-      cls.__fill_core(cuboid, olr)
-      cls.__fill_pts(loader, timestamp, cuboid, olr)
-      cls.__fill_pose(calib, cuboid, olr)
-      
+  def __fill_cuboids_in_cam(cls, uri, timestamp, camera_image):
+    cuboids = cls._get_cuboids(uri, timestamp=timestamp)
+    for cuboid in cuboids:      
       bbox = camera_image.project_cuboid_to_bbox(cuboid)
 
       if cls.IGNORE_INVISIBLE_CUBOIDS and not bbox.is_visible:
@@ -1514,6 +1512,27 @@ class FrameTable(av.FrameTableBase):
 
       camera_image.bboxes.append(bbox)
     
+  @classmethod
+  def _get_cuboids(cls, uri, timestamp=None):
+    loader = cls.FIXTURES.get_loader(uri)
+    if not timestamp:
+      timestamp = uri.timestamp
+    olrs = loader.get_nearest_label_objects(timestamp)
+    cuboids = []
+    for olr in olrs:
+      cuboid = av.Cuboid()
+      cls.__fill_core(cuboid, olr)
+      cls.__fill_pts(loader, timestamp, cuboid, olr)
+      cls.__fill_pose(cuboid, olr)
+      cuboids.append(cuboid)
+    
+    if cls.MERGE_AND_REPLACE_BIKES:
+      cuboids = cls.__get_bikes_merged(cuboids)
+    
+    return cuboids
+
+
+
   # def _get_clouds(cls, uri):
   #   loader = cls.FIXTURES.get_loader(uri)
   #   timestamp = uri.timestamp
@@ -1558,9 +1577,63 @@ class FrameTable(av.FrameTableBase):
   ### Cuboid Utils
 
   @classmethod
+  def __get_bikes_merged(cls, cuboids):
+    bikes = [c for c in cuboids if c.category_name in BIKE]
+    riders = [c for c in cuboids if c.category_name in RIDER]
+
+    if not bikes:
+      return cuboids
+    
+    cuboids_out = [c for c in cuboids if c.category_name not in (BIKE + RIDER)]
+
+    # The best pair has smallest euclidean distance between centroids
+    def l2_dist(c1, c2):
+      return np.linalg.norm(
+        c1.obj_from_ego.translation - c2.obj_from_ego.translation)
+    
+    # Each rider gets assigned the nearest bike.  Note that not all bikes may
+    # not have riders.
+    tracks_kept = set(c.track_id for c in cuboids_out)
+    for rider in riders:
+      distance, best_bike = min(
+                              (l2_dist(rider, bike), bike)
+                              for bike in bikes)
+
+      if distance <= cls.MAX_RIDDEN_BIKE_DISTANCE_METERS:
+        # Merge!
+        merged_cuboid = av.Cuboid.get_merged(rider, best_bike)
+        
+        if rider.category_name == 'BICYCLIST':
+          merged_cuboid.au_category = 'bike_with_rider'
+        else: # Motorcycle, maybe moped?
+          merged_cuboid.au_category = 'motorcycle_with_rider'
+        
+        cuboids_out.append(merged_cuboid)
+        tracks_kept.add(rider.track_id)
+        tracks_kept.add(best_bike.track_id)
+    
+    # Add back in any unmerged bikes & riders
+    for c in bikes + riders:
+      if c.track_id in tracks_kept:
+        continue
+
+      if c.category_name in ("BICYCLE",):
+        c.au_category = 'bike_no_rider'
+      elif c.category_name in ("MOPED", "MOTORCYCLE"):
+        c.au_category = 'motorcycle_no_rider'
+      elif c.category_name in RIDER:
+        c.au_category = 'ped'
+      
+      cuboids_out.append(c)
+    return cuboids_out
+
+  @classmethod
   def __fill_core(cls, cuboid, olr):
+    from au.fixtures.datasets.av import ARGOVERSE_CATEGORY_TO_AU_AV_CATEGORY
     cuboid.track_id = olr.track_id
     cuboid.category_name = olr.label_class
+    cuboid.au_category = ARGOVERSE_CATEGORY_TO_AU_AV_CATEGORY.get(
+                                      olr.label_class, 'background')
     cuboid.timestamp = olr.timestamp
     cuboid.extra = {
       'argoverse_occlusion': str(olr.occlusion),
@@ -1585,7 +1658,7 @@ class FrameTable(av.FrameTableBase):
     cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
   
   @classmethod
-  def __fill_pose(cls, calib, cuboid, olr):
+  def __fill_pose(cls, cuboid, olr):
     cuboid.length_meters = float(olr.length)
     cuboid.width_meters = float(olr.width)
     cuboid.height_meters = float(olr.height)
@@ -1596,177 +1669,7 @@ class FrameTable(av.FrameTableBase):
     
     from scipy.spatial.transform import Rotation as R
     cuboid.obj_from_ego = av.Transform(
-      rotation=rotmat, translation=olr.translation)
-    
-    # cuboid.yaw, cuboid.pitch, cuboid.roll = R.from_dcm(rotmat).as_euler('zxy') ~~~~~~
-
-
-
-  # def _to_cuboid(cls, loader, object_label_record, motion_corrected=True):
-    
-      
-  #     if not fixures_cls:
-  #       fixures_cls = Fixtures
-      
-  #     loader = fixures_cls.get_loader(uri)
-  #     calib = loader.get_calibration(uri.camera)
-
-      
-
-  #     def fill_extra(bbox):
-  #       bbox.track_id = object_label_record.track_id
-  #       bbox.occlusion = object_label_record.occlusion
-        
-  #       bbox.distance_meters = \
-  #         float(np.min(np.linalg.norm(bbox.cuboid_pts, axis=-1)))
-
-        
-  #       # bbox.relative_yaw_radians = math.atan2(rotmat[2, 1], rotmat[1, 1])
-  #       bbox.relative_yaw_radians = float(R.from_dcm(rotmat).as_euler('zxy')[0])
-  #         # Tait–Bryan?  ... But y in Argoverse is to the left?
-        
-  #       camera_yaw = math.atan2(calib.R[2, 1], calib.R[1, 1])
-  #       # bbox.relative_yaw_to_camera_radians = [camera_yaw, 
-
-  #       bbox.ego_to_obj = object_label_record.translation
-  #       city_to_ego_se3 = loader.get_city_to_ego(uri.timestamp)
-  #       # bbox.city_to_ego = common.Transform(
-  #       #                       rotation=city_to_ego_se3.rotation,
-  #       #                       translation=city_to_ego_se3.translation) ~~~~~~~~~~
-  #       bbox.city_to_ego = city_to_ego_se3.translation
-
-
-
-
-  #       from scipy.spatial.transform import Rotation as R
-  #       # bbox.ego_to_camera = common.Transform(
-  #       #                         rotation=R.from_dcm(calib.R).as_quat(),
-  #       #                         translation=calib.T) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-  #       bbox.camera_norm = get_camera_normal(calib)
-
-  #       bbox.obj_ypr_in_ego = R.from_dcm(rotmat).as_euler('zxy')
-
-  #       from argoverse.utils.se3 import SE3
-  #       x_hat = np.array([1, 0, 0])
-  #       cos_theta = bbox.camera_norm.dot(x_hat)
-  #       rot_axis = np.cross(bbox.camera_norm, x_hat)
-  #       ego_to_cam_device_rot = R.from_rotvec(
-  #         math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
-
-  #       # Recover translation from ego to camera
-  #       ego_to_cam = SE3(rotation=calib.R, translation=calib.T)
-  #       cam_device_from_ego_T = ego_to_cam.inverse().translation
-  #       cam_device_from_ego = SE3(
-  #             rotation=ego_to_cam_device_rot.as_dcm(),
-  #             translation=cam_device_from_ego_T)
-  #       # ego_to_cam_device.rotation = ego_to_cam_device_rot.as_dcm()
-  #       # obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
-  #       # obj_in_cam = cam_device_from_ego.right_multiply_with_se3(obj_from_ego)
-
-  #       camera_to_obj = bbox.ego_to_obj - cam_device_from_ego_T
-  #       bbox.camera_to_obj = camera_to_obj
-
-  #       camera_to_obj_hat = camera_to_obj / np.linalg.norm(camera_to_obj)
-
-
-  #       # doh_camera_norm = np.array([1, 0, 0])
-  #       # cos_theta = bbox.camera_norm.dot(camera_to_obj_hat)
-  #       # rot_axis = np.cross(bbox.camera_norm, camera_to_obj_hat)
-  #       obj_from_ego = SE3(rotation=rotmat, translation=bbox.ego_to_obj)
-  #       obj_normal = obj_from_ego.rotation.dot(x_hat)
-  #       cos_theta = camera_to_obj_hat.dot(obj_normal)
-  #       rot_axis = np.cross(camera_to_obj_hat, obj_normal)
-
-  #       obj_from_ray = R.from_rotvec(
-  #         math.acos(cos_theta) * rot_axis / np.linalg.norm(rot_axis))
-  #       # ray_from_cam = SE3(
-  #       #   rotation=ray_from_cam_normal.as_dcm(),
-  #       #   translation=np.zeros(3))
-  #       # obj_in_ray = obj_in_cam.right_multiply_with_se3(ray_from_cam)
-
-  #       # obj_camera_local = R.from_dcm(obj_in_cam.rotation) * obj_from_cam.inv()
-  #       # obj_camera_local = R.from_dcm(obj_in_ray.rotation)
-  #       bbox.obj_ypr_camera_local = [NumpyArray(obj_from_ray.as_euler('zxy'))]
-
-        
-
-  #     def fill_bbox_core(bbox):
-  #       bbox.category_name = object_label_record.label_class
-
-  #       bbox.im_width, bbox.im_height = get_image_width_height(uri.camera)
-  #       uv = calib.project_ego_to_image(bbox.cuboid_pts)
-        
-  #       bbox.cuboid_pts_image = np.array([uv[:, 0] , uv[:, 1]]).T
-
-  #       x1, x2 = np.min(uv[:, 0]), np.max(uv[:, 0])
-  #       y1, y2 = np.min(uv[:, 1]), np.max(uv[:, 1])
-  #       z = float(np.max(uv[:, 2]))
-
-  #       bbox.set_x1_y1_x2_y2(x1, y1, x2, y2)
-
-  #       num_onscreen = bbox.get_num_onscreen_corners()
-  #       bbox.has_offscreen = ((z <= 0) or (num_onscreen < 4))
-  #       bbox.is_visible = (
-  #         z > 0 and
-  #         num_onscreen > 0 and
-  #         object_label_record.occlusion < 100)
-
-  #       bbox.clamp_to_screen()
-  #       bbox.z = float(z)
-
-  #     bbox = BBox()
-  #     fill_cuboid_pts(bbox)
-  #     fill_bbox_core(bbox)
-  #     fill_extra(bbox)
-  #     return bbox
-
-
-  # @classmethod
-  # def _create_frame_rdd(cls, spark, splits=None):
-  #   uri_rdd = cls.create_frame_uri_rdd(spark, splits=splits)
-
-  #   def iter_frames(uri):
-  #     # from collections import namedtuple ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  #     # pt = namedtuple('pt', 'x y z')
-
-  #     frame = cls.FIXTURES.get_frame(uri)
-  #     for bbox in frame.image_bboxes:
-  #       row = {}
-
-  #       # Obj
-  #       row.update(bbox.to_row_dict())
-  #       # # TODO make spark accept numpy and numpy float64 things
-  #       # row = box.to_dict()
-  #       # IGNORE = ('cuboid_pts', 'cuboid_pts_image', 'ego_to_obj')
-  #       # for attr in IGNORE:
-  #       #   v = row.pop(attr)
-  #       #   if attr == 'cuboid_pts_image':
-  #       #     continue
-  #       #   if hasattr(v, 'shape'):
-  #       #     if len(v.shape) == 1:
-  #       #       row[attr] = pt(*v.tolist())
-  #       #     else:
-  #       #       row[attr] = [pt(*v[r, :3].tolist()) for r in range(v.shape[0])]
-        
-  #       # Anno Context
-  #       obj_uri = copy.deepcopy(frame.uri)
-  #       obj_uri.track_id = bbox.track_id
-  #       row.update(
-  #         frame_uri=str(uri),
-  #         uri=str(obj_uri),
-  #         **obj_uri.to_dict())
-  #       row.update(
-  #         city=cls.FIXTURES.get_loader(uri).city_name,
-  #         coarse_category=AV_OBJ_CLASS_TO_COARSE.get(bbox.category_name, ''))
-        
-  #       from pyspark.sql import Row
-  #       yield Row(**row)
-    
-  #   row_rdd = uri_rdd.flatMap(iter_anno_rows)
-  #   df = spark.createDataFrame(row_rdd)
-  #   df = cls._impute_rider_for_bikes(spark, df)
-  #   return df
+      rotation=rotmat, translation=olr.translation.reshape((3, 1)))
   
 
 class ImageAnnoTable(object):

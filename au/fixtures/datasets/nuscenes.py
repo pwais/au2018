@@ -134,8 +134,8 @@ class Fixtures(object):
       for split, scenes in split_to_scenes.items():
         # Ignore mini splits because they duplicate train/val
         if 'mini' not in split:
-          for scene in scenes:
-            scene_to_split[scene] = split
+          for s in scenes:
+            scene_to_split[s] = split
       cls._scene_to_split = scene_to_split
     return cls._scene_to_split[scene]
         
@@ -203,6 +203,7 @@ class FrameTable(av.FrameTableBase):
                   segment_id=scene_record['name'],
                   camera=sensor)
           uris.append(uri)
+
     return uris
   
   @classmethod
@@ -358,6 +359,7 @@ class FrameTable(av.FrameTableBase):
       box.translate(-np.array(pose_record['translation']))
       box.rotate(Quaternion(pose_record['rotation']).inverse)
 
+    from au.fixtures.datasets.av import NUSCENES_CATEGORY_TO_AU_AV_CATEGORY
     cuboids = []
     for box in boxes:
       cuboid = av.Cuboid()
@@ -370,12 +372,19 @@ class FrameTable(av.FrameTableBase):
       cuboid.timestamp = sd_record['timestamp']
       
       attribs = [
-        nusc.get('attribute', attrib_token)
+        nusc.get('attribute', attrib_token)['name']
         for attrib_token in sample_anno['attribute_tokens']
       ]
+      cuboid.au_category = NUSCENES_CATEGORY_TO_AU_AV_CATEGORY[box.name]
+      if 'cycle.with_rider' in attribs:
+        if box.name == 'vehicle.bicycle':
+          cuboid.au_category = 'bike_with_rider'
+        else: # Probably vehicle.motorcycle 
+          cuboid.au_category = 'motorcycle_with_rider'
+
       cuboid.extra = {
         'nuscenes_token': box.token,
-        'nuscenes_attribs': '|'.join(attrib['name'] for attrib in attribs),
+        'nuscenes_attribs': '|'.join(attribs),
       }
 
       # Points
