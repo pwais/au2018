@@ -759,8 +759,8 @@ class GPUInfo(object):
 import fasteners
 class SystemLock(object):
   """Uses fasteners / flock to provide a inter-process *and*
-  inter-thread lock using a file.  Yes, we do need our own
-  thread lock :(
+  inter-thread lock using a file.  Yes, in addition to the file lock, 
+  we do need our *own* thread lock, since fasteners isnt thread-safe :(
     https://github.com/harlowja/fasteners/blob/master/fasteners/process_lock.py#L62
   """
 
@@ -1030,6 +1030,7 @@ class SingleGPUWorker(Worker):
 
 class AtMostOneGPUWorker(SingleGPUWorker):
   CPU_ONLY_OK = True
+
 
 
 ### Tensorflow

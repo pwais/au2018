@@ -2,13 +2,63 @@
 import os
 
 import numpy as np
-import klepto # For a cache of NuScenes readers
 
 from au import conf
+from au import util
 from au.fixtures.datasets import av
 
 
 ## Utils
+import shelve
+from nuscenes.nuscenes import NuScenes
+class MemoryEfficientNuScenes(NuScenes):
+  def __init__(self, **kwargs):
+    
+    cache_dir = '/opt/au/cache/nuscenes_tables/' + kwargs['version'] + '/'
+    if not os.path.exists(cache_dir):
+      util.mkdir(cache_dir)
+      util.log.info("Creating shelve caches.  Reading source JSON ...")
+      nusc = NuScenes(**kwargs)
+      util.log.info("... done loading JSON data ...")
+      for table_name in nusc.table_names:
+        util.log.info("Building shelve cache file %s ..." % table_name)
+        cache_path = os.path.join(cache_dir, table_name)
+
+        import pickle
+        d = shelve.open(cache_path, protocol=pickle.HIGHEST_PROTOCOL)
+        rows = getattr(nusc, table_name)
+        d.update((r['token'], r) for r in rows)
+        d.close()
+      util.log.info("... done.")
+    
+    super(MemoryEfficientNuScenes, self).__init__(**kwargs)
+
+  def _get_table_map(self, table_name):
+    attr = '_cached_' + table_name
+    if not hasattr(self, attr):  
+      cache_dir = '/opt/au/cache/nuscenes_tables/' + self.version + '/'
+      cache_path = os.path.join(cache_dir, table_name)
+      util.log.info("Using shelve cache %s" % cache_path)
+      import pickle
+      d = shelve.open(cache_path, protocol=pickle.HIGHEST_PROTOCOL)
+      setattr(self, attr, d)
+    return getattr(self, attr)
+
+  def __load_table__(self, table_name):
+    return self._get_table_map(table_name).values()
+  
+  def __make_reverse_index__(self, verbose):
+    # Shelve data files have reverse indicies built-in
+    return
+  
+  def get(self, table_name, token):
+    assert table_name in self.table_names, \
+      "Table {} not found".format(table_name)
+    return self._get_table_map(table_name)[token]
+  
+  def getind(self, table_name, token):
+    raise ValueError("Unsupported in this hack")
+
 
 def transform_from_record(rec):
   from pyquaternion import Quaternion
@@ -94,13 +144,13 @@ class Fixtures(object):
 
   ## Derived Data
   
-  # @classmethod
-  # def dataroot(cls):
-  #   return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
-
   @classmethod
   def dataroot(cls):
-    return os.path.join(cls.ROOT, 'nuscenes_dataroot')
+    return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
+
+  # @classmethod
+  # def dataroot(cls):
+  #   return os.path.join(cls.ROOT, 'nuscenes_dataroot')
 
   @classmethod
   def index_root(cls):
@@ -116,12 +166,13 @@ class Fixtures(object):
   ## Public API
 
   @classmethod
-  @klepto.inf_cache(ignore=(0, 1))
   def get_loader(cls, version='v1.0-trainval'):
-    """Return a (maybe cached) `nuscenes.nuscenes.NuScenes` object
-    for the entire dataset."""
-    from nuscenes.nuscenes import NuScenes
-    nusc = NuScenes(version=version, dataroot=cls.dataroot(), verbose=True)
+    """Return a `nuscenes.nuscenes.NuScenes` object for the
+    dataset with `version`."""
+    # from nuscenes.nuscenes import NuScenes
+    # nusc = NuScenes(version=version, dataroot=cls.dataroot(), verbose=True)
+    # import pdb; pdb.set_trace()
+    nusc = MemoryEfficientNuScenes(version=version, dataroot=cls.dataroot(), verbose=True)
     return nusc
   
   @classmethod
@@ -151,13 +202,41 @@ class FrameTable(av.FrameTableBase):
   PROJECT_CUBOIDS_TO_CAM = True
   IGNORE_INVISIBLE_CUBOIDS = True
   
-  SETUP_URIS_PER_CHUNK = 1000
+  SETUP_URIS_PER_CHUNK = 100
 
   ## Subclass API
 
+  @classmethod
+  def _create_frame_rdds(cls, spark):
+    uris = cls._get_camera_uris()
+    print('len(uris)', len(uris))
 
+    # TODO fixmes
+    uri_rdd = spark.sparkContext.parallelize(uris)
+
+    # Try to group frames from segments together to make partitioning easier
+    # and result in fewer files
+    uri_rdd = uri_rdd.sortBy(lambda uri: uri.segment_id)
+    
+    frame_rdds = []
+    uris = uri_rdd.toLocalIterator()
+    for uri_chunk in util.ichunked(uris, cls.SETUP_URIS_PER_CHUNK):
+      chunk_uri_rdd = spark.sparkContext.parallelize(uri_chunk)
+      # create_frame = util.ThruputObserver.wrap_func(
+      #                       cls.create_frame,
+      #                       name='create_frame',
+      #                       log_on_del=True)
+
+      frame_rdd = chunk_uri_rdd.map(cls.create_frame)
+
+      frame_rdds.append(frame_rdd)
+    return frame_rdds
   
   ## Public API
+
+  @classmethod
+  def table_root(cls):
+    return '/outer_root/media/seagates-ext4/au_datas/nusc_frame_table'
 
   @classmethod
   def create_frame(cls, uri):
@@ -165,9 +244,6 @@ class FrameTable(av.FrameTableBase):
     scene_to_ts_to_sample_token = cls._scene_to_ts_to_sample_token()
     sample_token = scene_to_ts_to_sample_token[uri.segment_id][uri.timestamp]
     sample = nusc.get('sample', sample_token)
-
-    nusc.render_sample_data(sample['data']['CAM_FRONT'])
-
     return cls._create_frame_from_sample(uri, sample)
 
   @classmethod

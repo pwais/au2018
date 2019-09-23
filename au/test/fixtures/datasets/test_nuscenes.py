@@ -9,6 +9,10 @@ TEST_URIS = (
 def test_nuscenes():
 
   from au.fixtures.datasets.nuscenes import FrameTable
+  FrameTable.setup()
+
+  return
+  
 
   FrameTable.NUSC_VERSION = 'v1.0-mini'
   uris = FrameTable._get_camera_uris()
