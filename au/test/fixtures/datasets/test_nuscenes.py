@@ -9,14 +9,15 @@ TEST_URIS = (
 def test_nuscenes():
 
   from au.fixtures.datasets.nuscenes import FrameTable
-  FrameTable.setup()
+  # FrameTable.setup()
 
-  return
+  # return
   
 
-  FrameTable.NUSC_VERSION = 'v1.0-mini'
-  uris = FrameTable._get_camera_uris()
+  # FrameTable.NUSC_VERSION = 'v1.0-mini'
+  # uris = FrameTable._get_camera_uris()
   nusc = FrameTable.get_nusc()
+  import pdb; pdb.set_trace()
   # x = [a for a in nusc.sample_annotation if 'bicycle' in a['category_name']]
   # scen_toks = set([nusc.get('sample', xx['sample_token'])['scene_token'] for xx in x])
 

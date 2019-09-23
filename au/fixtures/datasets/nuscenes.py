@@ -465,7 +465,7 @@ class FrameTable(av.FrameTableBase):
 
       # Points
       cuboid.box3d = box.corners().T
-      cuboid.motion_corrected = False # TODO interpolation ? ~~~~~~~~~~~~~~~~~~~~
+      cuboid.motion_corrected = not sd_record['is_key_frame']
       cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
       
       # Pose
