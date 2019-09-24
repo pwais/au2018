@@ -322,19 +322,25 @@ class FrameTable(av.FrameTableBase):
 
   @classmethod
   def create_frame(cls, uri):
-    nusc = cls.get_nusc()
+    f = av.Frame(uri=uri)
+    cls._fill_ego_pose(f)
+    cls._fill_camera_images(f)
+    return f
 
-    best_sample_data, diff = nusc.get_nearest_sample_data(
-                                uri.segment_id, uri.timestamp)
-    assert diff == 0, "Can't interpolate all sensors for %s" % uri
+    # nusc = cls.get_nusc()
+
+    # best_sample_data, diff = nusc.get_nearest_sample_data(
+    #                             uri.segment_id, uri.timestamp)
+    # assert diff == 0, "Can't interpolate all sensors for %s" % uri
+    # assert False, best_sample_data
 
 
 
 
-    scene_to_ts_to_sample_token = cls._scene_to_ts_to_sample_token()
-    sample_token = scene_to_ts_to_sample_token[uri.segment_id][uri.timestamp]
-    sample = nusc.get('sample', sample_token)
-    return cls._create_frame_from_sample(uri, sample)
+    # scene_to_ts_to_sample_token = cls._scene_to_ts_to_sample_token()
+    # sample_token = scene_to_ts_to_sample_token[uri.segment_id][uri.timestamp]
+    # sample = nusc.get('sample', sample_token)
+    # return cls._create_frame_from_sample(uri, sample)
 
   @classmethod
   def get_nusc(cls):
@@ -352,24 +358,31 @@ class FrameTable(av.FrameTableBase):
     if not splits:
       splits = cls.FIXTURES.TRAIN_TEST_SPLITS
 
-    # TODO: get non-keyframes ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    if cls.KEYFRAMES_ONLY:
+      import itertools
+      sample_datas = itertools.chain.from_iterable(
+        (nusc.get('sample_data', token) for sensor, token in sample['data'])
+        for sample in nusc.sample)
+    else:
+      sample_datas = iter(nusc.sample_data)
+    
     uris = []
-    for sample in nusc.sample:
+    for sample_data in sample_datas:
+      if sample_data['sensor_modality'] != 'camera':
+        continue
+        
+      sample = nusc.get('sample', sample_data['sample_token'])
       scene_record = nusc.get('scene', sample['scene_token'])
       scene_split = cls.FIXTURES.get_split_for_scene(scene_record['name'])
       if scene_split not in splits:
         continue
 
-      for sensor, token in sample['data'].items():
-        sample_data = nusc.get('sample_data', token)
-        if sample_data['sensor_modality'] == 'camera':
-          uri = av.URI(
-                  dataset='nuscenes',
-                  split=scene_split,
-                  timestamp=sample['timestamp'],
-                  segment_id=scene_record['name'],
-                  camera=sensor)
-          uris.append(uri)
+      uris.append(av.URI(
+                    dataset='nuscenes',
+                    split=scene_split,
+                    timestamp=sample_data['timestamp'],
+                    segment_id=scene_record['name'],
+                    camera=sample_data['channel']))
 
     return uris
   
@@ -391,12 +404,12 @@ class FrameTable(av.FrameTableBase):
       cls.__scene_to_ts_to_sample_token = scene_to_ts_to_sample_token
     return cls.__scene_to_ts_to_sample_token
 
-  @classmethod
-  def _create_frame_from_sample(cls, uri, sample):
-    f = av.Frame(uri=uri)
-    cls._fill_ego_pose(f)
-    cls._fill_camera_images(f)
-    return f
+  # @classmethod
+  # def _create_frame_from_sample(cls, uri, sample):
+  #   f = av.Frame(uri=uri)
+  #   cls._fill_ego_pose(f)
+  #   cls._fill_camera_images(f)
+  #   return f
   
   @classmethod
   def _fill_ego_pose(cls, f):

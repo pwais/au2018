@@ -16,8 +16,62 @@ def test_nuscenes():
 
   FrameTable.NUSC_VERSION = 'v1.0-mini'
   uris = FrameTable._get_camera_uris()
-  # nusc = FrameTable.get_nusc()
-  # import pdb; pdb.set_trace()
+  nusc = FrameTable.get_nusc()
+
+  scenes = (
+    'scene-0061',
+    'scene-0103', 
+    'scene-0655', 
+    'scene-0553', 
+    'scene-0757', 
+    'scene-0796', 
+    'scene-0916', 
+    'scene-1077', 
+    'scene-1094', 
+    'scene-1100', 
+  )
+
+  import itertools
+  tasks = itertools.chain.from_iterable(
+    ((s, c) for c in nusc.ALL_CAMERAS) for s in scenes)
+  from au.spark import Spark
+  spark = Spark.getOrCreate()
+  task_rdd = spark.sparkContext.parallelize(tasks)
+
+  def render_vid(s_c):
+    scene, cam = s_c
+
+    vid_uris = [
+      u for u in uris if (u.segment_id == scene and u.camera == cam)]
+    vid_uris = sorted(vid_uris, key=lambda u: u.timestamp)
+
+    def gen_debug_frames():
+      from au import util
+      t = util.ThruputObserver(name='%s_%s' % (scene, cam), n_total=len(vid_uris))
+      for uri in vid_uris:
+        with t.observe(n=1):
+          FrameTable.NUSC_VERSION = 'v1.0-mini'
+          f = FrameTable.create_frame(uri)
+          ci = f.camera_images[0]
+          import numpy as np
+          debug_img = np.copy(ci.image)
+          from au import plotting as aupl
+          aupl.draw_xy_depth_in_image(debug_img, ci.cloud.cloud, alpha=0.7)
+          for bbox in ci.bboxes:
+            bbox.draw_in_image(debug_img)
+        yield debug_img
+        t.maybe_log_progress(every_n=1)
+  
+    import imageio
+    imageio.mimwrite(
+        '/tmp/%s_%s.mov' % (scene, cam),
+        gen_debug_frames(),
+        format='mov', 
+        fps=10)
+  task_rdd.foreach(render_vid)
+  return
+
+
   # x = [a for a in nusc.sample_annotation if 'bicycle' in a['category_name']]
   # scen_toks = set([nusc.get('sample', xx['sample_token'])['scene_token'] for xx in x])
 
