@@ -1,6 +1,7 @@
 
 import os
 
+import pandas as pd
 import numpy as np
 
 from au import conf
@@ -8,57 +9,8 @@ from au import util
 from au.fixtures.datasets import av
 
 
+
 ## Utils
-import shelve
-from nuscenes.nuscenes import NuScenes
-class MemoryEfficientNuScenes(NuScenes):
-  def __init__(self, **kwargs):
-    
-    cache_dir = '/opt/au/cache/nuscenes_tables/' + kwargs['version'] + '/'
-    if not os.path.exists(cache_dir):
-      util.mkdir(cache_dir)
-      util.log.info("Creating shelve caches.  Reading source JSON ...")
-      nusc = NuScenes(**kwargs)
-      util.log.info("... done loading JSON data ...")
-      for table_name in nusc.table_names:
-        util.log.info("Building shelve cache file %s ..." % table_name)
-        cache_path = os.path.join(cache_dir, table_name)
-
-        import pickle
-        d = shelve.open(cache_path, protocol=pickle.HIGHEST_PROTOCOL)
-        rows = getattr(nusc, table_name)
-        d.update((r['token'], r) for r in rows)
-        d.close()
-      util.log.info("... done.")
-    
-    super(MemoryEfficientNuScenes, self).__init__(**kwargs)
-
-  def _get_table_map(self, table_name):
-    attr = '_cached_' + table_name
-    if not hasattr(self, attr):  
-      cache_dir = '/opt/au/cache/nuscenes_tables/' + self.version + '/'
-      cache_path = os.path.join(cache_dir, table_name)
-      util.log.info("Using shelve cache %s" % cache_path)
-      import pickle
-      d = shelve.open(cache_path, protocol=pickle.HIGHEST_PROTOCOL)
-      setattr(self, attr, d)
-    return getattr(self, attr)
-
-  def __load_table__(self, table_name):
-    return self._get_table_map(table_name).values()
-  
-  def __make_reverse_index__(self, verbose):
-    # Shelve data files have reverse indicies built-in
-    return
-  
-  def get(self, table_name, token):
-    assert table_name in self.table_names, \
-      "Table {} not found".format(table_name)
-    return self._get_table_map(table_name)[token]
-  
-  def getind(self, table_name, token):
-    raise ValueError("Unsupported in this hack")
-
 
 def transform_from_record(rec):
   from pyquaternion import Quaternion
@@ -83,6 +35,136 @@ def get_camera_normal(K, extrinsic):
     pv = np.linalg.det(P[:3,:3]) * P[2,:3].T
     pv_hat = pv / np.linalg.norm(pv)
     return pv_hat
+
+import shelve
+from nuscenes.nuscenes import NuScenes
+class AUNuScenes(NuScenes):
+
+  ### Memory Efficiency
+  # The base NuScenes object uses 8GB resident RAM (each instance) due to
+  # the "tables" of JSON data that it loads.  Below we replace these "tables"
+  # with disk-based `shelve`s in order to dramatically reduce memory usage.
+  # This change is needed in order to support instantiating multiple
+  # NuScenes readers per machine (e.g. for Spark)
+
+  CACHE_ROOT = os.path.join(conf.AU_DATA_CACHE, 'nuscenes_table_cache')
+
+  SAMPLE_DATA_TS_CACHE_NAME = 'sample_data_ts_df.parquet'
+
+  ALL_CAMERAS = (
+    'CAM_FRONT',
+    'CAM_FRONT_LEFT',
+    'CAM_FRONT_RIGHT',
+    'CAM_BACK',
+    'CAM_BACK_LEFT',
+    'CAM_BACK_RIGHT',
+  )
+
+  def _get_cache_path(self, cache_name):
+    return os.path.join(self.CACHE_ROOT, self.version, cache_name)
+
+  def __init__(self, **kwargs):
+    self.version = kwargs['version']
+      # Base ctor does this, but we'll do it here for convenience
+    
+    if util.missing_or_empty(self._get_cache_path('')):
+      util.log.info("Creating shelve caches.  Reading source JSON ...")
+      nusc = NuScenes(**kwargs)
+        # NB: The above ctor call not only loads all JSON but also runs
+        # 'reverse indexing', which edits the data loaded into memory.  We'll
+        # then write the edited data below using `shelve` so that we don't have
+        # to try to make `AUNuScenes` support reverse indexing itself.
+      util.log.info("... done loading JSON data ...")
+      
+      for table_name in nusc.table_names:
+        util.log.info("Building shelve cache file %s ..." % table_name)
+        
+        cache_path = self._get_cache_path(table_name)
+        util.mkdir(os.path.dirname(cache_path))
+        
+        import pickle
+        d = shelve.open(cache_path, protocol=pickle.HIGHEST_PROTOCOL)
+        rows = getattr(nusc, table_name)
+        d.update((r['token'], r) for r in rows)
+        d.close()
+      util.log.info("... done.")
+      del nusc # Free several GB memory
+    
+    super(AUNuScenes, self).__init__(**kwargs)
+
+  def _get_table(self, table_name):
+    attr = '_cached_' + table_name
+    if not hasattr(self, attr):
+      cache_path = self._get_cache_path(table_name)
+      util.log.info("Using shelve cache %s" % cache_path)
+      d = shelve.open(cache_path)
+      setattr(self, attr, d)
+    return getattr(self, attr)
+
+  def __load_table__(self, table_name):
+    return self._get_table(table_name).values()
+      # Despite the type annotation, the parent class actually returns a list
+      # of dicts.  This return type is a Values View (a generator-like thing)
+      # and does not break any core NuScenes functionality.
+  
+  def __make_reverse_index__(self, verbose):
+    # NB: Shelve data files have, built-in, the reverse indicies that the
+    # base `NuScenes` creates.  See above.
+    
+    # Build a timestamp index over `sample_data`s to support efficient
+    # interpolation.
+    cache_path = self._get_cache_path(self.SAMPLE_DATA_TS_CACHE_NAME)
+    if not os.path.exists(cache_path):
+      util.log.info("Building sample_data timestamp cache ...")
+
+      sample_to_scene = {}
+      for sample in self.sample:
+        scene = self.get('scene', sample['scene_token'])
+        sample_to_scene[sample['token']] = scene['token']
+    
+      def to_ts_row(sample_data):
+        row = dict(sample_data)
+        row['scene_token'] = sample_to_scene[row['sample_token']]
+        row['scene_name'] = self.get('scene', row['scene_token'])['name']
+        return row
+    
+      df = pd.DataFrame(to_ts_row(r) for r in self.sample_data)
+      df.to_parquet(cache_path)
+      del df # Free several GB of memory
+
+      util.log.info("... done.")
+
+    return
+  
+  def get(self, table_name, token):
+    assert table_name in self.table_names, \
+      "Table {} not found".format(table_name)
+    return self._get_table(table_name)[token]
+  
+  def getind(self, table_name, token):
+    raise ValueError("Unsupported / unnecessary; provided by shelve")
+
+
+
+  ### AU-added Utils
+
+  def get_nearest_sample_data(self, scene_name, timestamp, channel=None):
+    if not hasattr(self, '_sample_data_ts_df'):
+      cache_path = self._get_cache_path(self.SAMPLE_DATA_TS_CACHE_NAME)
+      util.log.info("Using sample_data timestamp cache at %s" % cache_path)
+      self._sample_data_ts_df = pd.read_parquet(cache_path)
+    
+    df = self._sample_data_ts_df
+    # First narrow down to the relevant scene / car and (maybe) sensor
+    df = df[df['scene_name'] == scene_name]
+    if channel:
+      df = df[df['channel'] == channel]
+    
+    nearest = df.iloc[  (df['timestamp'] - timestamp).abs().argsort()[:1]  ]
+    row = nearest.to_dict(orient='records')[0]
+
+    return row, row['timestamp'] - timestamp
+
 
 
 ## Data
@@ -117,6 +199,7 @@ class Fixtures(object):
   
   TRAIN_TEST_SPLITS = ('train', 'val')
 
+
   ## Source Data
 
   @classmethod
@@ -144,13 +227,13 @@ class Fixtures(object):
 
   ## Derived Data
   
-  @classmethod
-  def dataroot(cls):
-    return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
-
   # @classmethod
   # def dataroot(cls):
-  #   return os.path.join(cls.ROOT, 'nuscenes_dataroot')
+  #   return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
+
+  @classmethod
+  def dataroot(cls):
+    return os.path.join(cls.ROOT, 'nuscenes_dataroot')
 
   @classmethod
   def index_root(cls):
@@ -167,12 +250,8 @@ class Fixtures(object):
 
   @classmethod
   def get_loader(cls, version='v1.0-trainval'):
-    """Return a `nuscenes.nuscenes.NuScenes` object for the
-    dataset with `version`."""
-    # from nuscenes.nuscenes import NuScenes
-    # nusc = NuScenes(version=version, dataroot=cls.dataroot(), verbose=True)
-    # import pdb; pdb.set_trace()
-    nusc = MemoryEfficientNuScenes(version=version, dataroot=cls.dataroot(), verbose=True)
+    """Create and return a `NuScenes` object for the given `version`."""
+    nusc = AUNuScenes(version=version, dataroot=cls.dataroot(), verbose=True)
     return nusc
   
   @classmethod
@@ -201,6 +280,9 @@ class FrameTable(av.FrameTableBase):
   PROJECT_CLOUDS_TO_CAM = True
   PROJECT_CUBOIDS_TO_CAM = True
   IGNORE_INVISIBLE_CUBOIDS = True
+
+  KEYFRAMES_ONLY = False
+    # When disabled, will use motion-corrected points
   
   SETUP_URIS_PER_CHUNK = 100
 
@@ -240,7 +322,15 @@ class FrameTable(av.FrameTableBase):
 
   @classmethod
   def create_frame(cls, uri):
-    nusc = cls.get_nusc() 
+    nusc = cls.get_nusc()
+
+    best_sample_data, diff = nusc.get_nearest_sample_data(
+                                uri.segment_id, uri.timestamp)
+    assert diff == 0, "Can't interpolate all sensors for %s" % uri
+
+
+
+
     scene_to_ts_to_sample_token = cls._scene_to_ts_to_sample_token()
     sample_token = scene_to_ts_to_sample_token[uri.segment_id][uri.timestamp]
     sample = nusc.get('sample', sample_token)
@@ -262,6 +352,7 @@ class FrameTable(av.FrameTableBase):
     if not splits:
       splits = cls.FIXTURES.TRAIN_TEST_SPLITS
 
+    # TODO: get non-keyframes ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     uris = []
     for sample in nusc.sample:
       scene_record = nusc.get('scene', sample['scene_token'])
@@ -303,36 +394,54 @@ class FrameTable(av.FrameTableBase):
   @classmethod
   def _create_frame_from_sample(cls, uri, sample):
     f = av.Frame(uri=uri)
-    cls._fill_ego_pose(uri, sample, f)
-    cls._fill_camera_images(uri, sample, f)
+    cls._fill_ego_pose(f)
+    cls._fill_camera_images(f)
     return f
   
   @classmethod
-  def _fill_ego_pose(cls, uri, sample, f):
+  def _fill_ego_pose(cls, f):
     nusc = cls.get_nusc()
+    uri = f.uri
 
-    # For now, always set ego pose using the *lidar* timestamp, as is done
-    # in nuscenes.  (They probably localize mostly from lidar anyways).
-    token = sample['data']['LIDAR_TOP']
-    sd_record = nusc.get('sample_data', token)
-    pose_record = nusc.get('ego_pose', sd_record['ego_pose_token'])
-    
+    # Every sample has a pose, so we should get an exact match
+    best_sd, diff = nusc.get_nearest_sample_data(
+                                uri.segment_id,
+                                uri.timestamp)
+    assert diff == 0, "Can't interpolate pose"
+
+    token = best_sd['ego_pose_token']
+    pose_record = nusc.get('ego_pose', best_sd['ego_pose_token'])
     f.world_to_ego = transform_from_record(pose_record)
 
+    # # For now, always set ego pose using the *lidar* timestamp, as is done
+    # # in nuscenes.  (They probably localize mostly from lidar anyways).
+    # token = sample['data']['LIDAR_TOP']
+    # sd_record = nusc.get('sample_data', token)
+    
+
   @classmethod
-  def _fill_camera_images(cls, uri, sample, f):
+  def _fill_camera_images(cls, f):
     nusc = cls.get_nusc()
+    uri = f.uri
+    
+    cameras = list(nusc.ALL_CAMERAS)
     if uri.camera:
-      camera_token = sample['data'][uri.camera]
-      ci = cls._get_camera_image(uri, camera_token, f)
+      cameras = [uri.camera]
+    
+    for camera in cameras:
+      best_sd, diff = nusc.get_nearest_sample_data(
+                                uri.segment_id,
+                                uri.timestamp,
+                                channel=camera)
+
+      ci = cls._get_camera_image(uri, best_sd)
       f.camera_images.append(ci)
-    else:
-      raise ValueError("Grouping multiple cameras etc into frames TODO")
   
   @classmethod
-  def _get_camera_image(cls, uri, camera_token, f):
+  def _get_camera_image(cls, uri, sd_record):
     nusc = cls.get_nusc()
-    sd_record = nusc.get('sample_data', camera_token)
+    # sd_record = nusc.get('sample_data', camera_token)~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    camera_token = sd_record['token']
     cs_record = nusc.get(
       'calibrated_sensor', sd_record['calibrated_sensor_token'])
     sensor_record = nusc.get('sensor', cs_record['sensor_token'])
@@ -368,8 +477,9 @@ class FrameTable(av.FrameTableBase):
     
     if cls.PROJECT_CLOUDS_TO_CAM:
       for sensor in ('LIDAR_TOP',):
-        sample = nusc.get('sample', sd_record['sample_token'])
-        pc = cls._get_point_cloud_in_ego(sample, sensor=sensor)
+        # sample = nusc.get('sample', sd_record['sample_token']) ~~~~~~~~~~~~~~~~
+        target_pose_token = sd_record['ego_pose_token']
+        pc = cls._get_point_cloud_in_ego(uri, sensor, target_pose_token)
 
         # Project to image
         pc.cloud = ci.project_ego_to_image(pc.cloud, omit_offscreen=True)
@@ -388,29 +498,58 @@ class FrameTable(av.FrameTableBase):
     return ci
 
   @classmethod
-  def _get_point_cloud_in_ego(cls, sample, sensor='LIDAR_TOP'):
+  def _get_point_cloud_in_ego(cls, uri, sensor, target_pose_token):
     # Based upon nuscenes.py#map_pointcloud_to_image()
-    import os.path as osp
     
     from pyquaternion import Quaternion
-
     from nuscenes.utils.data_classes import LidarPointCloud
     from nuscenes.utils.data_classes import RadarPointCloud
-    
+
     nusc = cls.get_nusc()
-    pointsensor_token = sample['data'][sensor]
-    pointsensor = nusc.get('sample_data', pointsensor_token)
-    pcl_path = osp.join(nusc.dataroot, pointsensor['filename'])
+    
+    
+
+    # Get the cloud closest to the uri time
+    pointsensor, diff = nusc.get_nearest_sample_data(
+                                uri.segment_id,
+                                uri.timestamp,
+                                channel=sensor)
+    
+    #pointsensor_token = sample['data'][sensor]
+    #pointsensor = nusc.get('sample_data', pointsensor_token)
+    pcl_path = os.path.join(nusc.dataroot, pointsensor['filename'])
     if pointsensor['sensor_modality'] == 'lidar':
       pc = LidarPointCloud.from_file(pcl_path)
     else:
       pc = RadarPointCloud.from_file(pcl_path)
 
-    # Points live in the point sensor frame, so transform to ego frame
+    # Step 1: Points live in the point sensor frame.  First transform to
+    # world frame:
+    # 1a transform to ego
+    # First step: transform the point-cloud to the ego vehicle frame for the timestamp of the sweep.
     cs_record = nusc.get(
-      'calibrated_sensor', pointsensor['calibrated_sensor_token'])
+                  'calibrated_sensor', pointsensor['calibrated_sensor_token'])
     pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix)
     pc.translate(np.array(cs_record['translation']))
+
+    # 1b transform to the global frame.
+    poserecord = nusc.get('ego_pose', pointsensor['ego_pose_token'])
+    pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix)
+    pc.translate(np.array(poserecord['translation']))
+
+    # Step 2: Send points into the ego frame at the target timestamp
+    poserecord = nusc.get('ego_pose', target_pose_token)
+    pc.translate(-np.array(poserecord['translation']))
+    pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix.T)
+
+    
+    # # before applying ego adjustment / interpolation.
+    # #  so transform to ego frame
+    # cs_record = nusc.get(
+    #   'calibrated_sensor', pointsensor['calibrated_sensor_token'])
+    # pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix)
+    # pc.translate(np.array(cs_record['translation']))
+
     n_xyz = pc.points[:3, :].T
       # Throw out intensity (lidar) and ... other stuff (radar)
     return av.PointCloud(
@@ -418,12 +557,15 @@ class FrameTable(av.FrameTableBase):
       timestamp=pointsensor['timestamp'],
       cloud=n_xyz,
       ego_to_sensor=transform_from_record(cs_record),
-      motion_corrected=False, # TODO interpolation for cam ~~~~~~~~~~~~~~~~~~~~~~~
+      motion_corrected=(pointsensor['ego_pose_token'] != target_pose_token),
     )
     
   @classmethod
   def _get_cuboids_in_ego(cls, sample_data_token):
     nusc = cls.get_nusc()
+
+    # NB: This helper always does motion correction (interpolation) unless
+    # `sample_data_token` refers to a keyframe.
     boxes = nusc.get_boxes(sample_data_token)
   
     # Boxes are in world frame.  Move all to ego frame.
@@ -465,7 +607,7 @@ class FrameTable(av.FrameTableBase):
 
       # Points
       cuboid.box3d = box.corners().T
-      cuboid.motion_corrected = not sd_record['is_key_frame']
+      cuboid.motion_corrected = (not sd_record['is_key_frame'])
       cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
       
       # Pose
