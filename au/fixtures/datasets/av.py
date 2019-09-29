@@ -579,7 +579,8 @@ class CameraImage(object):
     #   print(cuboid.box3d)
     #   import pdb; pdb.set_trace()
     # return True
-
+    # if cuboid.track_id == 'nuscenes_instance_token:e91afa15647c4c4994f19aeb302c7179':
+    #   import pdb; pdb.set_trace()
     return is_in_fov_h and is_in_fov_v
 
   def project_cuboid_to_bbox(self, cuboid):
@@ -591,10 +592,105 @@ class CameraImage(object):
             cuboid=cuboid)
     
     ## Fill Points
-    cuboid_points = copy.deepcopy(cuboid.box3d)
-    uvd = self.project_ego_to_image(cuboid.box3d, omit_offscreen=False)
+    pts_in_cam = self.cam_from_ego.apply(cuboid.box3d).T
+    centroid = np.mean(pts_in_cam, axis=0)
+
+    # Since the cuboid could be behind or alongside the camera, not all
+    # of the cuboid faces may be visible.  If the object is very large,
+    # perhaps only a single edge is visible.  To find the image-space 
+    # 2-D axis-aligned bounding box that bounds all cuboid points, we find
+    # the horizonal and vertical angles relative to the camera principal
+    # axis (Z in the camera frame) that fits all cuboid points.  Then
+    # if the object is partially out of view (or even behind the camera),
+    # it is easy to clip the bounding box to the camera field of view.
+
+    def l2_normalized(v):
+      if len(v.shape) > 1:
+        # Normalize row-wise
+        return v / np.linalg.norm(v, axis=1)[:, np.newaxis]
+      else:
+        return v / np.linalg.norm(v)
+
+    def to_0_2pi(thetas):
+      return (thetas + 2 * math.pi) % 2 * math.pi
+
+    def theta_signed(cam_h, cuboid_h):
+      thetas = np.arctan2(np.cross(cam_h, cuboid_h), np.dot(cam_h, cuboid_h.T))
+      return thetas
+      # return to_0_2pi(thetas)
+
+    Z_HAT = np.array([0, 1]) # Principal axis in X-Z and Y-Z planes
+    pts_xz = pts_in_cam[:, (0, 2)]
+    theta_h = theta_signed(l2_normalized(pts_xz), Z_HAT)
+    pts_yz = pts_in_cam[:, (1, 2)]
+    theta_v = theta_signed(l2_normalized(pts_yz), Z_HAT)
+
+    # center_h = theta_signed(Z_HAT, l2_normalized(centroid[(0, 2)]))
+    # center_v = theta_signed(Z_HAT, l2_normalized(centroid[(1, 2)]))
+
+    f_x = self.K[0, 0]
+    f_y = self.K[1, 1]
+    c_x = self.K[0, 2]
+    c_y = self.K[1, 2]
+    fov_h = 2. * math.atan(.5 * self.width / f_x)
+    fov_v = 2. * math.atan(.5 * self.height / f_y)
+
+    t_h_min, t_h_max = theta_h.min(), theta_h.max()
+    t_v_min, t_v_max = theta_v.min(), theta_v.max()
+
+    def to_pixel(theta, fov, length):
+      half_fov = .5 * fov
+      # p = np.clip(theta, -half_fov, half_fov) / half_fov
+      p = theta / half_fov
+      p = (p + 1) / 2
+      return length * p
+
+    x1 = to_pixel(t_h_min, fov_h, self.width)
+    x2 = to_pixel(t_h_max, fov_h, self.width)
+    y1 = to_pixel(t_v_min, fov_v, self.height)
+    y2 = to_pixel(t_v_max, fov_v, self.height)
+
+    focal_pixel_h = (.5 * self.width) / math.tan(fov_h * .5)
+    focal_pixel_v = (.5 * self.height) / math.tan(fov_v * .5)
+
+    uvd = self.K.dot(pts_in_cam.T)
+    uvd[0:2, :] /= (uvd[2, :])
+    uvd = uvd.T
+
+    # import pdb; pdb.set_trace()
+    uvt = np.stack([
+      np.sin(theta_h) * np.linalg.norm(pts_xz, axis=1) * focal_pixel_h,
+      np.sin(theta_v) * np.linalg.norm(pts_yz, axis=1) * focal_pixel_v,
+      uvd[:,2],
+    ]).T
+
+    for r in range(8):
+      if uvd[r, 2] < 0:
+        uvd[r, :] = uvt[r, :]
+
+    # if cuboid.track_id == 'nuscenes_instance_token:df8a0ce6d79446369952166553ede088':
+    #   import pdb; pdb.set_trace()
+
+
+
+
+
+
+
+
+
+
+
+
+    # print('')
+    # uvd = self.project_ego_to_image(cuboid.box3d, omit_offscreen=False)
 
     bbox.cuboid_pts = uvd
+    # print('uvd')
+    # print(uvd)
+    # print()
+    # if cuboid.track_id == 'nuscenes_instance_token:e91afa15647c4c4994f19aeb302c7179':
+    #   import pdb; pdb.set_trace()
 
     x1, x2 = np.min(uvd[:, 0]), np.max(uvd[:, 0])
     y1, y2 = np.min(uvd[:, 1]), np.max(uvd[:, 1])
@@ -717,23 +813,6 @@ class CroppedCameraImage(CameraImage):
     uvd = super(CroppedCameraImage, self).project_ego_to_image(
       pts, omit_offscreen=omit_offscreen)
     
-    if omit_offscreen:
-      x, y, w, h = (
-        self.viewport.x, self.viewport.y,
-        self.viewport.width, self.viewport.height)
-      
-      uv = uvd.T
-      idx_ = np.where(
-              np.logical_and.reduce((
-                # Filter offscreen points
-                x <= uv[0, :], uv[0, :] < x + w - 1.0,
-                y <= uv[1, :], uv[1, :] < y + h - 1.0,
-                # Filter behind-screen points
-                uv[2, :] > 0)))
-      idx_ = idx_[0]
-      uv = uv[:, idx_]
-      uvd = uv.T
-
     # Correct for moved image origin
     uvd -= np.array([self.viewport.x, self.viewport.y, 0])
     return uvd
