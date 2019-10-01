@@ -4,7 +4,7 @@ TEST_URIS = (
 
   # # Front cam with person in truck and with cone way off to side
   # 'avframe://dataset=nuscenes&split=train&segment_id=scene-0061&timestamp=1532402928147847&camera=CAM_FRONT',
-  # 'avframe://dataset=nuscenes&split=train&segment_id=scene-0061&timestamp=1532402928762460&camera=CAM_FRONT',
+  'avframe://dataset=nuscenes&split=train&segment_id=scene-0061&timestamp=1532402928762460&camera=CAM_FRONT',
   'avframe://dataset=nuscenes&split=train&segment_id=scene-0655&timestamp=1535385107162404&camera=CAM_FRONT',
 )
 

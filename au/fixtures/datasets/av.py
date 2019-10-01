@@ -658,15 +658,38 @@ class CameraImage(object):
     uvd = uvd.T
 
     # import pdb; pdb.set_trace()
-    uvt = np.stack([
+    uvt_good = np.stack([
       np.sin(theta_h) * np.linalg.norm(pts_xz, axis=1) * focal_pixel_h,
       np.sin(theta_v) * np.linalg.norm(pts_yz, axis=1) * focal_pixel_v,
       uvd[:,2],
     ]).T
 
+    # def to_point(theta, dist, fov, focal_l, pts):
+    #   # disp = (theta > 0) * dist
+    #   p_prime = 2. * np.tan(np.abs(theta) * .5) * focal_l * pts[:,0]
+    #   return p_prime / np.abs(pts[:,1]) + .5 * dist
+
+    # uvt = np.stack([
+    #   to_point(theta_h, self.width, fov_h, f_x, pts_xz),
+    #   to_point(theta_v, self.height, fov_v, f_y, pts_yz),
+    #   # np.sin(theta_h - fov_h * .5) * f_x + .5 * self.width+ self.width, #np.linalg.norm(pts_xz, axis=1) * focal_pixel_h,
+    #   # np.sin(theta_v - fov_v * .5) * f_y + , #np.linalg.norm(pts_yz, axis=1) * focal_pixel_v,
+    #   uvd[:,2],
+    # ]).T
+
+    pts_xy = pts_in_cam[:, :2]
+    theta_xy = np.arctan2(pts_xy[:, 1], pts_xy[:, 0])
+    uvt = np.stack([
+      np.cos(theta_xy) * f_x * (1 / .001),
+      np.sin(theta_xy) * f_y * (1 / .001),
+      uvd[:,2],
+    ]).T
+
     for r in range(8):
-      if uvd[r, 2] < 0:
+      # if abs(theta_h[r]) > fov_h * .5 or abs(theta_v[r]) > fov_v * .5:
+      if uvd[r, 2] <= 0:
         uvd[r, :] = uvt[r, :]
+    # uvd = uvt
 
     # if cuboid.track_id == 'nuscenes_instance_token:df8a0ce6d79446369952166553ede088':
     #   import pdb; pdb.set_trace()
