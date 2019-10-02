@@ -111,7 +111,15 @@ def maybe_make_homogeneous(pts, dim=3):
     pts = np.hstack((pts, np.ones((pts.shape[0], 1))))
   return pts
 
+def l2_normalized(v):
+  if len(v.shape) > 1:
+    # Normalize row-wise
+    return v / np.linalg.norm(v, axis=1)[:, np.newaxis]
+  else:
+    return v / np.linalg.norm(v)
 
+def theta_signed(axis, v):
+  return np.arctan2(np.cross(axis, v), np.dot(axis, v.T))
 
 ###
 ### Core Data Structures
@@ -504,29 +512,72 @@ class CameraImage(object):
       return imageio.imread(BytesIO(self.image_jpeg))
     return img
   
+  def get_fov(self):
+    """Return the horizontal and verticle Fields of View in radians:
+    (FoV_h, FoV_v)"""
+    f_x = self.K[0, 0]
+    f_y = self.K[1, 1]
+    fov_h = 2. * math.atan(.5 * self.width / f_x)
+    fov_v = 2. * math.atan(.5 * self.height / f_y)
+    return fov_h, fov_v
+
+
+  # def project_ego_to_image(self, pts, omit_offscreen=True):
+  #   """Given a cloud of `pts` of shape n x (x, y, z) in the ego frame, project
+  #   the points to the camera image plane and return points of the form 
+  #   n x (x, y, depth)"""
+  #   pts_from_cam = self.cam_from_ego.apply(pts)
+  #   uvd = self.K.dot(pts_from_cam)
+  #   uvd[0:2, :] /= uvd[2, :]
+  #   uvd = uvd.T
+
+  #   if omit_offscreen:
+  #     x, y, w, h = 0, 0, self.width, self.height
+        
+  #     uv = uvd.T
+  #     idx_ = np.where(
+  #             np.logical_and.reduce((
+  #               # Filter offscreen points
+  #               x <= uv[0, :], uv[0, :] < x + w - 1.0,
+  #               y <= uv[1, :], uv[1, :] < y + h - 1.0,
+  #               # Filter behind-screen points
+  #               uv[2, :] > 0)))
+  #     idx_ = idx_[0]
+  #     uv = uv[:, idx_]
+  #     uvd = uv.T
+
+  #   return uvd
+
   def project_ego_to_image(self, pts, omit_offscreen=True):
     """Given a cloud of `pts` of shape n x (x, y, z) in the ego frame, project
     the points to the camera image plane and return points of the form 
     n x (x, y, depth)"""
-    pts_from_cam = self.cam_from_ego.apply(pts)
-    uvd = self.K.dot(pts_from_cam)
-    uvd[0:2, :] /= uvd[2, :]
-    uvd = uvd.T
+    pts_in_cam = self.cam_from_ego.apply(pts).T
 
     if omit_offscreen:
-      x, y, w, h = 0, 0, self.width, self.height
-        
-      uv = uvd.T
+      fov_h, fov_v = self.get_fov()
+      half_fov_h, half_fov_v = .5 * fov_h, .5 * fov_v
+
+      Z_HAT = np.array([0, 1]) # Principal axis in X-Z and Y-Z planes
+      pts_xz = pts_in_cam[:, (0, 2)]
+      theta_h = theta_signed(l2_normalized(pts_xz), Z_HAT)
+      pts_yz = pts_in_cam[:, (1, 2)]
+      theta_v = theta_signed(l2_normalized(pts_yz), Z_HAT)
+
+      PADDING_RADIANS = math.pi / 8
       idx_ = np.where(
               np.logical_and.reduce((
-                # Filter offscreen points
-                x <= uv[0, :], uv[0, :] < x + w - 1.0,
-                y <= uv[1, :], uv[1, :] < y + h - 1.0,
-                # Filter behind-screen points
-                uv[2, :] > 0)))
+                # Filter off-the-edge points
+                np.abs(theta_h) <= half_fov_h + PADDING_RADIANS,
+                np.abs(theta_v) <= half_fov_v + PADDING_RADIANS)))
+                # # Filter behind-screen points
+                # uv[2, :] > 0)))
       idx_ = idx_[0]
-      uv = uv[:, idx_]
-      uvd = uv.T
+      pts_in_cam = pts_in_cam[idx_, :]
+
+    uvd = self.K.dot(pts_in_cam.T)
+    uvd[0:2, :] /= uvd[2, :]
+    uvd = uvd.T
 
     return uvd
   
@@ -537,17 +588,7 @@ class CameraImage(object):
     fov_h = 2. * math.atan(.5 * self.width / f_x)
     fov_v = 2. * math.atan(.5 * self.height / f_y)
 
-    def l2_normalized(v):
-      if len(v.shape) > 1:
-        # Normalize row-wise
-        return v / np.linalg.norm(v, axis=1)[:, np.newaxis]
-      else:
-        return v / np.linalg.norm(v)
-
-    def theta_signed(cam_h, cuboid_h):
-      return np.arctan2(
-        np.cross(cam_h, cuboid_h),
-        np.dot(cam_h, cuboid_h.T))
+    
 
     def intervals_overlap(i1, i2):
       (s1, e1), (s2, e2) = (i1, i2)
@@ -632,8 +673,7 @@ class CameraImage(object):
     f_y = self.K[1, 1]
     c_x = self.K[0, 2]
     c_y = self.K[1, 2]
-    fov_h = 2. * math.atan(.5 * self.width / f_x)
-    fov_v = 2. * math.atan(.5 * self.height / f_y)
+    fov_h, fov_v = self.get_fov()
 
     t_h_min, t_h_max = theta_h.min(), theta_h.max()
     t_v_min, t_v_max = theta_v.min(), theta_v.max()
