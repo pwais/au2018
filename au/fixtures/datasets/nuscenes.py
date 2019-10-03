@@ -161,9 +161,11 @@ class AUNuScenes(NuScenes):
       df = df[df['channel'] == channel]
     
     nearest = df.iloc[  (df['timestamp'] - timestamp).abs().argsort()[:1]  ]
-    row = nearest.to_dict(orient='records')[0]
-
-    return row, row['timestamp'] - timestamp
+    if len(nearest) > 0:
+      row = nearest.to_dict(orient='records')[0]
+      return row, row['timestamp'] - timestamp
+    else:
+      return None, 0
 
 
 
@@ -227,13 +229,14 @@ class Fixtures(object):
 
   ## Derived Data
   
-  # @classmethod
-  # def dataroot(cls):
-  #   return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
-
   @classmethod
   def dataroot(cls):
-    return os.path.join(cls.ROOT, 'nuscenes_dataroot')
+    # return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
+    return '/outer_root/media/seagates-ext4/au_datas/lyft_level_5_root/train'
+
+  # @classmethod
+  # def dataroot(cls):
+  #   return os.path.join(cls.ROOT, 'nuscenes_dataroot')
 
   @classmethod
   def index_root(cls):
@@ -267,7 +270,8 @@ class Fixtures(object):
           for s in scenes:
             scene_to_split[s] = split
       cls._scene_to_split = scene_to_split
-    return cls._scene_to_split[scene]
+    # return cls._scene_to_split[scene]
+    return 'train' # for lyft level 5, we assume all train for now
         
 
 
@@ -281,7 +285,7 @@ class FrameTable(av.FrameTableBase):
   PROJECT_CUBOIDS_TO_CAM = True
   IGNORE_INVISIBLE_CUBOIDS = True
 
-  KEYFRAMES_ONLY = False
+  KEYFRAMES_ONLY = True#False
     # When disabled, will use motion-corrected points
   
   SETUP_URIS_PER_CHUNK = 100
@@ -357,11 +361,11 @@ class FrameTable(av.FrameTableBase):
 
     if not splits:
       splits = cls.FIXTURES.TRAIN_TEST_SPLITS
-
     if cls.KEYFRAMES_ONLY:
       import itertools
       sample_datas = itertools.chain.from_iterable(
-        (nusc.get('sample_data', token) for sensor, token in sample['data'])
+        (nusc.get('sample_data', token)
+          for sensor, token in sample['data'].items())
         for sample in nusc.sample)
     else:
       sample_datas = iter(nusc.sample_data)
@@ -420,7 +424,7 @@ class FrameTable(av.FrameTableBase):
     best_sd, diff = nusc.get_nearest_sample_data(
                                 uri.segment_id,
                                 uri.timestamp)
-    assert diff == 0, "Can't interpolate pose"
+    assert best_sd and diff == 0, "Can't interpolate pose"
 
     token = best_sd['ego_pose_token']
     pose_record = nusc.get('ego_pose', best_sd['ego_pose_token'])
@@ -446,6 +450,7 @@ class FrameTable(av.FrameTableBase):
                                 uri.segment_id,
                                 uri.timestamp,
                                 channel=camera)
+      assert best_sd
 
       ci = cls._get_camera_image(uri, best_sd)
       f.camera_images.append(ci)
@@ -489,15 +494,24 @@ class FrameTable(av.FrameTableBase):
         )
     
     if cls.PROJECT_CLOUDS_TO_CAM:
-      for sensor in ('LIDAR_TOP',):
+      # TODO fuse
+      # pc = None
+      # for sensor in ('LIDAR_TOP',):
+      for sensor in ('LIDAR_TOP', 'LIDAR_FRONT_RIGHT', 'LIDAR_FRONT_LEFT'): # lyft
         # sample = nusc.get('sample', sd_record['sample_token']) ~~~~~~~~~~~~~~~~
         target_pose_token = sd_record['ego_pose_token']
         pc = cls._get_point_cloud_in_ego(uri, sensor, target_pose_token)
+        if not pc:
+          continue
+        # if pts:
+        #   pts = np.concatenate((pts, pc))
+        # else:
+        #   pts = pc
 
         # Project to image
         pc.cloud = ci.project_ego_to_image(pc.cloud, omit_offscreen=True)
         pc.sensor_name = pc.sensor_name + '_in_cam'
-        ci.cloud = pc
+        ci.clouds.append(pc)
       
     if cls.PROJECT_CUBOIDS_TO_CAM:
       sample_data_token = sd_record['token']
@@ -527,6 +541,9 @@ class FrameTable(av.FrameTableBase):
                                 uri.segment_id,
                                 uri.timestamp,
                                 channel=sensor)
+    if not pointsensor:
+      # Perhaps this scene does not have `sensor`
+      return None
     
     #pointsensor_token = sample['data'][sensor]
     #pointsensor = nusc.get('sample_data', pointsensor_token)
@@ -606,7 +623,8 @@ class FrameTable(av.FrameTableBase):
         nusc.get('attribute', attrib_token)['name']
         for attrib_token in sample_anno['attribute_tokens']
       ]
-      cuboid.au_category = NUSCENES_CATEGORY_TO_AU_AV_CATEGORY[box.name]
+      # cuboid.au_category = NUSCENES_CATEGORY_TO_AU_AV_CATEGORY[box.name]
+      cuboid.au_category = box.name # lyft
       if 'cycle.with_rider' in attribs:
         if box.name == 'vehicle.bicycle':
           cuboid.au_category = 'bike_with_rider'

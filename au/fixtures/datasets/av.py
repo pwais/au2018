@@ -59,6 +59,7 @@ ARGOVERSE_CATEGORY_TO_AU_AV_CATEGORY = {
 }
 
 NUSCENES_CATEGORY_TO_AU_AV_CATEGORY = {
+
   # Cars
   'vehicle.car': 'car',
   'vehicle.bus.bendy': 'car',
@@ -483,7 +484,7 @@ class CameraImage(object):
     'timestamp',              # type: int (GPS or unix time)
 
     # Optional Point Cloud (e.g. Lidar projected to camera)
-    'cloud',                  # type: PointCloud
+    'clouds',                 # type: List[PointCloud]
     
     # Optional BBoxes (e.g. Cuboids projected to camera)
     'bboxes',                 # type: List[BBox]
@@ -501,6 +502,7 @@ class CameraImage(object):
   def __init__(self, **kwargs):
     DEFAULTS = {
       'bboxes': [],
+      'clouds': [],
     }
     _set_defaults(self, kwargs, DEFAULTS)
   
@@ -820,11 +822,12 @@ class CameraImage(object):
       ]
       html += tabulate.tabulate(table, tablefmt='html')
 
-    if self.cloud:
+    if self.clouds:
       debug_img = np.copy(image)
-      aupl.draw_xy_depth_in_image(debug_img, self.cloud.cloud, alpha=0.7)
+      for pc in self.clouds:
+        aupl.draw_xy_depth_in_image(debug_img, pc.cloud, alpha=0.7)
       table = [
-        ['<b>Image With Cloud</b>'],
+        ['<b>Image With Clouds</b>'],
         [aupl.img_to_img_tag(debug_img, display_viewport_hw=(1000, 1000))],
       ]
       html += tabulate.tabulate(table, tablefmt='html')
@@ -1016,7 +1019,7 @@ CAMERAIMAGE_PROTO = CameraImage(
   width=0,
   timestamp=int(100 * 1e9), # In nanoseconds
   
-  cloud=POINTCLOUD_PROTO,
+  clouds=[POINTCLOUD_PROTO],
   
   bboxes=[BBOX_PROTO],
 

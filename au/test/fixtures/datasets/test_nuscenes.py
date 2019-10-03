@@ -16,8 +16,21 @@ def test_nuscenes():
   # return
   
 
-  FrameTable.NUSC_VERSION = 'v1.0-mini'
+  # FrameTable.NUSC_VERSION = 'v1.0-mini'
   uris = FrameTable._get_camera_uris()
+
+  LYFT_SCENES_MULTI_LIDAR = (
+    'host-a101-lidar0-1240877587199107226-1240877612099413030',
+    'host-a102-lidar0-1242662270298972894-1242662295198395706',
+    'host-a101-lidar0-1241472407298206026-1241472432198409706',
+    'host-a101-lidar0-1242493624298705334-1242493649198973302',
+    'host-a102-lidar0-1242749461398477906-1242749486298996742',
+    'host-a101-lidar0-1241561147998866622-1241561172899320654',
+    'host-a101-lidar0-1241462203298815998-1241462228198805706',
+  )
+
+  uris = [u for u in uris if u.segment_id in LYFT_SCENES_MULTI_LIDAR]
+
   # nusc = FrameTable.get_nusc()
 
   # scenes = (
@@ -87,13 +100,19 @@ def test_nuscenes():
   # import random
   # random.shuffle(scen_uris)
   #asdgasgas
+
+
+
+
   
-  # print(len(uris))
-  uris = TEST_URIS
+  print(len(uris))
+  import random
+  random.shuffle(uris)
+  # uris = TEST_URIS
   # 1535385107162404
   # uris = [u for u in uris if u.segment_id == 'scene-0655' and u.camera == 'CAM_FRONT']
   # uris.sort(key=lambda u: u.timestamp)
-  for uri in uris:#[-60:-40]:
+  for uri in uris[:50]:
     frame = FrameTable.create_frame(uri)
     fname = '|'.join((frame.uri.segment_id , str(frame.uri.timestamp) , frame.uri.camera))
     with open('/tmp/' + fname + '.html', 'w') as f:
