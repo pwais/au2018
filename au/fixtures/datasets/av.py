@@ -69,6 +69,14 @@ NUSCENES_CATEGORY_TO_AU_AV_CATEGORY = {
   'vehicle.emergency.ambulance': 'car',
   'vehicle.emergency.police': 'car',
   'vehicle.trailer': 'car',
+  
+  # Cars: Lyft Level 5
+  'car': 'car',
+  'other_vehicle': 'car', 
+  'bus': 'car',
+  'truck': 'car',
+  'emergency_vehicle': 'car',
+
 
   # Peds
   'human.pedestrian.adult': 'ped',
@@ -80,9 +88,18 @@ NUSCENES_CATEGORY_TO_AU_AV_CATEGORY = {
   'human.pedestrian.construction_worker': 'ped',
   'animal': 'ped',
 
+  # Peds: Lyft Level 5
+  'pedestrian': 'ped',
+  # Also: 'animal': 'ped',
+
+  # Bikes
   # Assume no rider unless nuscenes attribute says otherwise
   'vehicle.motorcycle': 'motorcycle_no_rider',
   'vehicle.bicycle': 'bike_no_rider',
+  
+  # Bikes: Lyft Level 5
+  'motorcycle': 'motorcycle_with_rider',
+  'bicycle': 'bike_with_rider',
 
   # Misc
   'movable_object.barrier': 'obstacle',
@@ -1107,6 +1124,7 @@ class FrameTableBase(object):
       row['dataset'] = f.uri.dataset
       row['split'] = f.uri.split
       row['segment_id'] = f.uri.segment_id
+      row['timestamp'] = f.uri.timestamp
       # row['shard'] = cls.get_shard(f.uri)
       # partition = OrderedDict(
       #   (k, getattr(f.uri, k))
@@ -1301,3 +1319,89 @@ def frame_table_to_object_detection_tfrecords(
   util.log.info("Wrote %s records to %s ." % (num_written, output_base_dir))
 
   
+###
+### WebUI
+###
+
+class WebUI(object):
+
+  def __init__(self):
+    pass
+
+  def _get_frame_df(self):
+    pass
+
+  def _spark(self):
+    pass
+
+  def get_frame(self, uri):
+    uri = URI.from_str(uri)
+    frame_df = self._get_frame_df()
+    res = frame_df.select('*').where(
+      frame_df.uri == str(uri),
+      frame_df.dataset == uri.dataset,
+      frame_df.split == uri.split)
+    rows = res.collect()
+    assert rows, "Frame not found %s" % uri
+    f = FrameTable.row_to_frame(rows[0])
+    return f.to_html()
+
+  def list_segments(self, uri):
+    uri = URI.from_str(uri)
+    frame_df = self._get_frame_df()
+    
+    QUERY = """
+      SELECT *
+      FROM
+        frame f INNER JOIN
+          (
+            SELECT
+              segment_id,
+              FIRST(uri),
+              MIN(timestamp) min_ts
+            FROM frame
+            WHERE {where}
+            GROUP BY segment_id
+            HAVING timestamp = min_ts
+          ) segs
+        ON f.uri = segs.uri
+    """
+
+    where = "1"
+    if uri.dataset:
+      where += " AND dataset = '%s'" % uri.dataset
+    if uri.split:
+      where += " AND split = '%s'" % uri.split
+    
+    query = QUERY.format(where=where)
+    df = self._spark.sql(query)
+
+    def to_disp(row):
+      f = FrameTable.row_to_frame(row)
+      return Row(
+        segment_id=f.uri.segment_id,
+        dataset=f.uri.dataset,
+        split=f.uri.split,
+        debug_image=f.get_debug_image(),
+      )
+    
+    disp_df = self._spark.createDataFrame(df.rdd.map(to_disp))
+    disp_df = disp_df.orderBy('dataset', 'split', 'segment_id')
+    return disp_df.toPandas()
+
+
+    segs = frame_df
+    if uri.dataset:
+      segs = segs.where(segs.dataset == uri.dataset)
+    if uri.split:
+      segs = segs.where(segs.split == uri.split)
+    
+    segs = segs.groupBy('segment_id')
+    segment_ids = segs.collect()
+
+    util.log.info("Found %s segments" % len(segment_ids))
+
+    from pyspark.sql import functions as F
+    seg_rows = frame_df.where()
+
+

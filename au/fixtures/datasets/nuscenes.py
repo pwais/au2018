@@ -1,4 +1,5 @@
 
+import itertools
 import os
 
 import pandas as pd
@@ -167,7 +168,23 @@ class AUNuScenes(NuScenes):
     else:
       return None, 0
 
-
+  def get_all_sensors(self):
+    return set(itertools.chain.from_iterable(
+      s['data'].keys() for s in self.sample))
+    # NuScenes:
+    # (TODO)
+    # Lyft Level 5:
+    # 'CAM_FRONT_ZOOMED', 'CAM_BACK', 'LIDAR_FRONT_RIGHT', 'CAM_FRONT_LEFT',
+    # 'CAM_BACK_LEFT', 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'LIDAR_TOP',
+    # 'LIDAR_FRONT_LEFT', 'CAM_BACK_RIGHT'
+  
+  def get_all_classes(self):
+    return set(anno['category_name'] for anno in self.sample_annotation)
+    # NuScenes:
+    # (TODO)
+    # Lyft Level 5:
+    # 'other_vehicle', 'bus', 'truck', 'car', 'bicycle', 'pedestrian', 
+    # 'animal', 'emergency_vehicle', 'motorcycle'
 
 ## Data
 
@@ -619,17 +636,22 @@ class FrameTable(av.FrameTableBase):
       cuboid.category_name = box.name
       cuboid.timestamp = sd_record['timestamp']
       
+      cuboid.au_category = NUSCENES_CATEGORY_TO_AU_AV_CATEGORY[box.name]
+      
+      # Try to give bikes riders
+      # NB: In Lyft Level 5, they appear to *not* label bikes without riders
       attribs = [
         nusc.get('attribute', attrib_token)['name']
         for attrib_token in sample_anno['attribute_tokens']
       ]
-      # cuboid.au_category = NUSCENES_CATEGORY_TO_AU_AV_CATEGORY[box.name]
-      cuboid.au_category = box.name # lyft
       if 'cycle.with_rider' in attribs:
-        if box.name == 'vehicle.bicycle':
+        if cuboid.au_category == 'bike_no_rider':
           cuboid.au_category = 'bike_with_rider'
-        else: # Probably vehicle.motorcycle 
+        elif cuboid.au_category == 'motorcycle_no_rider':
           cuboid.au_category = 'motorcycle_with_rider'
+        else:
+          raise ValueError(
+            "Don't know how to give a rider to %s %s" % (cuboid, attribs))
 
       cuboid.extra = {
         'nuscenes_token': box.token,

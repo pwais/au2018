@@ -11,9 +11,12 @@ TEST_URIS = (
 def test_nuscenes():
 
   from au.fixtures.datasets.nuscenes import FrameTable
-  # FrameTable.setup()
+  
+  nusc = FrameTable.get_nusc()
+  import pdb; pdb.set_trace()
+  FrameTable.setup()
 
-  # return
+  return
   
 
   # FrameTable.NUSC_VERSION = 'v1.0-mini'
