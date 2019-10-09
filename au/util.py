@@ -501,16 +501,6 @@ class _IArchive(object):
   def __init__(self, path):
     self.archive_path = path
 
-  
-  # Only pickle the archive path; subclasses should set up every other member
-  # lazily.  This approach allows for easy interop with Spark.
-
-  def __getstate__(self):
-     return (self.archive_path,)
-
-  def __setstate__(self, d):
-     self.archive_path = d[0]
-
   @classmethod
   def list_names(cls, archive_path):
     return []
@@ -522,6 +512,15 @@ class _IArchive(object):
   def get_reader(self, name):
     """Get the entry for `name` as a file-like (buffered) object"""
     raise KeyError("Interface stores no data")
+
+  # Only pickle the archive path; subclasses should set up every other member
+  # lazily.  This approach allows for easy interop with Spark.
+
+  def __getstate__(self):
+     return (self.archive_path,)
+
+  def __setstate__(self, d):
+     self.archive_path = d[0]
 
 class _ZipArchive(_IArchive):
 
@@ -1341,3 +1340,106 @@ class TFSummaryReader(object):
             filler(row, tf_summary)
           
           yield row
+
+class TFRecordsFileAsListOfStrings(object):
+  """
+  Friends Don't Let Friends Use TFRecords.
+
+  This utility provides a Tensorflow-free, minimal-dependency solution
+  for reading TFRecords from a *file stream* (e.g. a buffered reader) and
+  exposes random access over the stream's records.
+
+  Based upon:
+    * https://github.com/apache/beam/blob/master/sdks/python/apache_beam/io/tfrecordio.py#L67
+    * https://www.tensorflow.org/versions/r1.11/api_guides/python/python_io#TFRecords_Format_Details
+    * https://github.com/gdlg/simple-waymo-open-dataset-reader/blob/master/simple_waymo_open_dataset_reader/__init__.py#L19
+    * https://gist.github.com/ed-alertedh/9f49bfc6216585f520c7c7723d20d951
+  """
+
+  ## Public API
+
+  def __init__(self, fileobj):
+    self.fileobj = fileobj
+    self._offset_length = None
+
+  def __len__(self):
+    print('len')
+    self._maybe_build_index()
+    return len(self._offset_length)
+  
+  def __getitem__(self, idx):
+    print('getitem ', idx)
+    if idx >= len(self):
+      raise IndexError
+    else:
+      start, length = self._offset_length[idx]
+      return self._get_data(start, length)
+  
+  def __iter__(self):
+    print('iter')
+    self.fileobj.seek(0)
+    for offset, length in self._iter_offset_length():
+      yield self._get_data(offset, length)
+  
+  ## Utils
+
+  @classmethod
+  def _masked_crc32c(cls, value):
+    """Compute a masked crc32c checksum for a value.  FMI see
+    https://www.tensorflow.org/versions/r1.11/api_guides/python/python_io#TFRecords_Format_Details
+    """
+
+    if not hasattr(cls, '_crc32c_fn'):
+      import crcmod
+      cls._crc32c_fn = crcmod.predefined.mkPredefinedCrcFun('crc-32c')
+
+    crc = cls._crc32c_fn(value)
+    return (((crc >> 15) | (crc << 17)) + 0xa282ead8) & 0xffffffff
+
+  @classmethod
+  def _check_crc(cls, value, expected_crc):
+    crc_actual = cls._masked_crc32c(value)
+    if crc_actual != expected_crc:
+      import codecs
+      raise ValueError(
+        'Invalid TFRecord, mistmatch: %s %s %s' % (
+          codecs.encode(value[:10], 'hex'), crc_actual, expected_crc))
+
+  def _iter_offset_length(self):
+    self.fileobj.seek(0)
+    while True:
+      header = self.fileobj.read(12)
+      if header == b'':
+        break
+      assert len(header) == 12
+
+      import struct
+      length, lengthcrc = struct.unpack("<QI", header)
+      print('length, lengthcrc', length, lengthcrc)
+      self._check_crc(header[:8], lengthcrc)
+
+      base = self.fileobj.tell()
+      yield (base, length)
+
+      # Skip over payload and payload CRC
+      self.fileobj.seek(base + length + 4)
+    print('_iter_offset_length done')
+
+  def _maybe_build_index(self):
+    if self._offset_length is None:
+      self._offset_length = list(self._iter_offset_length())
+      self.fileobj.seek(0)
+
+  def _get_data(self, start, length):
+    self.fileobj.seek(start)
+    payload = self.fileobj.read(length + 4)
+    assert len(payload) == (length + 4)
+    print('payload', payload)
+
+    import struct
+    data, datacrc = struct.unpack("<%dsI" % length, payload)
+    print('data, datacrc', data, datacrc)
+    # datacrc = struct.unpack("I", self.fileobj.read(4))[0]
+    self._check_crc(data, datacrc)
+
+    return data

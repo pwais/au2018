@@ -210,6 +210,7 @@ def test_archive_flyweight_zip():
     for s in ss:
       z.writestr(s.decode('utf-8'), s)
   
+  # Test Reading!
   fws = util.ArchiveFileFlyweight.fws_from(fixture_path)
   _check_fws(fws, ss)
 
@@ -221,7 +222,6 @@ def test_archive_flyweight_tar():
   
   # Create the fixture
   ss = [b'foo', b'bar', b'bazzzz']
-  
   fixture_path = os.path.join(TEST_TEMPDIR, 'test.tar')
   
   import tarfile
@@ -241,6 +241,7 @@ def test_archive_flyweight_tar():
       
       t.addfile(tarinfo=info, fileobj=buf)
   
+  # Test reading!
   fws = util.ArchiveFileFlyweight.fws_from(fixture_path)
   _check_fws(fws, ss)
 
@@ -356,3 +357,22 @@ def test_tf_data_session():
     actual = list(v.tolist() for v in iter_dataset())
     assert expected == actual
 
+def test_tf_records_file_as_list_of_str():
+  TEST_TEMPDIR = os.path.join(
+                      testconf.TEST_TEMPDIR_ROOT,
+                      'test_tf_records_file_as_list_of_str')
+  util.cleandir(TEST_TEMPDIR)
+  
+  # Create the fixture
+  ss = [b'foo', b'bar', b'bazzzz']
+  fixture_path = os.path.join(TEST_TEMPDIR, 'test.tfrecord')
+
+  import tensorflow as tf
+  with tf.python_io.TFRecordWriter(fixture_path) as writer:
+    for s in ss:
+      writer.write(s)
+  
+  # Test reading!
+  tf_lst = util.TFRecordsFileAsListOfStrings(open(fixture_path, 'rb'))
+  assert len(tf_lst) == len(ss)
+  assert sorted(tf_lst) == sorted(ss)
