@@ -497,40 +497,71 @@ def get_sys_info():
 ### ArchiveFileFlyweight
 
 class _IArchive(object):
-  __slots__ = ('archive_path', 'thread_data')
   
   def __init__(self, path):
     self.archive_path = path
 
-  def _setup(self, archive_path):
-    self.thread_data = threading.local()
+  
+  # Only pickle the archive path; subclasses should set up every other member
+  # lazily.  This approach allows for easy interop with Spark.
+
+  def __getstate__(self):
+     return (self.archive_path,)
+
+  def __setstate__(self, d):
+     self.archive_path = d[0]
 
   @classmethod
   def list_names(cls, archive_path):
     return []
 
-  def _archive_get(self, name):
+  def get(self, name):
+    """Get the entry for `name` as an in-memory array"""
     raise KeyError("Interface stores no data")
 
-  def get(self, name):
-    self._setup(self.archive_path)
-    return self._archive_get(name)
+  def get_reader(self, name):
+    """Get the entry for `name` as a file-like (buffered) object"""
+    raise KeyError("Interface stores no data")
 
 class _ZipArchive(_IArchive):
 
-  def _setup(self, archive_path):
-    super(_ZipArchive, self)._setup(archive_path)
-    if not hasattr(self.thread_data, 'zipfile'):
+  @property
+  def _zipfile(self):
+    if not hasattr(self, '__zipfile'):
       import zipfile
-      self.thread_data.zipfile = zipfile.ZipFile(archive_path)
-  
-  def _archive_get(self, name):
-    return self.thread_data.zipfile.read(name)
+      self.__zipfile = zipfile.ZipFile(self.archive_path)
+    return self.__zipfile
+
+  def get(self, name):
+    return self._zipfile.read(name)
+
+  def get_reader(self, name):
+    return self._zipfile.open(name)
 
   @classmethod
   def list_names(cls, archive_path):
     import zipfile
     return zipfile.ZipFile(archive_path).namelist()
+
+class _TarArchive(_IArchive):
+
+  @property
+  def _tarfile(self):
+    if not hasattr(self, '__tarfile'):
+      import tarfile
+      self.__tarfile = tarfile.open(self.archive_path)
+    return self.__tarfile
+
+  def get(self, name):
+    return self.get_reader(name).read()
+
+  def get_reader(self, name):
+    return self._tarfile.extractfile(name)
+
+  @classmethod
+  def list_names(cls, archive_path):
+    import tarfile
+    return tarfile.open(archive_path).getnames()
 
 class ArchiveFileFlyweight(object):
 
@@ -542,19 +573,29 @@ class ArchiveFileFlyweight(object):
 
   @staticmethod
   def fws_from(archive_path):
+    archive_cls = None
+    TAR_SUFFIXES = ('tar', 'tar.gz', 'tgz')
     if archive_path.endswith('zip'):
-        archive = _ZipArchive(archive_path)
-        names = _ZipArchive.list_names(archive_path)
-        return [
-          ArchiveFileFlyweight(name=name, archive=archive)
-          for name in names
-        ]
+      archive_cls = _ZipArchive
+    elif any(archive_path.endswith(suffix) for suffix in TAR_SUFFIXES):
+      archive_cls = _TarArchive
     else:
       raise ValueError("Don't know how to read %s" % archive_path)
+
+    archive = archive_cls(archive_path)
+    names = archive_cls.list_names(archive_path)
+    return [
+      ArchiveFileFlyweight(name=name, archive=archive)
+      for name in names
+    ]
 
   @property
   def data(self):
     return self.archive.get(self.name)
+  
+  @property
+  def data_reader(self):
+    return self.archive.get_reader(self.name)
   
 def copy_n_from_zip(src, dest, n):
   log.info("Copying %s of %s -> %s ..." % (n, src, dest))

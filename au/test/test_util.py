@@ -171,7 +171,30 @@ def test_sys_info():
   info = util.get_sys_info()
   assert 'au' in info['filepath']
 
-def test_archive_fliyweight_zip():
+def test_ds_store_is_stupid():
+  assert util.is_stupid_mac_file('/yay/.DS_Store')
+  assert util.is_stupid_mac_file('.DS_Store')
+  assert util.is_stupid_mac_file('._.DS_Store')
+
+
+
+### ArchiveFileFlyweight
+
+def _check_fws(fws, expected):
+  # First, check the Flyweights `fws`
+  assert len(fws) == len(expected)
+  datas = [fw.data for fw in fws]
+  assert sorted(datas) == sorted(expected)
+
+  # Now check pickle support
+  import pickle
+  fws_str = pickle.dumps(fws)
+  fws_decoded = pickle.loads(fws_str)
+  assert len(fws_decoded) == len(expected)
+  datas_decoded = [fw.data for fw in fws_decoded]
+  assert sorted(datas_decoded) == sorted(expected)
+
+def test_archive_flyweight_zip():
   TEST_TEMPDIR = os.path.join(
                       testconf.TEST_TEMPDIR_ROOT,
                       'test_archive_flyweight_zip')
@@ -188,14 +211,39 @@ def test_archive_fliyweight_zip():
       z.writestr(s.decode('utf-8'), s)
   
   fws = util.ArchiveFileFlyweight.fws_from(fixture_path)
-  assert len(fws) == len(ss)
-  datas = [fw.data for fw in fws]
-  assert sorted(datas) == sorted(ss)
+  _check_fws(fws, ss)
 
-def test_ds_store_is_stupid():
-  assert util.is_stupid_mac_file('/yay/.DS_Store')
-  assert util.is_stupid_mac_file('.DS_Store')
-  assert util.is_stupid_mac_file('._.DS_Store')
+def test_archive_flyweight_tar():
+  TEST_TEMPDIR = os.path.join(
+                      testconf.TEST_TEMPDIR_ROOT,
+                      'test_archive_flyweight_tar')
+  util.cleandir(TEST_TEMPDIR)
+  
+  # Create the fixture
+  ss = [b'foo', b'bar', b'bazzzz']
+  
+  fixture_path = os.path.join(TEST_TEMPDIR, 'test.tar')
+  
+  import tarfile
+  with tarfile.open(fixture_path, mode='w') as t:
+    for s in ss:
+      from io import BytesIO
+      buf = BytesIO()
+      buf.write(s)
+      buf.seek(0)
+
+      buf.seek(0, os.SEEK_END)
+      buf_len = buf.tell()
+      buf.seek(0)
+      
+      info = tarfile.TarInfo(name=str(s))
+      info.size = buf_len
+      
+      t.addfile(tarinfo=info, fileobj=buf)
+  
+  fws = util.ArchiveFileFlyweight.fws_from(fixture_path)
+  _check_fws(fws, ss)
+
 
 
 
