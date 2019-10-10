@@ -178,6 +178,10 @@ RUN \
 ## Nuscenes
 RUN pip3 install nuscenes-devkit==1.0.2
 
+## Waymo Open Dataset
+RUN pip3 install waymo-open-dataset==1.0.1 --no-deps
+  # NB: Waymo's pip package may force install Tensorflow 2.0, which is NOT OK
+
 ## Kubespray
 # See docker/kubespray_requirements.txt for notes
 COPY docker/kubespray_requirements.txt /tmp/kubespray_requirements.txt

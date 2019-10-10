@@ -305,9 +305,18 @@ class FrameTable(av.FrameTableBase):
   KEYFRAMES_ONLY = True#False
     # When disabled, will use motion-corrected points
   
-  SETUP_URIS_PER_CHUNK = 100
-
   ## Subclass API
+
+  @classmethod
+  def table_root(cls):
+    return '/outer_root/media/seagates-ext4/au_datas/nusc_frame_table'
+
+  @classmethod
+  def create_frame(cls, uri):
+    f = av.Frame(uri=uri)
+    cls._fill_ego_pose(f)
+    cls._fill_camera_images(f)
+    return f
 
   @classmethod
   def _create_frame_rdds(cls, spark):
@@ -336,32 +345,6 @@ class FrameTable(av.FrameTableBase):
     return frame_rdds
   
   ## Public API
-
-  @classmethod
-  def table_root(cls):
-    return '/outer_root/media/seagates-ext4/au_datas/nusc_frame_table'
-
-  @classmethod
-  def create_frame(cls, uri):
-    f = av.Frame(uri=uri)
-    cls._fill_ego_pose(f)
-    cls._fill_camera_images(f)
-    return f
-
-    # nusc = cls.get_nusc()
-
-    # best_sample_data, diff = nusc.get_nearest_sample_data(
-    #                             uri.segment_id, uri.timestamp)
-    # assert diff == 0, "Can't interpolate all sensors for %s" % uri
-    # assert False, best_sample_data
-
-
-
-
-    # scene_to_ts_to_sample_token = cls._scene_to_ts_to_sample_token()
-    # sample_token = scene_to_ts_to_sample_token[uri.segment_id][uri.timestamp]
-    # sample = nusc.get('sample', sample_token)
-    # return cls._create_frame_from_sample(uri, sample)
 
   @classmethod
   def get_nusc(cls):

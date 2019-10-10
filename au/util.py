@@ -1363,12 +1363,10 @@ class TFRecordsFileAsListOfStrings(object):
     self._offset_length = None
 
   def __len__(self):
-    print('len')
     self._maybe_build_index()
     return len(self._offset_length)
   
   def __getitem__(self, idx):
-    print('getitem ', idx)
     if idx >= len(self):
       raise IndexError
     else:
@@ -1376,7 +1374,6 @@ class TFRecordsFileAsListOfStrings(object):
       return self._get_data(start, length)
   
   def __iter__(self):
-    print('iter')
     self.fileobj.seek(0)
     for offset, length in self._iter_offset_length():
       yield self._get_data(offset, length)
@@ -1415,7 +1412,6 @@ class TFRecordsFileAsListOfStrings(object):
 
       import struct
       length, lengthcrc = struct.unpack("<QI", header)
-      print('length, lengthcrc', length, lengthcrc)
       self._check_crc(header[:8], lengthcrc)
 
       base = self.fileobj.tell()
@@ -1423,7 +1419,6 @@ class TFRecordsFileAsListOfStrings(object):
 
       # Skip over payload and payload CRC
       self.fileobj.seek(base + length + 4)
-    print('_iter_offset_length done')
 
   def _maybe_build_index(self):
     if self._offset_length is None:
@@ -1434,12 +1429,9 @@ class TFRecordsFileAsListOfStrings(object):
     self.fileobj.seek(start)
     payload = self.fileobj.read(length + 4)
     assert len(payload) == (length + 4)
-    print('payload', payload)
 
     import struct
     data, datacrc = struct.unpack("<%dsI" % length, payload)
-    print('data, datacrc', data, datacrc)
-    # datacrc = struct.unpack("I", self.fileobj.read(4))[0]
     self._check_crc(data, datacrc)
 
     return data

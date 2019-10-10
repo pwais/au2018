@@ -1100,8 +1100,13 @@ class FrameTableBase(object):
     return RowAdapter.from_row(frame_df_row)
 
   @classmethod
+  def create_frame(cls, uri):
+    """Subclasses should create and return a `Frame` for the given `uri`."""
+    return av.Frame(uri=uri)
+
+  @classmethod
   def _create_frame_rdds(cls, spark):
-    """Subclasses should create and return a list of RDD[Frame]s"""
+    """Subclasses should create and return a list of `RDD[Frame]`s"""
     return []
 
   @classmethod

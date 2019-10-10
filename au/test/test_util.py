@@ -368,7 +368,7 @@ def test_tf_records_file_as_list_of_str():
   fixture_path = os.path.join(TEST_TEMPDIR, 'test.tfrecord')
 
   import tensorflow as tf
-  with tf.python_io.TFRecordWriter(fixture_path) as writer:
+  with tf.io.TFRecordWriter(fixture_path) as writer:
     for s in ss:
       writer.write(s)
   
@@ -376,3 +376,5 @@ def test_tf_records_file_as_list_of_str():
   tf_lst = util.TFRecordsFileAsListOfStrings(open(fixture_path, 'rb'))
   assert len(tf_lst) == len(ss)
   assert sorted(tf_lst) == sorted(ss)
+  for i in range(len(ss)):
+    assert tf_lst[i] == ss[i]
