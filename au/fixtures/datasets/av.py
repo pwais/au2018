@@ -111,6 +111,14 @@ NUSCENES_CATEGORY_TO_AU_AV_CATEGORY = {
   'static_object.bicycle_rack': 'background',
 }
 
+WAYMO_OD_CATEGORY_TO_AU_AV_CATEGORY = {
+  'TYPE_UNKNOWN':     'obstacle',
+  'TYPE_VEHICLE':     'car',
+  'TYPE_PEDESTRIAN':  'ped',
+  'TYPE_SIGN':        'background',
+  'TYPE_CYCLIST':     'bike_with_rider',
+}
+
 
 
 ###
@@ -175,7 +183,7 @@ class Transform(object):
       translation=self.rotation.T.dot(-self.translation))
 
   def __str__(self):
-    return 'Transform(rotation=%s;translation=%s)' % (
+    return 'Transform(\nrotation=%s;\ntranslation=%s)' % (
       self.rotation, self.translation)
 
   def is_identity(self):
@@ -319,8 +327,9 @@ class Cuboid(object):
 
   def to_html(self):
     import tabulate
+    import pprint
     table = [
-      [attr, '<pre>' + str(getattr(self, attr)) + '</pre>']
+      [attr, '<pre>' + pprint.pformat(getattr(self, attr)) + '</pre>']
       for attr in self.__slots__
     ]
     return tabulate.tabulate(table, tablefmt='html')
@@ -910,6 +919,7 @@ class Frame(object):
     'clouds',               # type: List[PointCloud]
     'world_to_ego',         # type: Transform; the pose of the robot in the
                             #   global frame (typicaly the city frame)
+    'extra',                # type: string -> string extra metadata
   )
 
   def __init__(self, **kwargs):
@@ -918,6 +928,7 @@ class Frame(object):
       'camera_images': [],
       'clouds': [],
       'world_to_ego': Transform(),
+      'extra': {},
     }
     _set_defaults(self, kwargs, DEFAULTS)
     
@@ -925,11 +936,15 @@ class Frame(object):
       self.uri = URI.from_str(self.uri)
     
   def to_html(self):
+    from datetime import datetime
     import tabulate
     import pprint
     table = [
       ['URI', str(self.uri)],
-      ['Ego Pose', '<pre>' + str(self.world_to_ego) + '</pre>']
+      ['Timestamp', 
+        datetime.utcfromtimestamp(self.uri.timestamp * 1e-9).strftime('%Y-%m-%d %H:%M:%S')],
+      ['Ego Pose', '<pre>' + str(self.world_to_ego) + '</pre>'],
+      ['Extra', '<pre>' + pprint.pformat(self.extra) + '</pre>'],
     ]
     html = tabulate.tabulate(table, tablefmt='html')
     table = [['<h2>Camera Images</h2>']]
@@ -1050,6 +1065,9 @@ FRAME_PROTO = Frame(
   camera_images=[CAMERAIMAGE_PROTO],
   clouds=[POINTCLOUD_PROTO],
   world_to_ego=Transform(),
+  extra={
+    'key': 'value',
+  },
 )
 
 ###

@@ -533,8 +533,6 @@ class FrameTable(av.FrameTableBase):
     from nuscenes.utils.data_classes import RadarPointCloud
 
     nusc = cls.get_nusc()
-    
-    
 
     # Get the cloud closest to the uri time
     pointsensor, diff = nusc.get_nearest_sample_data(
@@ -571,14 +569,6 @@ class FrameTable(av.FrameTableBase):
     poserecord = nusc.get('ego_pose', target_pose_token)
     pc.translate(-np.array(poserecord['translation']))
     pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix.T)
-
-    
-    # # before applying ego adjustment / interpolation.
-    # #  so transform to ego frame
-    # cs_record = nusc.get(
-    #   'calibrated_sensor', pointsensor['calibrated_sensor_token'])
-    # pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix)
-    # pc.translate(np.array(cs_record['translation']))
 
     n_xyz = pc.points[:3, :].T
       # Throw out intensity (lidar) and ... other stuff (radar)
