@@ -49,18 +49,15 @@ def transform_from_pb(waymo_transform):
   RT = np.reshape(waymo_transform.transform, [4, 4])
   return av.Transform(rotation=RT[:3, :3], translation=RT[:3, 3])
 
-def get_fused_cloud_in_ego(waymo_frame):
+class GetFusedCloudInEgo(object):
 
-  # waymo_open_dataset requires eager mode :( so we need to scope its use
-  # into a tensorflow py_func
-  import tensorflow as tf
-  import tensorflow.contrib.eager as tfe
-
-  def get_all_points(wf_str):
+  @staticmethod
+  def _get_all_points(wf_str):
+    import tensorflow as tf
     assert tf.executing_eagerly()
     
-    from waymo_open_dataset import dataset_pb2 as open_dataset
-    wf = open_dataset.Frame()
+    from waymo_open_dataset import dataset_pb2
+    wf = dataset_pb2.Frame()
     wf.ParseFromString(wf_str.numpy())
     
     from waymo_open_dataset.utils import frame_utils
@@ -87,10 +84,20 @@ def get_fused_cloud_in_ego(waymo_frame):
     all_points = np.concatenate((points_all, points_all_ri2), axis=0)
     return all_points
 
-  with util.tf_cpu_session() as sess:
+  @classmethod
+  def get_points(cls, waymo_frame):
+    # waymo_open_dataset requires eager mode :( so we need to scope its use
+    # into a tensorflow py_func
+    import tensorflow as tf
+    import tensorflow.contrib.eager as tfe
+
+    if not hasattr(cls, '_sess'):
+      cls._sess = util.tf_cpu_session()
+    
     wf = tf.placeholder(dtype=tf.string)
-    pf = tfe.py_func(get_all_points, [wf], tf.float32)
-    all_points = sess.run(pf, feed_dict={wf: waymo_frame.SerializeToString()})
+    pf = tfe.py_func(GetFusedCloudInEgo._get_all_points, [wf], tf.float32)
+    all_points = cls._sess.run(
+      pf, feed_dict={wf: waymo_frame.SerializeToString()})
     return all_points
 
 def get_category_name(class_id):
@@ -185,8 +192,6 @@ class Fixtures(object):
   @classmethod
   def get_split(cls, fname):
     return 'train' if 'training' in fname else 'val'
-  
-
 
 class FrameTable(av.FrameTableBase):
 
@@ -196,16 +201,21 @@ class FrameTable(av.FrameTableBase):
   PROJECT_CUBOIDS_TO_CAM = True
   IGNORE_INVISIBLE_CUBOIDS = True
 
-  SETUP_SEGMENTS_PER_CHUNK = os.cpu_count()
+  # SETUP_SEGMENTS_PER_CHUNK = os.cpu_count()
+  SETUP_URIS_PER_CHUNK = 10
 
   ## Subclass API
 
   @classmethod
-  def create_frame(cls, uri, waymo_frame=None):
+  def table_root(cls):
+    return '/outer_root/media/seagates-ext4/au_datas/waymo_open_frame_table'
+
+  @classmethod
+  def create_frame(cls, uri, waymo_frame=None, record_idx=None):
     uri = av.URI.from_str(uri)
     f = av.Frame(uri=uri)
     if waymo_frame is None:
-      waymo_frame = cls._get_waymo_frame(uri)
+      waymo_frame = cls._get_waymo_frame(uri, record_idx=record_idx)
         # NB: this operation is expensive! See comments embedded in function
     cls._fill_ego_pose(f, waymo_frame)
     cls._fill_camera_images(f, waymo_frame)
@@ -214,21 +224,65 @@ class FrameTable(av.FrameTableBase):
 
   @classmethod
   def _create_frame_rdds(cls, spark):
+
+    # def gen_frame_tasks(uri):
+    #   segment_id = uri.segment_id
+    #   record = cls._get_segment_id_to_record()[segment_id]
+    #   tf_str_list = util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
+    #   tasks = [(uri, i) for i in range(len(tf_str_list))]
+    #   print('%s tasks for %s' % (len(tasks), segment_id))
+    #   return tasks
+    
+    # seg_rdd = spark.sparkContext.parallelize(cls.iter_all_segment_uris())
+    # task_rdd = seg_rdd.flatMap(gen_frame_tasks)
+    # print(task_rdd.count())
+
+    # import itertools
+    # iter_tasks = itertools.chain.from_iterable(
+    #   gen_frame_tasks(uri) for uri in cls.iter_all_segment_uris()
+    # )
+    # import pdb; pdb.set_trace()
+
+
     frame_rdds = []
-    for segment_uris in util.ichunked(uris, cls.SETUP_SEGMENTS_PER_CHUNK):
+    isegment_uris = util.ichunked(
+      cls.iter_all_segment_uris(), 1)#cls.SETUP_SEGMENTS_PER_CHUNK)
+    for segment_uris in isegment_uris:
       
-      def iter_segment_frames(uri):
-        # Breadcrumbs: to get any frame information at all, we must read and
-        # decode protobufs from the whole TFRecord file.  So don't compute
-        # Frame URIs, as we do for other datasets, but just generate Frames.
-        for wf in cls._iter_waymo_frames(uri.segment_id):
-          frame_uri = copy.deepcopy(uri)
-          frame_uri.timestamp = int(wf.timestamp_micros * 1e3)
-          yield cls.create_frame(uri, waymo_frame=wf)
+      def gen_frame_tasks(uri):
+        segment_id = uri.segment_id
+        record = cls._get_segment_id_to_record()[segment_id]
+        tf_str_list = util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
+        tasks = [(uri, i) for i in range(len(tf_str_list))]
+        print('%s tasks for %s' % (len(tasks), segment_id))
+        return tasks
+      
+      def load_frame(task):
+        uri, record_idx = task
+        create_frame = util.ThruputObserver.wrap_func(cls.create_frame, log_on_del=True)
+        f = create_frame(uri, record_idx=record_idx)
+        # print(f.uri, ' ', util.get_size_of_deep(f) * 1e-6, 'MB')
+        return f
+
+      # def iter_segment_frames(uri):
+      #   # Breadcrumbs: to get any frame information at all, we must read and
+      #   # decode protobufs from the whole TFRecord file.  So don't compute
+      #   # Frame URIs, as we do for other datasets, but just generate Frames.
+      #   t = util.ThruputObserver(name=uri.segment_id)
+      #   for wf in cls._iter_waymo_frames(uri.segment_id):
+      #     frame_uri = copy.deepcopy(uri)
+      #     frame_uri.timestamp = int(wf.timestamp_micros * 1e3)
+      #     yield cls.create_frame(uri, waymo_frame=wf)
+      #     t.update_tallies(n=1)
+      #     t.maybe_log_progress(every_n=10)
       
       segment_uri_rdd = spark.sparkContext.parallelize(segment_uris)
-      frame_rdd = segment_uri_rdd.flatMap(iter_segment_frames)
+      # frame_rdd = segment_uri_rdd.flatMap(iter_segment_frames)
+      task_rdd = segment_uri_rdd.flatMap(gen_frame_tasks)
+      frame_rdd = task_rdd.repartition(10 * os.cpu_count()).map(load_frame)
+
       frame_rdds.append(frame_rdd)
+      # break
     
     return frame_rdds
 
@@ -299,12 +353,22 @@ class FrameTable(av.FrameTableBase):
       yield wf
   
   @classmethod
-  def _get_waymo_frame(cls, uri):
+  def _get_waymo_frame(cls, uri, record_idx=None):
     # Breakcrumbs: the frame context and timestamp is embedded in the
     # serialized protobuf message, so even if we wanted to index the Waymo
     # TFRecord files, we'd have to read and decode all of them.  Thus for now
     # we just provide an expensive linear search to look up individual frames
     # and optimize just the linear read / ETL use case.
+    if record_idx is not None:
+      from waymo_open_dataset import dataset_pb2
+      record = cls._get_segment_id_to_record()[uri.segment_id]
+      tf_str_list = util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
+      s = tf_str_list[record_idx]
+      print(uri, ' protobuf ', len(s) * 1e-6, 'MB')
+      wf = dataset_pb2.Frame()
+      wf.ParseFromString(bytearray(s))
+      return wf
+
     util.log.info("Doing expensive linear find ...")
     for wf in cls._iter_waymo_frames(uri.segment_id):
       timestamp = int(wf.timestamp_micros * 1e3)
@@ -329,13 +393,18 @@ class FrameTable(av.FrameTableBase):
 
   @classmethod
   def _fill_camera_images(cls, f, waymo_frame):
-    for i in range(len(waymo_frame.context.camera_calibrations)):
-      ci = cls._get_camera_image(waymo_frame, i, viewport=f.uri.get_viewport())
+    for image in waymo_frame.images:
+      ci = cls._get_camera_image(waymo_frame, image.name, viewport=f.uri.get_viewport())
       f.camera_images.append(ci)
 
   @classmethod
   def _get_camera_image(cls, waymo_frame, camera_idx, viewport=None):
-    wf_camera_image = waymo_frame.images[camera_idx]
+    def get_for_camera(lst, idx):
+      for el in lst:
+        if el.name == idx:
+          return el
+      raise ValueError("Element with name %s not found" % idx)
+    wf_camera_image = get_for_camera(waymo_frame.images, camera_idx)
     w, h = get_jpeg_size(wf_camera_image.image)
     if not viewport:
       from au.fixtures.datasets import common
@@ -344,7 +413,9 @@ class FrameTable(av.FrameTableBase):
 
     # NB: Waymo protobuf defs had an error; the protobufs contain
     # the inverse of the expected transform.
-    camera_calibration = waymo_frame.context.camera_calibrations[camera_idx]
+    camera_calibration = get_for_camera(
+                            waymo_frame.context.camera_calibrations,
+                            camera_idx)
     extrinsic = np.reshape(camera_calibration.extrinsic.transform, [4, 4])
     vehicle_to_sensor = np.linalg.inv(extrinsic) # Need inverse! Waymo lies!
 
@@ -395,7 +466,7 @@ class FrameTable(av.FrameTableBase):
       pc = av.PointCloud(
         sensor_name='lidar_fused',
         timestamp=int(waymo_frame.timestamp_micros * 1e3),
-        cloud=get_fused_cloud_in_ego(waymo_frame),
+        cloud=GetFusedCloudInEgo.get_points(waymo_frame),
         ego_to_sensor=av.Transform(), # points are in ego frame...
         motion_corrected=False,
       )

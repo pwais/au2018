@@ -38,6 +38,11 @@ def test_get_jpeg_size():
 
 def test_waymo_yay():
   from au.fixtures.datasets.waymo_od import FrameTable
+  FrameTable.setup()
+
+  # segs = set(uri.segment_id for uri in URIS)
+  # for seg in segs:
+  #   cam_to_vid = 
 
   for uri in URIS:
     frame = FrameTable.create_frame(uri)
