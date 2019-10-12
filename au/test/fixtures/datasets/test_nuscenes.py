@@ -13,6 +13,7 @@ def test_nuscenes():
   from au.fixtures.datasets.nuscenes import FrameTable
   
   nusc = FrameTable.get_nusc()
+  nusc.print_sensor_sample_rates()
   import pdb; pdb.set_trace()
   FrameTable.setup()
 

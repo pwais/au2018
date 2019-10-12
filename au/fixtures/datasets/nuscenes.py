@@ -128,7 +128,7 @@ class AUNuScenes(NuScenes):
         row['scene_token'] = sample_to_scene[row['sample_token']]
         row['scene_name'] = self.get('scene', row['scene_token'])['name']
         return row
-    
+
       df = pd.DataFrame(to_ts_row(r) for r in self.sample_data)
       df.to_parquet(cache_path)
       del df # Free several GB of memory
@@ -168,6 +168,8 @@ class AUNuScenes(NuScenes):
     else:
       return None, 0
 
+  #### Adhoc Utils
+
   def get_all_sensors(self):
     return set(itertools.chain.from_iterable(
       s['data'].keys() for s in self.sample))
@@ -185,6 +187,208 @@ class AUNuScenes(NuScenes):
     # Lyft Level 5:
     # 'other_vehicle', 'bus', 'truck', 'car', 'bicycle', 'pedestrian', 
     # 'animal', 'emergency_vehicle', 'motorcycle'
+
+  def print_sensor_sample_rates(self, scene_names=None):
+    if not scene_names:
+      scene_names = [s['name'] for s in self.scene]
+    scene_names = set(scene_names)
+    
+    def to_sec(timestamp):
+      # NuScenes and Lyft Level 5 timestamps are in microseconds
+      return timestamp * 1e-6
+
+    scene_tokens = set(
+      s['token'] for s in self.scene if s['name'] in scene_names)
+    for scene_token in scene_tokens:
+      scene_samples = [
+        s for s in self.sample if s['scene_token'] == scene_token
+      ]
+
+      # Samples are supposed to be 'best groupings' of lidar and camera data.
+      # Let's measure their sample rate.
+      from collections import defaultdict
+      name_to_tss = defaultdict(list)
+      for sample in scene_samples:
+        name_to_tss['sample (annos)'].append(to_sec(sample['timestamp']))
+      
+      # Now measure individual sensor sample rates.
+      sample_toks = set(s['token'] for s in scene_samples)
+      scene_sample_datas = [
+        sd for sd in self.sample_data if sd['sample_token'] in sample_toks
+      ]
+      for sd in scene_sample_datas:
+        name_to_tss[sd['channel']].append(to_sec(sd['timestamp']))
+        ego_pose = self.get('ego_pose', sd['ego_pose_token'])
+        name_to_tss['ego_pose'].append(to_sec(ego_pose['timestamp']))
+        name_to_tss['sample_data'].append(to_sec(sd['timestamp']))
+      
+      annos = [
+        a for a in self.sample_annotation if a['sample_token'] in sample_toks
+      ]
+      num_tracks = len(set(a['instance_token'] for a in annos))
+
+      import itertools
+      all_ts = sorted(itertools.chain.from_iterable(name_to_tss.values()))
+      from datetime import datetime
+      dt = datetime.utcfromtimestamp(all_ts[0])
+      start = dt.strftime('%Y-%m-%d %H:%M:%S')
+      duration = (all_ts[-1] - all_ts[0])
+
+      # Print a report
+      print('---')
+      print('---')
+
+      scene = self.get('scene', scene_token)
+      print('Scene %s %s' % (scene['name'], scene['token']))
+      print('Start %s \tDuration %s sec' % (start, duration))
+      print('Num Annos %s (Tracks %s)' % (len(annos), num_tracks))
+      import pandas as pd
+      from collections import OrderedDict
+      rows = []
+      for name in sorted(name_to_tss.keys()):
+        def get_series(name):
+          return np.array(sorted(name_to_tss[name]))
+        
+        series = get_series(name)
+        freqs = series[1:] - series[:-1]
+
+        lidar_series = get_series('LIDAR_TOP')
+        diff_lidar_ms = 1e3 * np.mean(
+          [np.abs(lidar_series - t).min() for t in series])
+
+        rows.append(OrderedDict((
+          ('Series',              name),
+          ('Freq Hz',             1. / np.mean(freqs)),
+          ('Diff Lidar (msec)',   diff_lidar_ms),
+          ('Duration',            series[-1] - series[0]),
+          ('Support',             len(series)),
+        )))
+      print(pd.DataFrame(rows))
+
+      print()
+      print()
+
+      # NuScenes:
+      # ---
+      # ---
+      # Scene scene-1000 09f67057dd8346388b28f79d9bb1cf04
+      # Start 2018-11-14 11:01:41       Duration 19.922956943511963 sec
+      # Num Annos 493 (Tracks 27)
+      #                Series     Freq Hz  Diff Lidar (msec)   Duration  Support
+      # 0            CAM_BACK   11.738035          10.554540  19.850000      234
+      # 1       CAM_BACK_LEFT   11.536524           0.918133  19.850000      230
+      # 2      CAM_BACK_RIGHT   11.788413          20.070969  19.850000      235
+      # 3           CAM_FRONT   11.637280          14.986247  19.850000      232
+      # 4      CAM_FRONT_LEFT   11.536524           7.586523  19.850000      230
+      # 5     CAM_FRONT_RIGHT   11.536524          22.528135  19.850000      230
+      # 6           LIDAR_TOP   19.747937           0.000000  19.850175      393
+      # 7     RADAR_BACK_LEFT   12.593898          12.635898  19.850883      251
+      # 8    RADAR_BACK_RIGHT   13.211602          12.786931  19.831054      263
+      # 9         RADAR_FRONT   12.976290          12.728528  19.882416      259
+      # 10   RADAR_FRONT_LEFT   13.510020          12.710849  19.911148      270
+      # 11  RADAR_FRONT_RIGHT   13.724216          12.571387  19.891846      274
+      # 12           ego_pose  155.599393          11.128198  19.922957     3101
+      # 13     sample (annos)    2.015096           0.000000  19.850175       41
+      # 14        sample_data  155.599393          11.128198  19.922957     3101
+      # ---
+      # ---
+      # Scene scene-0293 6308d6d934074a028fc3145eedf3e65f
+      # Start 2018-08-31 15:25:42       Duration 19.525898933410645 sec
+      # Num Annos 3548 (Tracks 277)
+      #                Series     Freq Hz  Diff Lidar (msec)   Duration  Support
+      # 0            CAM_BACK   11.773779          10.441362  19.450000      230
+      # 1       CAM_BACK_LEFT   11.825193           1.573582  19.450000      231
+      # 2      CAM_BACK_RIGHT   11.928021          19.624993  19.450000      233
+      # 3           CAM_FRONT   11.876607          14.872485  19.450000      232
+      # 4      CAM_FRONT_LEFT   11.876607           7.329719  19.450000      232
+      # 5     CAM_FRONT_RIGHT   11.979434          22.875966  19.450000      234
+      # 6           LIDAR_TOP   19.844216           0.000000  19.451512      387
+      # 7     RADAR_BACK_LEFT   13.157897          12.698666  19.455997      257
+      # 8    RADAR_BACK_RIGHT   13.490288          12.647669  19.421380      263
+      # 9         RADAR_FRONT   13.082394          12.616018  19.491845      256
+      # 10   RADAR_FRONT_LEFT   13.305139          12.709008  19.466163      260
+      # 11  RADAR_FRONT_RIGHT   13.209300          12.723777  19.455989      258
+      # 12           ego_pose  157.329504          11.144872  19.525899     3073
+      # 13     sample (annos)    2.004986           0.000000  19.451512       40
+      # 14        sample_data  157.329504          11.144872  19.525899     3073
+      # ---
+      # ---
+      # Scene scene-1107 89f20737ec344aa48b543a9e005a38ca
+      # Start 2018-11-21 11:59:53       Duration 19.820924997329712 sec
+      # Num Annos 496 (Tracks 47)
+      #                Series     Freq Hz  Diff Lidar (msec)   Duration  Support
+      # 0            CAM_BACK   11.696203          11.014590  19.750000      232
+      # 1       CAM_BACK_LEFT   11.848101           1.382666  19.750000      235
+      # 2      CAM_BACK_RIGHT   11.746835          20.483792  19.750000      233
+      # 3           CAM_FRONT   11.848103          14.481831  19.749997      235
+      # 4      CAM_FRONT_LEFT   11.898734           7.063236  19.750000      236
+      # 5     CAM_FRONT_RIGHT   11.898734          22.159666  19.750000      236
+      # 6           LIDAR_TOP   19.797377           0.000000  19.750091      392
+      # 7     RADAR_BACK_LEFT   13.578124          12.646209  19.811279      270
+      # 8    RADAR_BACK_RIGHT   13.271911          12.721395  19.740940      263
+      # 9         RADAR_FRONT   13.198245          12.553021  19.775357      262
+      # 10   RADAR_FRONT_LEFT   13.730931          12.645984  19.736462      272
+      # 11  RADAR_FRONT_RIGHT   13.778595          12.488227  19.740764      273
+      # 12           ego_pose  158.317536          11.102567  19.820925     3139
+      # 13     sample (annos)    2.025307           0.000000  19.750091       41
+      # 14        sample_data  158.317536          11.102567  19.820925     3139
+
+      # Lyft Level 5:
+      # ---
+      # ---
+      # Scene host-a015-lidar0-1235423635198474636-1235423660098038666 755e4564756ad5c92243b7f77039d07ab1cce40662a6a19b67c820647666a3ef
+      # Start 2019-02-28 21:13:55       Duration 24.99979877471924 sec
+      # Num Annos 1637 (Tracks 44)
+      #               Series    Freq Hz  Diff Lidar (msec)   Duration  Support
+      # 0           CAM_BACK   5.020080          98.882582  24.900000      126
+      # 1      CAM_BACK_LEFT   5.020080          16.919276  24.900000      126
+      # 2     CAM_BACK_RIGHT   5.020080          82.887411  24.900000      126
+      # 3          CAM_FRONT   5.020080          50.027272  24.900000      126
+      # 4     CAM_FRONT_LEFT   5.020080          33.542296  24.900000      126
+      # 5    CAM_FRONT_RIGHT   5.020080          66.427920  24.900000      126
+      # 6   CAM_FRONT_ZOOMED   5.020080          50.096270  24.900000      126
+      # 7          LIDAR_TOP   5.020156           0.000000  24.899626      126
+      # 8           ego_pose  40.442375           0.000000  24.899626     1008
+      # 9     sample (annos)   5.020156           0.000000  24.899626      126
+      # 10       sample_data  40.280324          49.847878  24.999799     1008
+      # ---
+      # ---
+      # Scene host-a004-lidar0-1233947108297817786-1233947133198765096 114b780b2efd6f73f134fc3a8f9db628e43131dc47f90e9b5dfdb886400d70f2
+      # Start 2019-02-11 19:05:08       Duration 25.000741004943848 sec
+      # Num Annos 4155 (Tracks 137)
+      #               Series    Freq Hz  Diff Lidar (msec)   Duration  Support
+      # 0           CAM_BACK   5.020080          98.790201  24.900000      126
+      # 1      CAM_BACK_LEFT   5.020080          17.030725  24.900000      126
+      # 2     CAM_BACK_RIGHT   5.020080          83.033195  24.900000      126
+      # 3          CAM_FRONT   5.020080          50.151564  24.900000      126
+      # 4     CAM_FRONT_LEFT   5.020080          33.667718  24.900000      126
+      # 5    CAM_FRONT_RIGHT   5.020080          66.649443  24.900000      126
+      # 6   CAM_FRONT_ZOOMED   5.020080          50.265691  24.900000      126
+      # 7          LIDAR_TOP   5.019934           0.000000  24.900724      126
+      # 8           ego_pose  40.440592           0.000000  24.900724     1008
+      # 9     sample (annos)   5.019934           0.000000  24.900724      126
+      # 10       sample_data  40.278806          49.948567  25.000741     1008
+      # ---
+      # ---
+      # Scene host-a101-lidar0-1241886983298988182-1241887008198992182 7b4640d63a9c62d07a8551d4b430d0acd88eaba8249c843248feb888f4630070
+      # Start 2019-05-14 16:36:23       Duration 25.002139806747437 sec
+      # Num Annos 4777 (Tracks 173)
+      #                Series    Freq Hz  Diff Lidar (msec)   Duration  Support
+      # 0            CAM_BACK   5.020080          93.825297  24.900000      126
+      # 1       CAM_BACK_LEFT   5.020080          85.205165  24.900000      126
+      # 2      CAM_BACK_RIGHT   5.020080          19.099243  24.900000      126
+      # 3           CAM_FRONT   5.020080          52.394347  24.900000      126
+      # 4      CAM_FRONT_LEFT   5.020080          68.799780  24.900000      126
+      # 5     CAM_FRONT_RIGHT   5.020080          35.769232  24.900000      126
+      # 6    CAM_FRONT_ZOOMED   5.020080          52.394347  24.900000      126
+      # 7    LIDAR_FRONT_LEFT   5.020060           0.000000  24.900101      126
+      # 8   LIDAR_FRONT_RIGHT   5.020060           0.000000  24.900101      126
+      # 9           LIDAR_TOP   5.020060           0.000000  24.900101      126
+      # 10           ego_pose  50.562044           0.000000  24.900101     1260
+      # 11     sample (annos)   5.020060           0.000000  24.900101      126
+      # 12        sample_data  50.355690          40.748741  25.002140     1260
+
+
 
 ## Data
 
@@ -248,8 +452,8 @@ class Fixtures(object):
   
   @classmethod
   def dataroot(cls):
-    # return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
-    return '/outer_root/media/seagates-ext4/au_datas/lyft_level_5_root/train'
+    return '/outer_root/media/seagates-ext4/au_datas/nuscenes_root'
+    # return '/outer_root/media/seagates-ext4/au_datas/lyft_level_5_root/train'
 
   # @classmethod
   # def dataroot(cls):

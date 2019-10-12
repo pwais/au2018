@@ -99,12 +99,14 @@ class GetFusedCloudInEgo(object):
       cls._thruput = util.ThruputObserver(name='GetFusedCloudInEgo')
 
     with cls._thruput.observe(n=1):
+      os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        # TF Eager is a load of trash and ignores our session config
       import tensorflow as tf
       import tensorflow.contrib.eager as tfe
 
       if not hasattr(cls, '_sess'):
         cls._sess = util.tf_cpu_session()
-      
+
       wf = tf.placeholder(dtype=tf.string)
       pf = tfe.py_func(GetFusedCloudInEgo._get_all_points, [wf], tf.float32)
       all_points = cls._sess.run(
