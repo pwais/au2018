@@ -290,8 +290,6 @@ class FrameTable(av.FrameTableBase):
           
           frame_rdd = task_rdd.repartition(2 * os.cpu_count()).map(load_frame)
           frame_rdds.append(frame_rdd)
-          if t.n == 100:
-            return frame_rdds
         t.maybe_log_progress(every_n=500)
 
 
