@@ -49,6 +49,12 @@ def transform_from_pb(waymo_transform):
   RT = np.reshape(waymo_transform.transform, [4, 4])
   return av.Transform(rotation=RT[:3, :3], translation=RT[:3, 3])
 
+import klepto
+
+def mymap(cls, waymo_frame):
+  # _, waymo_frame = cls_waymo_frame
+  return str(waymo_frame.context.name) + str(waymo_frame.timestamp_micros)
+
 class GetFusedCloudInEgo(object):
 
   @staticmethod
@@ -83,21 +89,29 @@ class GetFusedCloudInEgo(object):
     points_all_ri2 = np.concatenate(points_ri2, axis=0)
     all_points = np.concatenate((points_all, points_all_ri2), axis=0)
     return all_points
-
+  
   @classmethod
+  @klepto.lru_cache(maxsize=10, keymap=mymap)
   def get_points(cls, waymo_frame):
     # waymo_open_dataset requires eager mode :( so we need to scope its use
     # into a tensorflow py_func
-    import tensorflow as tf
-    import tensorflow.contrib.eager as tfe
+    if not hasattr(cls, '_thruput'):
+      cls._thruput = util.ThruputObserver(name='GetFusedCloudInEgo')
 
-    if not hasattr(cls, '_sess'):
-      cls._sess = util.tf_cpu_session()
+    with cls._thruput.observe(n=1):
+      import tensorflow as tf
+      import tensorflow.contrib.eager as tfe
+
+      if not hasattr(cls, '_sess'):
+        cls._sess = util.tf_cpu_session()
+      
+      wf = tf.placeholder(dtype=tf.string)
+      pf = tfe.py_func(GetFusedCloudInEgo._get_all_points, [wf], tf.float32)
+      all_points = cls._sess.run(
+        pf, feed_dict={wf: waymo_frame.SerializeToString()})
     
-    wf = tf.placeholder(dtype=tf.string)
-    pf = tfe.py_func(GetFusedCloudInEgo._get_all_points, [wf], tf.float32)
-    all_points = cls._sess.run(
-      pf, feed_dict={wf: waymo_frame.SerializeToString()})
+    cls._thruput.update_tallies(num_bytes=util.get_size_of_deep(all_points))
+    cls._thruput.maybe_log_progress(every_n=10)
     return all_points
 
 def get_category_name(class_id):
@@ -202,7 +216,7 @@ class FrameTable(av.FrameTableBase):
   IGNORE_INVISIBLE_CUBOIDS = True
 
   # SETUP_SEGMENTS_PER_CHUNK = os.cpu_count()
-  SETUP_URIS_PER_CHUNK = 10
+  # SETUP_URIS_PER_CHUNK = 10
 
   ## Subclass API
 
@@ -244,45 +258,81 @@ class FrameTable(av.FrameTableBase):
     # import pdb; pdb.set_trace()
 
 
+    PARTITIONS_PER_SEGMENT = 2
+
     frame_rdds = []
-    isegment_uris = util.ichunked(
-      cls.iter_all_segment_uris(), 1)#cls.SETUP_SEGMENTS_PER_CHUNK)
-    for segment_uris in isegment_uris:
-      
-      def gen_frame_tasks(uri):
-        segment_id = uri.segment_id
-        record = cls._get_segment_id_to_record()[segment_id]
-        tf_str_list = util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
-        tasks = [(uri, i) for i in range(len(tf_str_list))]
-        print('%s tasks for %s' % (len(tasks), segment_id))
-        return tasks
-      
-      def load_frame(task):
-        uri, record_idx = task
-        create_frame = util.ThruputObserver.wrap_func(cls.create_frame, log_on_del=True)
-        f = create_frame(uri, record_idx=record_idx)
-        # print(f.uri, ' ', util.get_size_of_deep(f) * 1e-6, 'MB')
-        return f
+    segment_uris = list(cls.iter_all_segment_uris())
+    t = util.ThruputObserver(
+      name='create_frame_rdds', n_total=PARTITIONS_PER_SEGMENT * len(segment_uris))
+    for segment_uri in cls.iter_all_segment_uris():
+      for partition in range(PARTITIONS_PER_SEGMENT):
+        with t.observe(n=1):
+          segment_uri_rdd = spark.sparkContext.parallelize([segment_uri])
 
-      # def iter_segment_frames(uri):
-      #   # Breadcrumbs: to get any frame information at all, we must read and
-      #   # decode protobufs from the whole TFRecord file.  So don't compute
-      #   # Frame URIs, as we do for other datasets, but just generate Frames.
-      #   t = util.ThruputObserver(name=uri.segment_id)
-      #   for wf in cls._iter_waymo_frames(uri.segment_id):
-      #     frame_uri = copy.deepcopy(uri)
-      #     frame_uri.timestamp = int(wf.timestamp_micros * 1e3)
-      #     yield cls.create_frame(uri, waymo_frame=wf)
-      #     t.update_tallies(n=1)
-      #     t.maybe_log_progress(every_n=10)
-      
-      segment_uri_rdd = spark.sparkContext.parallelize(segment_uris)
-      # frame_rdd = segment_uri_rdd.flatMap(iter_segment_frames)
-      task_rdd = segment_uri_rdd.flatMap(gen_frame_tasks)
-      frame_rdd = task_rdd.repartition(10 * os.cpu_count()).map(load_frame)
+          def gen_tasks(uri):
+            segment_id = uri.segment_id
+            record = cls._get_segment_id_to_record()[segment_id]
+            tf_str_list = util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
+            tasks = [
+              (uri, i) for i in range(len(tf_str_list))
+              if (i % PARTITIONS_PER_SEGMENT) == partition
+            ]
+            print('%s tasks for %s part %s' % (len(tasks), segment_id, partition))
+            return tasks
 
-      frame_rdds.append(frame_rdd)
-      # break
+          task_rdd = segment_uri_rdd.flatMap(gen_tasks)
+
+          def load_frame(task):
+            uri, record_idx = task
+            f = cls.create_frame(uri, record_idx=record_idx)
+            # print(f.uri, ' ', util.get_size_of_deep(f) * 1e-6, 'MB')
+            return f
+          
+          frame_rdd = task_rdd.repartition(2 * os.cpu_count()).map(load_frame)
+          frame_rdds.append(frame_rdd)
+          if t.n == 100:
+            return frame_rdds
+        t.maybe_log_progress(every_n=500)
+
+
+
+    # isegment_uris = util.ichunked(
+    #   cls.iter_all_segment_uris(), 1)#cls.SETUP_SEGMENTS_PER_CHUNK)
+    # for segment_uris in isegment_uris:
+      
+    #   def gen_frame_tasks(uri):
+    #     segment_id = uri.segment_id
+    #     record = cls._get_segment_id_to_record()[segment_id]
+    #     tf_str_list = util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
+    #     tasks = [(uri, i) for i in range(len(tf_str_list))]
+    #     print('%s tasks for %s' % (len(tasks), segment_id))
+    #     return tasks
+      
+    #   def load_frame(task):
+    #     uri, record_idx = task
+    #     create_frame = util.ThruputObserver.wrap_func(cls.create_frame, log_on_del=True)
+    #     f = create_frame(uri, record_idx=record_idx)
+    #     # print(f.uri, ' ', util.get_size_of_deep(f) * 1e-6, 'MB')
+    #     return f
+
+    #   # def iter_segment_frames(uri):
+    #   #   # Breadcrumbs: to get any frame information at all, we must read and
+    #   #   # decode protobufs from the whole TFRecord file.  So don't compute
+    #   #   # Frame URIs, as we do for other datasets, but just generate Frames.
+    #   #   t = util.ThruputObserver(name=uri.segment_id)
+    #   #   for wf in cls._iter_waymo_frames(uri.segment_id):
+    #   #     frame_uri = copy.deepcopy(uri)
+    #   #     frame_uri.timestamp = int(wf.timestamp_micros * 1e3)
+    #   #     yield cls.create_frame(uri, waymo_frame=wf)
+    #   #     t.update_tallies(n=1)
+    #   #     t.maybe_log_progress(every_n=10)
+      
+    #   segment_uri_rdd = spark.sparkContext.parallelize(segment_uris)
+    #   # frame_rdd = segment_uri_rdd.flatMap(iter_segment_frames)
+    #   task_rdd = segment_uri_rdd.flatMap(gen_frame_tasks)
+    #   frame_rdd = task_rdd.repartition(20 * os.cpu_count() ).partitionBy(20 * os.cpu_count()).map(load_frame)
+    #   frame_rdds.append(frame_rdd)
+    #   # break
     
     return frame_rdds
 

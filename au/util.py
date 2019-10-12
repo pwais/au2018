@@ -1377,7 +1377,7 @@ class TFRecordsFileAsListOfStrings(object):
     self.fileobj.seek(0)
     for offset, length in self._iter_offset_length():
       yield self._get_data(offset, length)
-  
+
   ## Utils
 
   @classmethod
