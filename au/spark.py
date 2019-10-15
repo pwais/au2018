@@ -364,6 +364,18 @@ class Spark(object):
       t.maybe_log_progress(every_n=1)
       df.unpersist()
 
+      if True:
+        spark = Spark.getOrCreate()
+        df2 = spark.read.parquet(save_opts['path'])
+        df2.createOrReplaceTempView('data')
+        spark.sql('''
+          select uri.segment_id s, uri.timestamp t, count(*) c 
+          from data group by s, t
+          order by c desc
+          ''').show(100, truncate=False)
+        spark.sql('select count(*) from data').show()
+        del df2
+
 
   ### Test Utilities (for unit tests and more!)
 

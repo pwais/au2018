@@ -12,6 +12,9 @@ from au.fixtures.datasets import av
 
 ## Utils
 
+def to_nanostamp(timestamp_micros):
+  return int(timestamp_micros) * 1000
+
 def get_jpeg_size(jpeg_bytes):
   """Get the size of a JPEG image without reading and decompressing the entire
   file.  Based upon:  
@@ -114,6 +117,7 @@ class GetFusedCloudInEgo(object):
     
     cls._thruput.update_tallies(num_bytes=util.get_size_of_deep(all_points))
     cls._thruput.maybe_log_progress(every_n=10)
+    print(cls.get_points.info())
     return all_points
 
 def get_category_name(class_id):
@@ -233,9 +237,14 @@ class FrameTable(av.FrameTableBase):
     if waymo_frame is None:
       waymo_frame = cls._get_waymo_frame(uri, record_idx=record_idx)
         # NB: this operation is expensive! See comments embedded in function
+    # if not f.uri.timestamp:
+    # If given a `record_idx`, we might not know the frame's timestamp
+    # until we've fetched and decoded the `waymo_frame`.
+    f.uri.timestamp = to_nanostamp(waymo_frame.timestamp_micros)
     cls._fill_ego_pose(f, waymo_frame)
     cls._fill_camera_images(f, waymo_frame)
     cls._fill_extra(f, waymo_frame)
+    print(uri.segment_id, f.uri.timestamp, waymo_frame.timestamp_micros, type(waymo_frame.timestamp_micros), record_idx)
     return f
 
   @classmethod
@@ -265,7 +274,8 @@ class FrameTable(av.FrameTableBase):
     frame_rdds = []
     segment_uris = list(cls.iter_all_segment_uris())
     t = util.ThruputObserver(
-      name='create_frame_rdds', n_total=PARTITIONS_PER_SEGMENT * len(segment_uris))
+      name='create_frame_rdd_tasks',
+      n_total=PARTITIONS_PER_SEGMENT * len(segment_uris))
     for segment_uri in cls.iter_all_segment_uris():
       for partition in range(PARTITIONS_PER_SEGMENT):
         with t.observe(n=1):
@@ -354,7 +364,7 @@ class FrameTable(av.FrameTableBase):
     for base_uri in cls.iter_all_segment_uris():
       for wf in cls._iter_waymo_frames(base_uri.segment_id):
         uri = copy.deepcopy(base_uri)
-        uri.timestamp = int(wf.timestamp_micros * 1e3)
+        uri.timestamp = to_nanostamp(wf.timestamp_micros)
         yield uri
 
   ## Support
@@ -414,14 +424,13 @@ class FrameTable(av.FrameTableBase):
       record = cls._get_segment_id_to_record()[uri.segment_id]
       tf_str_list = util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
       s = tf_str_list[record_idx]
-      print(uri, ' protobuf ', len(s) * 1e-6, 'MB')
       wf = dataset_pb2.Frame()
       wf.ParseFromString(bytearray(s))
       return wf
 
     util.log.info("Doing expensive linear find ...")
     for wf in cls._iter_waymo_frames(uri.segment_id):
-      timestamp = int(wf.timestamp_micros * 1e3)
+      timestamp = to_nanostamp(wf.timestamp_micros)
       if timestamp == uri.timestamp:
         util.log.info("... found!")
         return wf
@@ -459,7 +468,7 @@ class FrameTable(av.FrameTableBase):
     if not viewport:
       from au.fixtures.datasets import common
       viewport = common.BBox.of_size(w, h)
-    ci_timestamp = int(wf_camera_image.pose_timestamp * 1e9)
+    ci_timestamp = to_nanostamp(wf_camera_image.pose_timestamp)
 
     # NB: Waymo protobuf defs had an error; the protobufs contain
     # the inverse of the expected transform.
@@ -515,7 +524,7 @@ class FrameTable(av.FrameTableBase):
       # TODO: motion correction / rolling shutter per-camera, non-fused cloud, ...
       pc = av.PointCloud(
         sensor_name='lidar_fused',
-        timestamp=int(waymo_frame.timestamp_micros * 1e3),
+        timestamp=to_nanostamp(waymo_frame.timestamp_micros),
         cloud=GetFusedCloudInEgo.get_points(waymo_frame),
         ego_to_sensor=av.Transform(), # points are in ego frame...
         motion_corrected=False,
@@ -600,7 +609,7 @@ class FrameTable(av.FrameTableBase):
         track_id=label.id,
         category_name=category_name,
         au_category=au_category,
-        timestamp=int(waymo_frame.timestamp_micros * 1e3),
+        timestamp=to_nanostamp(waymo_frame.timestamp_micros),
         box3d=box3d,
         motion_corrected=False, # TODO
         length_meters=l,

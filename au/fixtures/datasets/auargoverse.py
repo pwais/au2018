@@ -915,10 +915,6 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       "Could not find a cloud within 1 sec of %s, diff %s" % (timestamp, diff)
     return idx, self.lidar_timestamp_list[idx]
 
-  # @klepto.lru_cache(maxsize=10)#, ignore=(0,))
-  # def _get_lidar(self, idx):
-  #   return self.get_lidar(idx)
-
   def get_nearest_lidar_sweep(self, timestamp):
     idx, lidar_t = self.get_nearest_lidar_sweep_id(timestamp)
     @klepto.lru_cache(maxsize=10)
@@ -1063,7 +1059,133 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
     
     from argoverse.utils.calibration import point_cloud_to_homogeneous
     return pts
+  
+  def print_sensor_sample_rates(self):
+    """Print a report to stdout describing the sample rates of all sensors,
+    labels, and localization objects."""
+
+    def to_sec(timestamp):
+      # Timestamps are in nanoseconds GPS time (but the epoch looks wrong--
+      # drives look recorded in 1990).
+      return timestamp * 1e-9
+
+    def get_ts_from_json_path(path):
+      nanostamp = int(path.split('_')[-1].rstrip('.json'))
+      return to_sec(nanostamp)
+
+    name_to_ts = {}
+
+    # Labels
+    name_to_ts['labels'] = np.array(
+      sorted(get_ts_from_json_path(p) for p in self.label_list))
     
+    # Poses
+    pose_paths = util.all_files_recursive(
+      os.path.join(self.root_dir, self.current_log, 'poses'))
+    name_to_ts['ego_pose'] = np.array(
+      sorted(get_ts_from_json_path(p) for p in pose_paths))
+    
+    # Lidar
+    name_to_ts['lidar_fused'] = np.array(
+      sorted(to_sec(t) for t in self.lidar_timestamp_list))
+    
+    # Cameras
+    for camera in self.image_timestamp_list.keys():
+      name_to_ts[camera] = np.array(
+        sorted(to_sec(t) for t in self.image_timestamp_list[camera]))
+
+    # Aggregate
+    import itertools
+    all_ts = sorted(itertools.chain.from_iterable(name_to_ts.values()))
+    from datetime import datetime
+    dt = datetime.utcfromtimestamp(all_ts[0])
+    start = dt.strftime('%Y-%m-%d %H:%M:%S')
+    duration = (all_ts[-1] - all_ts[0])
+
+    # Print a report
+    print('---')
+    print('---')
+
+    print('Log %s' % (self.current_log))
+    print('Start %s \tDuration %s sec' % (start, duration))
+    import pandas as pd
+    from collections import OrderedDict
+    rows = []
+    for name in sorted(name_to_ts.keys()):
+      def get_series(name):
+        return np.array(sorted(name_to_ts[name]))
+      
+      series = get_series(name)
+      freqs = series[1:] - series[:-1]
+
+      lidar_series = get_series('lidar_fused')
+      diff_lidar_ms = 1e3 * np.mean(
+        [np.abs(lidar_series - t).min() for t in series])
+
+      rows.append(OrderedDict((
+        ('Series',              name),
+        ('Freq Hz',             1. / np.mean(freqs)),
+        ('Diff Lidar (msec)',   diff_lidar_ms),
+        ('Duration',            series[-1] - series[0]),
+        ('Support',             len(series)),
+      )))
+    print(pd.DataFrame(rows))
+
+    print()
+    print()
+
+    # ---
+    # ---
+    # Log 02cf0ce1-699a-373b-86c0-eb6fd5f4697a
+    # Start 1980-01-06 01:01:34       Duration 15.95070230960846 sec
+    #                 Series     Freq Hz  Diff Lidar (msec)   Duration  Support
+    # 0             ego_pose  229.456981          27.981463  15.950702     3661
+    # 1               labels   10.000169           0.000000  15.599737      157
+    # 2          lidar_fused   10.000169           0.000000  15.599737      157
+    # 3    ring_front_center   30.030025          27.547860  15.817503      476
+    # 4      ring_front_left   30.030027          27.547829  15.817501      476
+    # 5     ring_front_right   30.030026          27.547906  15.817502      476
+    # 6       ring_rear_left   30.030031          27.547705  15.817500      476
+    # 7      ring_rear_right   30.030029          27.547684  15.817500      476
+    # 8       ring_side_left   30.030031          27.547732  15.817499      476
+    # 9      ring_side_right   30.030036          27.547605  15.817497      476
+    # 10   stereo_front_left    5.005005          15.940089  15.784199       80
+    # 11  stereo_front_right    5.005004          15.940806  15.784202       80
+    # ---
+    # ---
+    # Log 3138907e-1f8a-362f-8f3d-773f795a0d01
+    # Start 1980-01-06 00:58:31       Duration 15.950732171535492 sec
+    #                 Series     Freq Hz  Diff Lidar (msec)   Duration  Support
+    # 0             ego_pose  229.865559          26.294311  15.922351     3661
+    # 1               labels    9.999661           0.000000  15.600529      157
+    # 2          lidar_fused    9.999661           0.000000  15.600529      157
+    # 3    ring_front_center   30.030021          23.791747  15.584405      469
+    # 4      ring_front_left   30.029949          23.787438  15.584442      469
+    # 5     ring_front_right   30.030032          23.791692  15.584399      469
+    # 6       ring_rear_left   30.030028          23.791658  15.584401      469
+    # 7      ring_rear_right   30.030034          23.791675  15.584398      469
+    # 8       ring_side_left   30.030032          23.791355  15.584399      469
+    # 9      ring_side_right   30.030036          23.791633  15.584397      469
+    # 10   stereo_front_left    5.005004          36.802685  15.584402       79
+    # 11  stereo_front_right    5.005006          36.803061  15.584398       79
+    # ---
+    # ---
+    # Log 70d2aea5-dbeb-333d-b21e-76a7f2f1ba1c
+    # Start 1980-01-06 03:12:41       Duration 15.950706362724304 sec
+    #                 Series     Freq Hz  Diff Lidar (msec)   Duration  Support
+    # 0             ego_pose  228.516526          28.184812  15.950706     3646
+    # 1               labels    9.999913           0.000000  15.600136      157
+    # 2          lidar_fused    9.999913           0.000000  15.600136      157
+    # 3    ring_front_center   30.030032          26.389656  15.617699      470
+    # 4      ring_front_left   30.030032          26.389745  15.617699      470
+    # 5     ring_front_right   30.030029          26.389670  15.617700      470
+    # 6       ring_rear_left   30.030024          26.389670  15.617703      470
+    # 7      ring_rear_right   30.030033          26.389734  15.617698      470
+    # 8       ring_side_left   30.030030          26.389771  15.617700      470
+    # 9      ring_side_right   30.030031          26.389730  15.617699      470
+    # 10   stereo_front_left    5.005004          15.282329  15.384604       78
+    # 11  stereo_front_right    5.005005          15.282405  15.384600       78
+
 
 
 ###

@@ -316,6 +316,17 @@ class TestArgoverseImageTable(unittest.TestCase):
           uris = [URI.from_str(s) for s in TEST_FIXTURE_URIS_NEW]
           return spark.sparkContext.parallelize(uris)
       
+      segs = set()
+      for uri in TEST_FIXTURE_URIS_NEW:
+        from au.fixtures.datasets.av import URI
+        uri = URI.from_str(uri)
+        if uri.segment_id in segs:
+          continue
+        loader = self.TestFixtures.get_loader(uri)
+        loader.print_sensor_sample_rates()
+        segs.add(uri.segment_id)
+      return
+
       # x = TestFrameTable.create_frame('avframe://dataset=argoverse&segment_id=tracking_val.tar.gz|22160544_2216_2216_2216_722161741824&split=val&camera=ring_front_center&timestamp=315966714291915976')
       # with open('/tmp/' + x.uri.segment_id + '.html', 'w') as f:
       #     f.write(x.to_html())

@@ -37,6 +37,9 @@ def get_camera_normal(K, extrinsic):
     pv_hat = pv / np.linalg.norm(pv)
     return pv_hat
 
+def to_nanostamp(timestamp_micros):
+  return int(timestamp_micros) * 1000
+
 import shelve
 from nuscenes.nuscenes import NuScenes
 class AUNuScenes(NuScenes):
@@ -125,6 +128,7 @@ class AUNuScenes(NuScenes):
     
       def to_ts_row(sample_data):
         row = dict(sample_data)
+        row['timestamp_ns'] = to_nanostamp(row['timestamp'])
         row['scene_token'] = sample_to_scene[row['sample_token']]
         row['scene_name'] = self.get('scene', row['scene_token'])['name']
         return row
@@ -149,7 +153,7 @@ class AUNuScenes(NuScenes):
 
   ### AU-added Utils
 
-  def get_nearest_sample_data(self, scene_name, timestamp, channel=None):
+  def get_nearest_sample_data(self, scene_name, timestamp_ns, channel=None):
     if not hasattr(self, '_sample_data_ts_df'):
       cache_path = self._get_cache_path(self.SAMPLE_DATA_TS_CACHE_NAME)
       util.log.info("Using sample_data timestamp cache at %s" % cache_path)
@@ -161,10 +165,11 @@ class AUNuScenes(NuScenes):
     if channel:
       df = df[df['channel'] == channel]
     
-    nearest = df.iloc[  (df['timestamp'] - timestamp).abs().argsort()[:1]  ]
+    nearest = df.iloc[  
+      (df['timestamp_ns'] - timestamp_ns).abs().argsort()[:1]  ]
     if len(nearest) > 0:
       row = nearest.to_dict(orient='records')[0]
-      return row, row['timestamp'] - timestamp
+      return row, row['timestamp_ns'] - timestamp_ns
     else:
       return None, 0
 
@@ -189,13 +194,12 @@ class AUNuScenes(NuScenes):
     # 'animal', 'emergency_vehicle', 'motorcycle'
 
   def print_sensor_sample_rates(self, scene_names=None):
+    """Print a report to stdout describing the sample rates of all sensors,
+    labels, and localization objects."""
+
     if not scene_names:
       scene_names = [s['name'] for s in self.scene]
     scene_names = set(scene_names)
-    
-    def to_sec(timestamp):
-      # NuScenes and Lyft Level 5 timestamps are in microseconds
-      return timestamp * 1e-6
 
     scene_tokens = set(
       s['token'] for s in self.scene if s['name'] in scene_names)
@@ -203,6 +207,10 @@ class AUNuScenes(NuScenes):
       scene_samples = [
         s for s in self.sample if s['scene_token'] == scene_token
       ]
+
+      def to_sec(timestamp):
+        # NuScenes and Lyft Level 5 timestamps are in microseconds
+        return timestamp * 1e-6
 
       # Samples are supposed to be 'best groupings' of lidar and camera data.
       # Let's measure their sample rate.
@@ -433,20 +441,6 @@ class Fixtures(object):
   def tarball_path(cls, fname):
     return os.path.join(cls.tarballs_dir(), fname)
 
-  # @classmethod
-  # def tarball_dir(cls, fname):
-  #   """Get the directory for an uncompressed tarball with `fname`"""
-  #   dirname = fname.replace('.tar.gz', '')
-  #   return cls.tarball_path(dirname)
-
-  # @classmethod
-  # def all_tarballs(cls):
-  #   return list(
-  #     itertools.chain.from_iterable(
-  #       getattr(cls, attr, [])
-  #       for attr in dir(cls)
-  #       if attr.endswith('_TARBALLS')))
-
 
   ## Derived Data
   
@@ -462,13 +456,14 @@ class Fixtures(object):
   @classmethod
   def index_root(cls):
     return os.path.join(cls.ROOT, 'index')
-  
+
 
   ## Setup
 
   @classmethod
   def run_import(cls, only_mini=False):
     pass
+
 
   ## Public API
 
@@ -588,29 +583,29 @@ class FrameTable(av.FrameTableBase):
       uris.append(av.URI(
                     dataset='nuscenes',
                     split=scene_split,
-                    timestamp=sample_data['timestamp'],
+                    timestamp=to_nanostamp(sample_data['timestamp']),
                     segment_id=scene_record['name'],
                     camera=sample_data['channel']))
 
     return uris
   
-  @classmethod
-  def _scene_to_ts_to_sample_token(cls):
-    if not hasattr(cls, '__scene_to_ts_to_sample_token'):
-      nusc = cls.get_nusc()
-      scene_name_to_token = dict(
-        (scene['name'], scene['token']) for scene in nusc.scene)
+  # @classmethod
+  # def _scene_to_ts_to_sample_token(cls):
+  #   if not hasattr(cls, '__scene_to_ts_to_sample_token'):
+  #     nusc = cls.get_nusc()
+  #     scene_name_to_token = dict(
+  #       (scene['name'], scene['token']) for scene in nusc.scene)
     
-      from collections import defaultdict
-      scene_to_ts_to_sample_token = defaultdict(dict)
-      for sample in nusc.sample:
-        scene_name = nusc.get('scene', sample['scene_token'])['name']
-        timestamp = sample['timestamp']
-        token = sample['token']
-        scene_to_ts_to_sample_token[scene_name][timestamp] = token
+  #     from collections import defaultdict
+  #     scene_to_ts_to_sample_token = defaultdict(dict)
+  #     for sample in nusc.sample:
+  #       scene_name = nusc.get('scene', sample['scene_token'])['name']
+  #       timestamp_micros = sample['timestamp']
+  #       token = sample['token']
+  #       scene_to_ts_to_sample_token[scene_name][timestamp_micros] = token
       
-      cls.__scene_to_ts_to_sample_token = scene_to_ts_to_sample_token
-    return cls.__scene_to_ts_to_sample_token
+  #     cls.__scene_to_ts_to_sample_token = scene_to_ts_to_sample_token
+  #   return cls.__scene_to_ts_to_sample_token
 
   # @classmethod
   # def _create_frame_from_sample(cls, uri, sample):
@@ -650,11 +645,12 @@ class FrameTable(av.FrameTableBase):
       cameras = [uri.camera]
     
     for camera in cameras:
-      best_sd, diff = nusc.get_nearest_sample_data(
+      best_sd, diff_ns = nusc.get_nearest_sample_data(
                                 uri.segment_id,
                                 uri.timestamp,
                                 channel=camera)
       assert best_sd
+      assert diff_ns < .01 * 1e9
 
       ci = cls._get_camera_image(uri, best_sd)
       f.camera_images.append(ci)
@@ -691,7 +687,7 @@ class FrameTable(av.FrameTableBase):
           height=h,
           width=w,
           viewport=viewport,
-          timestamp=timestamp,
+          timestamp=to_nanostamp(timestamp),
           cam_from_ego=cam_from_ego,
           K=cam_intrinsic,
           principal_axis_in_ego=principal_axis_in_ego,
@@ -778,7 +774,7 @@ class FrameTable(av.FrameTableBase):
       # Throw out intensity (lidar) and ... other stuff (radar)
     return av.PointCloud(
       sensor_name=sensor,
-      timestamp=pointsensor['timestamp'],
+      timestamp=to_nanostamp(pointsensor['timestamp']),
       cloud=n_xyz,
       ego_to_sensor=transform_from_record(cs_record),
       motion_corrected=(pointsensor['ego_pose_token'] != target_pose_token),
@@ -811,7 +807,7 @@ class FrameTable(av.FrameTableBase):
       cuboid.track_id = \
         'nuscenes_instance_token:' + sample_anno['instance_token']
       cuboid.category_name = box.name
-      cuboid.timestamp = sd_record['timestamp']
+      cuboid.timestamp = to_nanostamp(sd_record['timestamp'])
       
       cuboid.au_category = NUSCENES_CATEGORY_TO_AU_AV_CATEGORY[box.name]
       
