@@ -22,6 +22,8 @@ class AVURITest(unittest.TestCase):
 
     def check_eq(uri, s):
       assert str(uri) == s
+      
+      # Also exercise URI.__eq__
       assert av.URI.from_str(s) == uri
 
     check_eq(av.URI(), av.URI.PREFIX)
@@ -39,6 +41,17 @@ class AVURITest(unittest.TestCase):
     check_eq(
       av.URI(dataset='d', extra={'a': 'foo', 'b': 'bar'}),
       'avframe://dataset=d&extra.a=foo&extra.b=bar')
+    
+  def test_sorting(self):
+    # A less-complete URI is always less than a more-complete one
+    assert av.URI() < av.URI(dataset='d', timestamp=0, topic='t')
+    
+    # Ties are broken using tuple-based encoding
+    u1 = av.URI(dataset='d', timestamp=0, topic='t')
+    u2 = av.URI(dataset='d', timestamp=1, topic='t')
+    assert u1 < u2
+    assert u1.as_tuple() < u2.as_tuple()
+    assert str(u1) < str(u2)  # Usually true, but NB timestamps are NOT padded!
 
 
 
@@ -96,18 +109,21 @@ def test_stamped_datum_table_io(monkeypatch):
 
     @classmethod
     def _create_datum_rdds(cls, spark):
-      return [spark.sparkContext.parallelize([d]) for d in cls.DATUMS]
+      return [spark.sparkContext.parallelize(cls.DATUMS)]
     
   assert util.missing_or_empty(TestStampedDatumTable.table_root())
   
   with testutils.LocalSpark.sess() as spark:
     TestStampedDatumTable.setup(spark=spark)
 
+    # Test basic data consistency
     df = TestStampedDatumTable.as_df(spark)
     assert len(TestStampedDatumTable.DATUMS) == df.count()
     
     sd_rdd = TestStampedDatumTable.as_stamped_datum_rdd(spark)
     assert len(TestStampedDatumTable.DATUMS) == sd_rdd.count()
+    
+    assert sorted(sd_rdd.collect()) == sorted(TestStampedDatumTable.DATUMS)
     for sd in sd_rdd.collect():
       assert sd.dataset == 'd1'
 

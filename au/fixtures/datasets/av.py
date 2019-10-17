@@ -131,6 +131,19 @@ def _set_defaults(obj, vals, defaults, DEFAULT_FOR_MISSING=None):
     v = vals.get(k, defaults.get(k, DEFAULT_FOR_MISSING))
     setattr(obj, k, v)
 
+def _slotted_eq(obj1, obj2):
+  def is_eq(v1, v2):
+    if isinstance(v1, np.ndarray):
+      return np.array_equal(v1, v1)
+    else:
+      return v1 == v2
+  def attrs_eq(attr):
+    return is_eq(getattr(obj1, attr), getattr(obj2, attr))
+  return (
+    type(obj1) is type(obj2) and
+    obj1.__slots__ == obj2.__slots__ and
+    all(attrs_eq(attr) for attr in obj1.__slots__))
+
 def maybe_make_homogeneous(pts, dim=3):
   """Convert numpy array `pts` to Homogeneous coordinates of target `dim`
   if necessary"""
@@ -170,6 +183,9 @@ class Transform(object):
     # Ensure Translation is a vector
     self.translation = np.reshape(self.translation, (3, 1))
   
+  def __eq__(self, other):
+    return _slotted_eq(self, other)
+
   def apply(self, pts):
     """Apply this transform (i.e. right-multiply) to `pts` and return
     tranformed *homogeneous* points."""
@@ -254,28 +270,42 @@ class URI(object):
     if isinstance(self.camera_timestamp, six.string_types):
       self.camera_timestamp = int(self.camera_timestamp)
   
-  def to_str(self):
+  def as_tuple(self):
     def to_tokens(k, v):
       if v is not None:
         if k == 'extra':
-          for ek, ev in v.items():
-            yield 'extra.%s=%s' % (ek, ev)
+          for ek, ev in sorted(v.items()):
+            yield ('extra.%s' % ek, ev)
         else:
-          yield '%s=%s' % (k, v)
+          yield (k, v)
 
     toks = itertools.chain.from_iterable(
       to_tokens(attr, getattr(self, attr)) for attr in self.__slots__)
+    return tuple(toks)
+
+  def to_str(self):
+    tup = self.as_tuple()
+    toks = ('%s=%s' % (k, v) for k, v in tup)
     return '%s%s' % (self.PREFIX, '&'.join(toks))
   
   def __str__(self):
     return self.to_str()
-  
+
+  def __repr__(self):
+    kvs = ((attr, getattr(self, attr)) for attr in self.__slots__)
+    kwargs_str = ', '.join('%s=%s' % (k, repr(v)) for k, v in kvs)
+    return 'URI(%s)' % kwargs_str
+
   def __eq__(self, other):
     if type(other) is type(self):
       return all(
         getattr(self, attr) == getattr(other, attr)
         for attr in self.__slots__)
     return False
+
+  def __lt__(self, other):
+    assert type(other) is type(self)
+    return self.as_tuple() < other.as_tuple()
 
   def update(self, **kwargs):
     for k in self.__slots__:
@@ -361,6 +391,9 @@ class Cuboid(object):
   def __init__(self, **kwargs):
     _set_defaults(self, kwargs, {})
       # Default all to None
+
+  def __eq__(self, other):
+    return _slotted_eq(self, other)
 
   def to_html(self):
     import tabulate
@@ -465,6 +498,9 @@ class BBox(common.BBox):
     _set_defaults(self, kwargs, {})
       # Default all to None
 
+  def __eq__(self, other):
+    return _slotted_eq(self, other)
+
   def draw_in_image(
         self,
         img,
@@ -518,6 +554,9 @@ class PointCloud(object):
     _set_defaults(self, kwargs, {})
       # Default all to None
   
+  def __eq__(self, other):
+    return _slotted_eq(self, other)
+
   def to_html(self):
     import tabulate
     table = [
@@ -569,6 +608,9 @@ class CameraImage(object):
     }
     _set_defaults(self, kwargs, DEFAULTS)
   
+  def __eq__(self, other):
+    return _slotted_eq(self, other)
+
   @property
   def image(self):
     if self.image_jpeg:
@@ -975,7 +1017,19 @@ class StampedDatum(URI):
     _set_defaults(self, kwargs, DEFAULTS)
 
   def __str__(self):
-    return 'StampedDatum[%s]' % str(self.uri)
+    return 'StampedDatum[%s]' % self.uri
+
+  def __repr__(self):
+    kvs = ((attr, getattr(self, attr)) for attr in self.__slots__)
+    kwargs_str = ', '.join('%s=%s' % (k, repr(v)) for k, v in kvs)
+    return 'StampedDatum(%s)' % kwargs_str
+
+  def __eq__(self, other):
+    return _slotted_eq(self, other)
+
+  def __lt__(self, other):
+    assert type(other) is type(self)
+    return self.uri < other.uri
 
   @property
   def uri(self):

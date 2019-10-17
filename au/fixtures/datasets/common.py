@@ -24,6 +24,13 @@ class BBox(object):
       NULL = '' # NB: Spark cannot encode None in Parquet, but '' is OK
       setattr(self, k, kwargs.get(k, NULL))
   
+  def __eq__(self, other):
+    if type(other) is type(self):
+      return all(
+        getattr(self, attr) == getattr(other, attr)
+        for attr in self.__slots__)
+    return False
+
   def update(self, **kwargs):
     for k in self.__slots__:
       if k in kwargs:
