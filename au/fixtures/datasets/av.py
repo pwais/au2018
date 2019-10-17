@@ -155,12 +155,20 @@ def theta_signed(axis, v):
 class Transform(object):
   """An SE(3) / ROS Transform-like object"""
 
-  slots__ = ('rotation', 'translation')
+  __slots__ = ('rotation', 'translation', 'src_frame', 'dest_frame')
   
   def __init__(self, **kwargs):
     # Defaults to identity transform
-    self.rotation = kwargs.get('rotation', np.eye(3, 3))
-    self.translation = kwargs.get('translation', np.zeros((3, 1)))
+    DEFAULTS = {
+      'rotation': np.eye(3, 3),
+      'translation': np.zeros((3, 1)),
+      'src_frame': '',
+      'dest_frame': '',
+    }
+    _set_defaults(self, kwargs, DEFAULTS)
+
+    # Ensure Translation is a vector
+    self.translation = np.reshape(self.translation, (3, 1))
   
   def apply(self, pts):
     """Apply this transform (i.e. right-multiply) to `pts` and return
@@ -940,21 +948,40 @@ class CameraImage(object):
 
 
 class StampedDatum(URI):
-  """A single piece of data associated with a specific time; a URI also 
-  'stamps' this piece of data. Represents a single row in a
-  StampedDatumTable."""
+  """A single piece of data associated with a specific time and a specific
+  robot (since we don't have robot IDs, we use segment_ids to imply robot).
+  In practice, we stamp the datum with other context, such as dataset.
+  Represents a single row in a `StampedDatumTable`."""
 
   __slots__ = tuple(list(URI.__slots__) + [
-    'uri',
+    # Inherit everything from a URI; we'll use URIs to address StampedDatums.
+    # Python users can access URI attributes directly or thru the `uri`
+    # property below.
+    # Parquet users can partition data using URI attributes.
 
-    # Spark needs partition keys as attributes
-    'camera_image',
-    'point_cloud',
-    'cuboids',
-    'pose',
-    'asdg',
-
+    # The actual Data
+    'camera_image',       # type: CameraImage
+    'point_cloud',        # type: PointCloud
+    'cuboids',            # type: List[Cuboid]
+    # 'bboxes',             # type: List[BBox]
+    'transform',          # type: Transform
   ])
+
+  def __init__(self, **kwargs):
+    super(StampedDatum, self).__init__(**kwargs)
+    DEFAULTS = {
+      'cuboids': [],
+    }
+    _set_defaults(self, kwargs, DEFAULTS)
+
+  def __str__(self):
+    return 'StampedDatum[%s]' % str(self.uri)
+
+  @property
+  def uri(self):
+    return URI(**dict((attr, getattr(self, attr)) for attr in URI.__slots__))
+
+
 
 
 class Frame(object):
@@ -1019,11 +1046,12 @@ class Frame(object):
 # In the future, Spark may perhaps add support for reading Python 3 type
 # annotations, in which case the Protoypes will be obviated.
 
-URI_PROTO = URI(
+URI_PROTO_KWARGS = dict(
   # Core spec; most URIs will have these set
   dataset='proto',
   split='train',
   segment_id='proto_segment',
+  topic='topic',
   timestamp=int(100 * 1e9), # In nanoseconds
   
   # Uris can identify more specific things in a Frame
@@ -1034,6 +1062,16 @@ URI_PROTO = URI(
   crop_w=10, crop_h=10,
   
   track_id='track-001',
+
+  extra={'key': 'value'},
+)
+URI_PROTO = URI(**URI_PROTO_KWARGS)
+
+TRANSFORM_PROTO = Transform(
+  rotation=np.eye(3, 3),
+  translation=np.zeros((3, 1)),
+  src_frame='world',
+  dest_frame='ego',
 )
 
 CUBOID_PROTO = Cuboid(
@@ -1085,7 +1123,7 @@ BBOX_PROTO = BBox(
 POINTCLOUD_PROTO = PointCloud(
   sensor_name='lidar',
   timestamp=int(100 * 1e9), # In nanoseconds
-  cloud=np.ones((10, 10, 10)),
+  cloud=np.ones((10, 3)),
   motion_corrected=True,
   ego_to_sensor=Transform(),
 )
@@ -1106,6 +1144,15 @@ CAMERAIMAGE_PROTO = CameraImage(
   principal_axis_in_ego=np.array([0., 0., 0.]),
 )
 
+STAMPED_DATUM_PROTO = StampedDatum(
+  camera_image=CAMERAIMAGE_PROTO,
+  point_cloud=POINTCLOUD_PROTO,
+  cuboids=[CUBOID_PROTO],
+  
+  transform=TRANSFORM_PROTO,
+  **URI_PROTO_KWARGS,
+)
+
 FRAME_PROTO = Frame(
   uri=URI_PROTO,
   camera_images=[CAMERAIMAGE_PROTO],
@@ -1119,6 +1166,63 @@ FRAME_PROTO = Frame(
 ###
 ### Tables
 ###
+
+class StampedDatumTableBase(object):
+
+  ## Public API
+
+  PARTITION_KEYS = ('dataset', 'split', 'segment_id', 'topic')
+
+  @classmethod
+  def table_root(cls):
+    return os.path.join(conf.AU_TABLE_CACHE, 'av_stamped_data')
+  
+  @classmethod
+  def setup(cls, spark=None):
+    if util.missing_or_empty(cls.table_root()):
+      with Spark.sess(spark) as spark:
+        sd_rdds = cls._create_datum_rdds(spark)
+        class StampedDatumDFThunk(object):
+          def __init__(self, sd_rdd):
+            self.sd_rdd = sd_rdd
+          def __call__(self):
+            return cls._sd_rdd_to_sd_df(spark, self.sd_rdd)
+        df_thunks = [StampedDatumDFThunk(sd_rdd) for sd_rdd in sd_rdds]
+        Spark.save_df_thunks(
+          df_thunks,
+          path=cls.table_root(),
+          format='parquet',
+          partitionBy=cls.PARTITION_KEYS,
+          compression='lz4')
+
+  @classmethod
+  def as_df(cls, spark):
+    df = spark.read.option("mergeSchema", "true").parquet(cls.table_root())
+    return df
+
+  @classmethod
+  def as_stamped_datum_rdd(cls, spark):
+    df = cls.as_df(spark)
+    sd_rdd = df.rdd.map(RowAdapter.from_row)
+    return sd_rdd
+
+  ## Subclass API - Each dataset should provide ETL to a StampedDatumTable
+
+  @classmethod
+  def _create_datum_rdds(cls, spark):
+    """Subclasses should create and return a list of `RDD[StampedDatum]`s"""
+    return []
+
+  ## Support
+
+  @classmethod
+  def _sd_rdd_to_sd_df(cls, spark, sd_rdd):
+    to_row = RowAdapter.to_row
+    schema = RowAdapter.to_schema(to_row(STAMPED_DATUM_PROTO))
+    row_rdd = sd_rdd.map(to_row)
+    df = spark.createDataFrame(row_rdd, schema=schema)
+    return df
+
 
 class FrameTableBase(object):
 
