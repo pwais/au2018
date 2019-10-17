@@ -3,6 +3,7 @@ datasets, e.g. Argoverse, nuScenes, Waymo Open. etc.
 """
 
 import copy
+import itertools
 import math
 import os
 
@@ -198,12 +199,16 @@ class URI(object):
     # All parameters are optional; more parameters address a more
     # specific piece of all Frame data available.
     
-    # Frame-level selection
+    # Core selection
     'dataset',      # E.g. 'argoverse'
     'split',        # E.g. 'train'
     'segment_id',   # String identifier for a drive segment, e.g. a UUID
-    'timestamp',    # Some integer in nanoseconds; either Unix or GPS time
+    'timestamp',    # Some integer in nanoseconds; typically Unix time
+    'topic',        # Name for a series of messages, e.g. '/ego_pose'
 
+    'extra',        # str -> str map for extra context
+
+    # TODO deleteme ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # Sensor-level selection
     'camera',       # Address an image from a specific camera
     'camera_timestamp',
@@ -227,7 +232,14 @@ class URI(object):
   # }
 
   def __init__(self, **kwargs):
-    _set_defaults(self, kwargs, {})#self.DEFAULTS)~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    DEFAULTS = {
+      'extra': {},
+    }
+    _set_defaults(self, kwargs, DEFAULTS)
+
+    for k, v in kwargs.items():
+      if k.startswith('extra.'):
+        self.extra[k[len('extra.'):]] = str(v)
 
     if isinstance(self.timestamp, six.string_types):
       self.timestamp = int(self.timestamp)
@@ -235,12 +247,27 @@ class URI(object):
       self.camera_timestamp = int(self.camera_timestamp)
   
   def to_str(self):
-    kvs = ((attr, getattr(self, attr)) for attr in self.__slots__)
-    path = '&'.join((k + '=' + str(v)) for (k, v) in kvs if v)
-    return self.PREFIX + path
+    def to_tokens(k, v):
+      if v is not None:
+        if k == 'extra':
+          for ek, ev in v.items():
+            yield 'extra.%s=%s' % (ek, ev)
+        else:
+          yield '%s=%s' % (k, v)
+
+    toks = itertools.chain.from_iterable(
+      to_tokens(attr, getattr(self, attr)) for attr in self.__slots__)
+    return '%s%s' % (self.PREFIX, '&'.join(toks))
   
   def __str__(self):
     return self.to_str()
+  
+  def __eq__(self, other):
+    if type(other) is type(self):
+      return all(
+        getattr(self, attr) == getattr(other, attr)
+        for attr in self.__slots__)
+    return False
 
   def update(self, **kwargs):
     for k in self.__slots__:
@@ -274,6 +301,8 @@ class URI(object):
       return s
     assert s.startswith(URI.PREFIX), "Missing %s in %s" % (URI.PREFIX, s)
     toks_s = s[len(URI.PREFIX):]
+    if not toks_s:
+      return URI()
     toks = toks_s.split('&')
     assert all('=' in tok for tok in toks), "Bad token in %s" % (toks,)
     kwargs = dict(tok.split('=') for tok in toks)
@@ -882,33 +911,50 @@ class CameraImage(object):
 
 
 
-class CroppedCameraImage(CameraImage):
-  __slots__ = tuple(list(CameraImage.__slots__) + [
-    # Viewport of camera; this image is potentially a crop of a (maybe shared)
-    # image buffer
-    'viewport',               # type: common.BBox
-  ])
+# class CroppedCameraImage(CameraImage):
+#   __slots__ = tuple(list(CameraImage.__slots__) + [
+#     # Viewport of camera; this image is potentially a crop of a (maybe shared)
+#     # image buffer
+#     'viewport',               # type: common.BBox
+#   ])
 
-  def __init__(self, **kwargs):
-    super(CroppedCameraImage, self).__init__(**kwargs)
-    self.viewport = \
-      self.viewport or common.BBox.of_size(self.width, self.height)
+#   def __init__(self, **kwargs):
+#     super(CroppedCameraImage, self).__init__(**kwargs)
+#     self.viewport = \
+#       self.viewport or common.BBox.of_size(self.width, self.height)
 
-  @property
-  def image(self):
-    img = super(CroppedCameraImage, self).image
-    if util.np_truthy(img):
-      img = self.viewport.get_crop(img)
-    return img
+#   @property
+#   def image(self):
+#     img = super(CroppedCameraImage, self).image
+#     if util.np_truthy(img):
+#       img = self.viewport.get_crop(img)
+#     return img
   
-  def project_ego_to_image(self, pts, omit_offscreen=True):
-    uvd = super(CroppedCameraImage, self).project_ego_to_image(
-      pts, omit_offscreen=omit_offscreen)
+#   def project_ego_to_image(self, pts, omit_offscreen=True):
+#     uvd = super(CroppedCameraImage, self).project_ego_to_image(
+#       pts, omit_offscreen=omit_offscreen)
     
-    # Correct for moved image origin
-    uvd -= np.array([self.viewport.x, self.viewport.y, 0])
-    return uvd
+#     # Correct for moved image origin
+#     uvd -= np.array([self.viewport.x, self.viewport.y, 0])
+#     return uvd
 
+
+class StampedDatum(URI):
+  """A single piece of data associated with a specific time; a URI also 
+  'stamps' this piece of data. Represents a single row in a
+  StampedDatumTable."""
+
+  __slots__ = tuple(list(URI.__slots__) + [
+    'uri',
+
+    # Spark needs partition keys as attributes
+    'camera_image',
+    'point_cloud',
+    'cuboids',
+    'pose',
+    'asdg',
+
+  ])
 
 
 class Frame(object):
