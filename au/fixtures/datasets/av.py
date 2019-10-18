@@ -354,7 +354,7 @@ class Cuboid(object):
     'au_category',          # AU AV Category (coarser)
     'timestamp',            # Lidar timestamp associated with this cuboid
 
-    ## Points
+    ## Points # TODO keep ? ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     'box3d',                # Points in ego / robot frame defining the cuboid.
                             # Given in order:
                             #   (+x +y +z)  [Front face CW about +x axis]

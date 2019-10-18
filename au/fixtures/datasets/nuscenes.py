@@ -128,14 +128,20 @@ class AUNuScenes(NuScenes):
         scene = self.get('scene', sample['scene_token'])
         sample_to_scene[sample['token']] = scene['token']
     
-      def to_ts_row(sample_data):
+      def to_ts_row(sample_data, channel=None):
         row = dict(sample_data)
+        if channel:
+          row['channel'] = channel
         row['timestamp_ns'] = to_nanostamp(row['timestamp'])
         row['scene_token'] = sample_to_scene[row['sample_token']]
         row['scene_name'] = self.get('scene', row['scene_token'])['name']
         return row
 
-      df = pd.DataFrame(to_ts_row(r) for r in self.sample_data)
+      irows = itertools.chain(
+        (to_ts_row(r) for r in self.sample_data),
+        (to_ts_row(r, channel='ego_pose') for r in self.ego_pose))
+      
+      df = pd.DataFrame(irows)
       df.to_parquet(cache_path)
       del df # Free several GB of memory
 
@@ -155,12 +161,17 @@ class AUNuScenes(NuScenes):
 
   ### AU-added Utils
 
-  def get_nearest_sample_data(self, scene_name, timestamp_ns, channel=None):
-    if not hasattr(self, '_sample_data_ts_df'):
+  @property
+  def _sample_data_ts_df(self):
+    if not hasattr(self, '__sample_data_ts_df'):
       cache_path = self._get_cache_path(self.SAMPLE_DATA_TS_CACHE_NAME)
       util.log.info("Using sample_data timestamp cache at %s" % cache_path)
-      self._sample_data_ts_df = pd.read_parquet(cache_path)
-    
+      self.__sample_data_ts_df = pd.read_parquet(cache_path)
+    return self.__sample_data_ts_df
+
+  def get_nearest_sample_data(self, scene_name, timestamp_ns, channel=None):
+    """Get the nearest `sample_data` record and return the record as well
+    as the time diff (in nanoseconds)"""
     df = self._sample_data_ts_df
     # First narrow down to the relevant scene / car and (maybe) sensor
     df = df[df['scene_name'] == scene_name]
@@ -174,6 +185,30 @@ class AUNuScenes(NuScenes):
       return row, row['timestamp_ns'] - timestamp_ns
     else:
       return None, 0
+  
+  def get_row(self, scene_name, timestamp_ns, channel):
+    """Get the record that exactly matches the given timestamp and channel"""
+    df = self._sample_data_ts_df
+    # First narrow down to the relevant scene / car and (maybe) sensor
+    df = df[df['scene_name'] == scene_name]
+    df = df[df['channel'] == channel]
+    df = df[df['timestamp_ns'] == timestamp_ns]
+    if not df:
+      raise KeyError(
+              "Can't find record for %s %s %s" % (
+                scene_name, timestamp_ns, channel))
+    elif len(df) != 1:
+      raise ValueError("Multiple results for %s %s %s %s" % (
+                scene_name, timestamp_ns, channel, df))
+    else:
+      return df.iloc[0].to_dict(orient='records')[0]
+
+  def get_rows_for_scene(self, scene_name):
+    df = self._sample_data_ts_df
+    df = df[df['scene_name'] == scene_name]
+    return df.to_dict(orient='records')
+
+
 
   #### Adhoc Utils
 
@@ -489,7 +524,8 @@ class Fixtures(object):
             scene_to_split[s] = split
       cls._scene_to_split = scene_to_split
     # return cls._scene_to_split[scene]
-    return 'train' # for lyft level 5, we assume all train for now
+    return 'train' # for Lyft Level 5, we assume all train for now
+    # TODO use lyft constants ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         
 
 class StampedDatumTable(av.StampedDatumTableBase):
@@ -498,54 +534,128 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
   NUSC_VERSION = 'v1.0-trainval' # E.g. v1.0-mini, v1.0-trainval, v1.0-test
 
-  KEYFRAMES_ONLY = False
+  SENSORS_KEYFRAMES_ONLY = False
+    # NuScenes: If enabled, throttles sensor data to about 2Hz, in tune with
+    #   samples; if disabled, samples at full res.
+    # Lyft Level 5: all sensor data is key frames.
+    # FMI see print_sensor_sample_rates() above.
+  
+  LABELS_KEYFRAMES_ONLY = True
+    # If enabled, samples only raw annotations.  If disabled, will motion-
+    # correct cuboids to every sensor reading.
 
   @classmethod
   def table_root(cls):
     return '/outer_root/media/seagates-ext4/au_datas/nusc_sd_table'
   
   @classmethod
-  def _create_frame_rdds(cls, spark):
-    uris = cls._get_camera_uris()
-    print('len(uris)', len(uris))
+  def _create_datum_rdds(cls, spark):
+    for segment_id in cls.get_segment_ids():
+      uris = cls.get_uris_for_segment(segment_id)
+      print(segment_id, len(uris))
+    return []
 
-    # TODO fixmes
-    uri_rdd = spark.sparkContext.parallelize(uris)
+  @classmethod
+  def get_segment_ids(cls):
+    nusc = self.get_nusc()
+    return sorted(s['name'] for s in nusc.scene)
 
-    # Try to group frames from segments together to make partitioning easier
-    # and result in fewer files
-    uri_rdd = uri_rdd.sortBy(lambda uri: uri.segment_id)
-    
-    frame_rdds = []
-    uris = uri_rdd.toLocalIterator()
-    for uri_chunk in util.ichunked(uris, cls.SETUP_URIS_PER_CHUNK):
-      chunk_uri_rdd = spark.sparkContext.parallelize(uri_chunk)
-      # create_frame = util.ThruputObserver.wrap_func(
-      #                       cls.create_frame,
-      #                       name='create_frame',
-      #                       log_on_del=True)
+  @classmethod
+  def get_uris_for_segment(cls, segment_id):
+    nusc = self.get_nusc()
 
-      frame_rdd = chunk_uri_rdd.map(cls.create_frame)
+    scene_split = cls.FIXTURES.get_split_for_scene(segment_id)
 
-      frame_rdds.append(frame_rdd)
-    return frame_rdds
-  
+    # Build and return sorted URIs
+    uris = []
+
+    ## Get sensor data and ego pose
+    rows = nusc.get_rows_for_scene(segment_id)
+    for row in rows:
+      if cls.SENSORS_KEYFRAMES_ONLY:
+        if row['sensor_modality'] and not row['is_key_frame']:
+          continue
+
+      if row['channel'] == 'ego_pose':
+        extra = {'nuscenes.ego_pose_token': row['token']}
+      else:
+        extra = {'nuscenes.sample_data_token': row['token']}
+
+      uris.append(av.URI(
+                    dataset='nuscenes', # use fixtures ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    split=scene_split,
+                    segment_id=segment_id,
+                    timestamp=to_nanostamp(row['timestamp']),
+                    topic=row['channel'],
+                    extra=extra))
+      
+      ## Get labels
+      if cls.LABELS_KEYFRAMES_ONLY:
+
+        # Get annos for *only* samples, which are keyframes
+        scene_tokens = [
+          s['token'] for s in nusc.scene if s['name'] == segment_id]
+        assert scene_tokens
+        scene_token = scene_tokens[0]
+
+        scene_samples = [
+          s for s in nusc.sample if s['scene_token'] == scene_token
+        ]
+
+        for sample in scene_samples:
+          uris.append(av.URI(
+                        dataset='nuscenes',
+                        split=scene_split,
+                        segment_id=segment_id,
+                        timestamp=to_nanostamp(sample['timestamp']),
+                        topic='labels.cuboids',
+                        extra={
+                          'nuscenes.sample_token': sample['token'],
+                        }))
+      
+      else:
+
+        # Get annos for all all sample_data records for this scene
+        for row in rows:
+          if row['channel'] == 'ego_pose':
+            continue
+
+        uris.append(av.URI(
+                        dataset='nuscenes',
+                        split=scene_split,
+                        segment_id=segment_id,
+                        timestamp=to_nanostamp(row['timestamp']),
+                        topic='labels.cuboids',
+                        extra={
+                          'nuscenes.sample_data_token': row['token'],
+                        }))
+
+      return sorted(uris)
+
   @classmethod
   def create_stamped_datum(cls, uri):
-
-
+    if uri.topic == 'camera':
+      sample_data = cls.__get_row(uri)
+      return cls.__create_camera_image(uri, sample_data)
+    elif uri.topic in ('lidar', 'radar'):
+      sample_data = cls.__get_row(uri)
+      return cls.__create_point_cloud(uri, sample_data)
+    elif uri.topic == 'ego_pose':
+      pose_record = cls.__get_row(uri)
+      return cls.__create_ego_pose(uri, pose_record)
+    elif uri.topic == 'labels.cuboids':
+      nusc = cls.get_nusc()
+      best_sd, diff_ns = nusc.get_nearest_sample_data(
+                                uri.segment_id,
+                                uri.timestamp)
+      assert best_sd
+      assert diff_ns < .01 * 1e9
+      return cls.__create_cuboids_in_ego(uri, best_sd['token'])
 
   @classmethod
-  def __sample_data_to_stamped_datum(cls, uri, sample_data):
-    if sample_data['sensor_modality'] == 'camera':
-      return cls.__create_camera_image(uri, sample_data)
-    elif sample_data['sensor_modality'] == 'lidar':
-      return cls.__create_point_cloud(uri, sample_data)
-    elif sample_data['sensor_modality'] == 'radar':
-      # Ignore radar for now
-    else:
-      util.log.warn(
-        'Unexpected sensor modality %s' % sample_data['sensor_modality'])
+  def __get_row(cls, uri):
+    nusc = cls.get_nusc()
+    return nusc.get_row(uri.segment_id, uri.timestamp, uri.topic)
   
   @classmethod
   def __create_camera_image(cls, uri, sample_data):
@@ -657,9 +767,82 @@ class StampedDatumTable(av.StampedDatumTableBase):
               motion_corrected=motion_corrected,
             )
     )
-
-
   
+  @classmethod
+  def __create_cuboids_in_ego(cls, uri, sample_data_token):
+    nusc = cls.get_nusc()
+
+    # NB: This helper always does motion correction (interpolation) unless
+    # `sample_data_token` refers to a keyframe.
+    boxes = nusc.get_boxes(sample_data_token)
+  
+    # Boxes are in world frame.  Move all to ego frame.
+    from pyquaternion import Quaternion
+    sd_record = nusc.get('sample_data', sample_data_token)
+    pose_record = nusc.get('ego_pose', sd_record['ego_pose_token'])
+    for box in boxes:
+      # Move box to ego vehicle coord system
+      box.translate(-np.array(pose_record['translation']))
+      box.rotate(Quaternion(pose_record['rotation']).inverse)
+
+    from au.fixtures.datasets.av import NUSCENES_CATEGORY_TO_AU_AV_CATEGORY
+    cuboids = []
+    for box in boxes:
+      cuboid = av.Cuboid()
+
+      # Core
+      sample_anno = nusc.get('sample_annotation', box.token)
+      cuboid.track_id = \
+        'nuscenes_instance_token:' + sample_anno['instance_token']
+      cuboid.category_name = box.name
+      cuboid.timestamp = to_nanostamp(sd_record['timestamp'])
+      
+      cuboid.au_category = NUSCENES_CATEGORY_TO_AU_AV_CATEGORY[box.name]
+      
+      # Try to give bikes riders
+      # NB: In Lyft Level 5, they appear to *not* label bikes without riders
+      attribs = [
+        nusc.get('attribute', attrib_token)['name']
+        for attrib_token in sample_anno['attribute_tokens']
+      ]
+      if 'cycle.with_rider' in attribs:
+        if cuboid.au_category == 'bike_no_rider':
+          cuboid.au_category = 'bike_with_rider'
+        elif cuboid.au_category == 'motorcycle_no_rider':
+          cuboid.au_category = 'motorcycle_with_rider'
+        else:
+          raise ValueError(
+            "Don't know how to give a rider to %s %s" % (cuboid, attribs))
+
+      cuboid.extra = {
+        'nuscenes_token': box.token,
+        'nuscenes_attribs': '|'.join(attribs),
+      }
+
+      # Points
+      cuboid.box3d = box.corners().T
+      cuboid.motion_corrected = (not sd_record['is_key_frame'])
+      cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
+      
+      # Pose
+      cuboid.width_meters = float(box.wlh[0])
+      cuboid.length_meters = float(box.wlh[1])
+      cuboid.height_meters = float(box.wlh[2])
+
+      cuboid.obj_from_ego = av.Transform(
+          rotation=box.orientation.rotation_matrix,
+          translation=box.center.reshape((3, 1)))
+      cuboids.append(cuboid)
+    return av.StampedDatum.from_uri(uri, cuboids=cuboids)
+
+  @classmethod
+  def __create_ego_pose(cls, uri, pose_record):
+    ego_pose = transform_from_record(
+                      pose_record,
+                      dest_frame='ego',
+                      src_frame='city')    
+    return av.StampedDatum.from_uri(uri, transform=ego_pose)
+
   @classmethod
   def _get_():
     

@@ -10,6 +10,10 @@ TEST_URIS = (
 
 def test_nuscenes():
 
+  from au.fixtures.datasets.nuscenes import StampedDatumTable
+  StampedDatumTable.setup()
+  return
+
   from au.fixtures.datasets.nuscenes import FrameTable
   
   nusc = FrameTable.get_nusc()
