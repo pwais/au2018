@@ -205,7 +205,9 @@ class Transform(object):
   def get_inverse(self):
     return Transform(
       rotation=self.rotation.T,
-      translation=self.rotation.T.dot(-self.translation))
+      translation=self.rotation.T.dot(-self.translation),
+      src_frame=self.dest_frame,
+      dest_frame=self.src_frame)
 
   def __str__(self):
     return 'Transform(\nrotation=%s;\ntranslation=%s)' % (
@@ -247,13 +249,6 @@ class URI(object):
   )
 
   PREFIX = 'avframe://'
-
-  # DEFAULTS = {
-  #   'timestamp': 0,
-  #   'camera_timestamp': 0,
-  #   'crop_x': -1, 'crop_y': -1,
-  #   'crop_w': -1, 'crop_h': -1,
-  # }
 
   def __init__(self, **kwargs):
     DEFAULTS = {
@@ -548,6 +543,7 @@ class PointCloud(object):
     'cloud',                # type: np.array of points
     'motion_corrected',     # type: bool; is `cloud` corrected for ego motion?
     'ego_to_sensor',        # type: Transform
+    'ego_pose',             # type: Transform (ego from world)
   )
 
   def __init__(self, **kwargs):
@@ -584,6 +580,7 @@ class CameraImage(object):
     'height',                 # type: int
     'width',                  # type: int
     'timestamp',              # type: int (GPS or unix time)
+    'ego_pose',               # type: Transform (ego from world)
 
     # Optional Point Cloud (e.g. Lidar projected to camera)
     'clouds',                 # type: List[PointCloud]
@@ -1016,6 +1013,12 @@ class StampedDatum(URI):
     }
     _set_defaults(self, kwargs, DEFAULTS)
 
+  @staticmethod
+  def from_uri(uri, **init_kwargs):
+    kwargs = dict(uri.as_tuple())
+    kwargs.update(init_kwargs)
+    return StampedDatum(**kwargs)
+
   def __str__(self):
     return 'StampedDatum[%s]' % self.uri
 
@@ -1179,7 +1182,8 @@ POINTCLOUD_PROTO = PointCloud(
   timestamp=int(100 * 1e9), # In nanoseconds
   cloud=np.ones((10, 3)),
   motion_corrected=True,
-  ego_to_sensor=Transform(),
+  ego_to_sensor=TRANSFORM_PROTO,
+  ego_pose=TRANSFORM_PROTO,
 )
 
 CAMERAIMAGE_PROTO = CameraImage(
@@ -1188,6 +1192,7 @@ CAMERAIMAGE_PROTO = CameraImage(
   height=0,
   width=0,
   timestamp=int(100 * 1e9), # In nanoseconds
+  ego_pose=TRANSFORM_PROTO,
   
   clouds=[POINTCLOUD_PROTO],
   
@@ -1216,6 +1221,8 @@ FRAME_PROTO = Frame(
     'key': 'value',
   },
 )
+
+
 
 ###
 ### Tables

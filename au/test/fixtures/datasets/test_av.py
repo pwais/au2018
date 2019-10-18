@@ -98,11 +98,21 @@ def test_stamped_datum_table_io(monkeypatch):
       ),
       av.StampedDatum(
         dataset='d1',
+        split='train',
+        segment_id='seg1',
+        timestamp=1,
+
+        topic='cuboids',
+        cuboids=[av.CUBOID_PROTO, av.CUBOID_PROTO],
+      ),
+
+      av.StampedDatum(
+        dataset='d1',
         split='test',
         segment_id='seg2',
         timestamp=10,
 
-        topic='transform',
+        topic='ego_pose',
         transform=av.TRANSFORM_PROTO,
       ),
     )
@@ -123,9 +133,8 @@ def test_stamped_datum_table_io(monkeypatch):
     sd_rdd = TestStampedDatumTable.as_stamped_datum_rdd(spark)
     assert len(TestStampedDatumTable.DATUMS) == sd_rdd.count()
     
+    # Records are preserved in full
     assert sorted(sd_rdd.collect()) == sorted(TestStampedDatumTable.DATUMS)
-    for sd in sd_rdd.collect():
-      assert sd.dataset == 'd1'
 
 
 

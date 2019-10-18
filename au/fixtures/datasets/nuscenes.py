@@ -13,11 +13,13 @@ from au.fixtures.datasets import av
 
 ## Utils
 
-def transform_from_record(rec):
+def transform_from_record(rec, src_frame='', dest_frame=''):
   from pyquaternion import Quaternion
   return av.Transform(
           rotation=Quaternion(rec['rotation']).rotation_matrix,
-          translation=np.array(rec['translation']).reshape((3, 1)))
+          translation=np.array(rec['translation']),
+          src_frame=src_frame,
+          dest_frame=dst_frame)
 
 def get_camera_normal(K, extrinsic):
     """FMI see au.fixtures.datasets.auargoverse.get_camera_normal()"""
@@ -489,6 +491,207 @@ class Fixtures(object):
     # return cls._scene_to_split[scene]
     return 'train' # for lyft level 5, we assume all train for now
         
+
+class StampedDatumTable(av.StampedDatumTableBase):
+
+  FIXTURES = Fixtures
+
+  NUSC_VERSION = 'v1.0-trainval' # E.g. v1.0-mini, v1.0-trainval, v1.0-test
+
+  KEYFRAMES_ONLY = False
+
+  @classmethod
+  def table_root(cls):
+    return '/outer_root/media/seagates-ext4/au_datas/nusc_sd_table'
+  
+  @classmethod
+  def _create_frame_rdds(cls, spark):
+    uris = cls._get_camera_uris()
+    print('len(uris)', len(uris))
+
+    # TODO fixmes
+    uri_rdd = spark.sparkContext.parallelize(uris)
+
+    # Try to group frames from segments together to make partitioning easier
+    # and result in fewer files
+    uri_rdd = uri_rdd.sortBy(lambda uri: uri.segment_id)
+    
+    frame_rdds = []
+    uris = uri_rdd.toLocalIterator()
+    for uri_chunk in util.ichunked(uris, cls.SETUP_URIS_PER_CHUNK):
+      chunk_uri_rdd = spark.sparkContext.parallelize(uri_chunk)
+      # create_frame = util.ThruputObserver.wrap_func(
+      #                       cls.create_frame,
+      #                       name='create_frame',
+      #                       log_on_del=True)
+
+      frame_rdd = chunk_uri_rdd.map(cls.create_frame)
+
+      frame_rdds.append(frame_rdd)
+    return frame_rdds
+  
+  @classmethod
+  def create_stamped_datum(cls, uri):
+
+
+
+  @classmethod
+  def __sample_data_to_stamped_datum(cls, uri, sample_data):
+    if sample_data['sensor_modality'] == 'camera':
+      return cls.__create_camera_image(uri, sample_data)
+    elif sample_data['sensor_modality'] == 'lidar':
+      return cls.__create_point_cloud(uri, sample_data)
+    elif sample_data['sensor_modality'] == 'radar':
+      # Ignore radar for now
+    else:
+      util.log.warn(
+        'Unexpected sensor modality %s' % sample_data['sensor_modality'])
+  
+  @classmethod
+  def __create_camera_image(cls, uri, sample_data):
+    nusc = cls.get_nusc()
+
+    camera_token = sample_data['token']
+    cs_record = nusc.get(
+      'calibrated_sensor', sample_data['calibrated_sensor_token'])
+    sensor_record = nusc.get('sensor', cs_record['sensor_token'])
+    pose_record = nusc.get('ego_pose', sample_data['ego_pose_token'])
+
+    data_path, _, cam_intrinsic = nusc.get_sample_data(camera_token)
+      # Ignore box_list, we'll get boxes in ego frame later
+    
+    viewport = uri.get_viewport()
+    w, h = sample_data['width'], sample_data['height']
+    if not viewport:
+      from au.fixtures.datasets import common
+      viewport = common.BBox.of_size(w, h)
+
+    timestamp = sample_data['timestamp']
+
+    ego_from_cam = transform_from_record(
+                      cs_record,
+                      dest_frame='ego',
+                      src_frame=sample_data['channel'])
+    cam_from_ego = ego_from_cam.get_inverse()
+    RT_h = cam_from_ego.get_transformation_matrix(homogeneous=True)
+    principal_axis_in_ego = get_camera_normal(cam_intrinsic, RT_h)
+
+    ego_pose = transform_from_record(
+                      pose_record,
+                      dest_frame='ego',
+                      src_frame='city')
+    
+    return av.StampedDatum.from_uri(
+            uri,
+            camera_image=av.CameraImage(
+              camera_name=sample_data['channel'],
+              image_jpeg=bytearray(open(data_path, 'rb').read()),
+              height=h,
+              width=w,
+              viewport=viewport,
+              timestamp=to_nanostamp(timestamp),
+              ego_pose=ego_pose,
+              cam_from_ego=cam_from_ego,
+              K=cam_intrinsic,
+              principal_axis_in_ego=principal_axis_in_ego,
+            )
+    )
+  
+  @classmethod
+  def __create_point_cloud(cls, uri, sample_data):
+    # Based upon nuscenes.py#map_pointcloud_to_image()
+
+    from pyquaternion import Quaternion
+    from nuscenes.utils.data_classes import LidarPointCloud
+    from nuscenes.utils.data_classes import RadarPointCloud
+
+    nusc = cls.get_nusc()
+
+    target_pose_token = sample_data['ego_pose_token']
+
+    pcl_path = os.path.join(nusc.dataroot, sample_data['filename'])
+    if sample_data['sensor_modality'] == 'lidar':
+      pc = LidarPointCloud.from_file(pcl_path)
+    else:
+      pc = RadarPointCloud.from_file(pcl_path)
+
+    # Step 1: Points live in the point sensor frame.  First transform to
+    # world frame:
+    # 1a transform to ego
+    # First step: transform the point-cloud to the ego vehicle frame for the
+    # timestamp of the sweep.
+    cs_record = nusc.get(
+                  'calibrated_sensor', sample_data['calibrated_sensor_token'])
+    pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix)
+    pc.translate(np.array(cs_record['translation']))
+
+    # 1b transform to the global frame.
+    poserecord = nusc.get('ego_pose', sample_data['ego_pose_token'])
+    pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix)
+    pc.translate(np.array(poserecord['translation']))
+
+    # Step 2: Send points into the ego frame at the target timestamp
+    poserecord = nusc.get('ego_pose', target_pose_token)
+    pc.translate(-np.array(poserecord['translation']))
+    pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix.T)
+
+    n_xyz = pc.points[:3, :].T
+      # Throw out intensity (lidar) and ... other stuff (radar)
+    
+    ego_pose = transform_from_record(
+                      nusc.get('ego_pose', sample_data['ego_pose_token']),
+                      dest_frame='ego',
+                      src_frame='city')
+    ego_to_sensor = transform_from_record(
+                      cs_record,
+                      src_frame='ego',
+                      dest_frame=sample_data['channel'])
+
+    return av.StampedDatum.from_uri(
+            uri,
+            point_cloud=av.PointCloud(
+              sensor_name=sample_data['channel'],
+              timestamp=to_nanostamp(pointsensor['timestamp']),
+              cloud=n_xyz,
+              ego_to_sensor=ego_to_sensor,
+              motion_corrected=motion_corrected,
+            )
+    )
+
+
+  
+  @classmethod
+  def _get_():
+    
+    uris = []
+    for sample_data in sample_datas:
+      if sample_data['sensor_modality'] != 'camera':
+        continue
+        
+      sample = nusc.get('sample', sample_data['sample_token'])
+      scene_record = nusc.get('scene', sample['scene_token'])
+      scene_split = cls.FIXTURES.get_split_for_scene(scene_record['name'])
+      if scene_split not in splits:
+        continue
+
+      uris.append(av.URI(
+                    dataset='nuscenes',
+                    split=scene_split,
+                    timestamp=to_nanostamp(sample_data['timestamp']),
+                    segment_id=scene_record['name'],
+                    camera=sample_data['channel']))
+
+    return uris
+
+
+
+
+
+
+
+
+
+
 
 
 class FrameTable(av.FrameTableBase):
