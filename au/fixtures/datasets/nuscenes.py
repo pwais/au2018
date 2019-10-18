@@ -121,26 +121,32 @@ class AUNuScenes(NuScenes):
     # interpolation.
     cache_path = self._get_cache_path(self.SAMPLE_DATA_TS_CACHE_NAME)
     if not os.path.exists(cache_path):
-      util.log.info("Building sample_data timestamp cache ...")
+      util.log.info("Building sample_data / ego_pose timestamp cache ...")
 
       sample_to_scene = {}
       for sample in self.sample:
         scene = self.get('scene', sample['scene_token'])
         sample_to_scene[sample['token']] = scene['token']
     
-      def to_ts_row(sample_data, channel=None):
+      def to_ts_rows(sample_data):
         row = dict(sample_data)
-        if channel:
-          row['channel'] = channel
         row['timestamp_ns'] = to_nanostamp(row['timestamp'])
         row['scene_token'] = sample_to_scene[row['sample_token']]
         row['scene_name'] = self.get('scene', row['scene_token'])['name']
-        return row
+        yield row
 
-      irows = itertools.chain(
-        (to_ts_row(r) for r in self.sample_data),
-        (to_ts_row(r, channel='ego_pose') for r in self.ego_pose))
-      
+        ego_pose = self.get('ego_pose', row['ego_pose_token'])
+        ego_row = dict(ego_pose)
+        ego_row['channel'] = 'ego_pose'
+        ego_row['timestamp_ns'] = to_nanostamp(ego_row['timestamp'])
+        ego_row['scene_token'] = row['scene_token']
+        ego_row['scene_name'] = row['scene_name']
+        ego_row.pop('rotation')
+        ego_row.pop('translation')
+        yield ego_row
+
+      irows = itertools.chain.from_iterable(
+                  to_ts_rows(r) for r in self.sample_data)
       df = pd.DataFrame(irows)
       df.to_parquet(cache_path)
       del df # Free several GB of memory
@@ -549,20 +555,27 @@ class StampedDatumTable(av.StampedDatumTableBase):
     return '/outer_root/media/seagates-ext4/au_datas/nusc_sd_table'
   
   @classmethod
+  def get_nusc(cls):
+    if not hasattr(cls, '_nusc'):
+      cls._nusc = cls.FIXTURES.get_loader(version=cls.NUSC_VERSION)
+    return cls._nusc
+
+  @classmethod
   def _create_datum_rdds(cls, spark):
     for segment_id in cls.get_segment_ids():
       uris = cls.get_uris_for_segment(segment_id)
-      print(segment_id, len(uris))
+      print('uris', segment_id, len(uris))
+      import pdb; pdb.set_trace()
     return []
 
   @classmethod
   def get_segment_ids(cls):
-    nusc = self.get_nusc()
+    nusc = cls.get_nusc()
     return sorted(s['name'] for s in nusc.scene)
 
   @classmethod
   def get_uris_for_segment(cls, segment_id):
-    nusc = self.get_nusc()
+    nusc = cls.get_nusc()
 
     scene_split = cls.FIXTURES.get_split_for_scene(segment_id)
 
@@ -571,6 +584,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
     ## Get sensor data and ego pose
     rows = nusc.get_rows_for_scene(segment_id)
+    # import pdb; pdb.set_trace()
     for row in rows:
       if cls.SENSORS_KEYFRAMES_ONLY:
         if row['sensor_modality'] and not row['is_key_frame']:
@@ -589,48 +603,48 @@ class StampedDatumTable(av.StampedDatumTableBase):
                     topic=row['channel'],
                     extra=extra))
       
-      ## Get labels
-      if cls.LABELS_KEYFRAMES_ONLY:
+    ## Get labels
+    if cls.LABELS_KEYFRAMES_ONLY:
 
-        # Get annos for *only* samples, which are keyframes
-        scene_tokens = [
-          s['token'] for s in nusc.scene if s['name'] == segment_id]
-        assert scene_tokens
-        scene_token = scene_tokens[0]
+      # Get annos for *only* samples, which are keyframes
+      scene_tokens = [
+        s['token'] for s in nusc.scene if s['name'] == segment_id]
+      assert scene_tokens
+      scene_token = scene_tokens[0]
 
-        scene_samples = [
-          s for s in nusc.sample if s['scene_token'] == scene_token
-        ]
+      scene_samples = [
+        s for s in nusc.sample if s['scene_token'] == scene_token
+      ]
 
-        for sample in scene_samples:
-          uris.append(av.URI(
-                        dataset='nuscenes',
-                        split=scene_split,
-                        segment_id=segment_id,
-                        timestamp=to_nanostamp(sample['timestamp']),
-                        topic='labels.cuboids',
-                        extra={
-                          'nuscenes.sample_token': sample['token'],
-                        }))
-      
-      else:
-
-        # Get annos for all all sample_data records for this scene
-        for row in rows:
-          if row['channel'] == 'ego_pose':
-            continue
-
+      for sample in scene_samples:
         uris.append(av.URI(
-                        dataset='nuscenes',
-                        split=scene_split,
-                        segment_id=segment_id,
-                        timestamp=to_nanostamp(row['timestamp']),
-                        topic='labels.cuboids',
-                        extra={
-                          'nuscenes.sample_data_token': row['token'],
-                        }))
+                      dataset='nuscenes',
+                      split=scene_split,
+                      segment_id=segment_id,
+                      timestamp=to_nanostamp(sample['timestamp']),
+                      topic='labels.cuboids',
+                      extra={
+                        'nuscenes.sample_token': sample['token'],
+                      }))
+    
+    else:
 
-      return sorted(uris)
+      # Get annos for all all sample_data records for this scene
+      for row in rows:
+        if row['channel'] == 'ego_pose':
+          continue
+
+      uris.append(av.URI(
+                      dataset='nuscenes',
+                      split=scene_split,
+                      segment_id=segment_id,
+                      timestamp=to_nanostamp(row['timestamp']),
+                      topic='labels.cuboids',
+                      extra={
+                        'nuscenes.sample_data_token': row['token'],
+                      }))
+
+    return sorted(uris)
 
   @classmethod
   def create_stamped_datum(cls, uri):
