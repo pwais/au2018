@@ -19,7 +19,7 @@ def transform_from_record(rec, src_frame='', dest_frame=''):
           rotation=Quaternion(rec['rotation']).rotation_matrix,
           translation=np.array(rec['translation']),
           src_frame=src_frame,
-          dest_frame=dst_frame)
+          dest_frame=dest_frame)
 
 def get_camera_normal(K, extrinsic):
     """FMI see au.fixtures.datasets.auargoverse.get_camera_normal()"""
@@ -55,7 +55,7 @@ class AUNuScenes(NuScenes):
 
   CACHE_ROOT = os.path.join(conf.AU_DATA_CACHE, 'nuscenes_table_cache')
 
-  SAMPLE_DATA_TS_CACHE_NAME = 'sample_data_ts_df.parquet'
+  SAMPLE_DATA_TS_CACHE_NAME = 'sample_data_ts_df'
 
   ALL_CAMERAS = (
     'CAM_FRONT',
@@ -133,6 +133,9 @@ class AUNuScenes(NuScenes):
         row['timestamp_ns'] = to_nanostamp(row['timestamp'])
         row['scene_token'] = sample_to_scene[row['sample_token']]
         row['scene_name'] = self.get('scene', row['scene_token'])['name']
+        SKIP = ('fileformat', 'next', 'prev', 'height', 'width')
+        for skip in SKIP:
+          row.pop(skip)
         yield row
 
         ego_pose = self.get('ego_pose', row['ego_pose_token'])
@@ -141,16 +144,31 @@ class AUNuScenes(NuScenes):
         ego_row['timestamp_ns'] = to_nanostamp(ego_row['timestamp'])
         ego_row['scene_token'] = row['scene_token']
         ego_row['scene_name'] = row['scene_name']
-        ego_row.pop('rotation')
-        ego_row.pop('translation')
+        SKIP = ('rotation', 'translation')
+        for skip in SKIP:
+          ego_row.pop(skip)
+        
         yield ego_row
 
-      irows = itertools.chain.from_iterable(
-                  to_ts_rows(r) for r in self.sample_data)
-      df = pd.DataFrame(irows)
-      df.to_parquet(cache_path)
-      del df # Free several GB of memory
+      # This job takes 1-2 minutes and is I/O bound on the shelve DB
+      # backing `sample_data`.
+      t = util.ThruputObserver(
+        name='build_rows', n_total=len(self.sample_data))
+      df_rows = []
+      for sample_datas in util.ichunked(self.sample_data, 1000):
+        with t.observe(n=len(sample_datas)):
+          df_rows.extend(
+            itertools.chain.from_iterable(
+              (to_ts_rows(sd) for sd in sample_datas)))
+        t.maybe_log_progress(every_n=100000)
+      
+      util.log.info("... to pandas ...")
+      df = pd.DataFrame(df_rows)
 
+      util.log.info("... writing ...")
+      df.to_parquet(
+        cache_path, partition_cols=['scene_name'], compression=None)
+      
       util.log.info("... done.")
 
     return
@@ -168,17 +186,21 @@ class AUNuScenes(NuScenes):
   ### AU-added Utils
 
   @property
-  def _sample_data_ts_df(self):
-    if not hasattr(self, '__sample_data_ts_df'):
+  def sample_data_ts_df(self):
+    if not hasattr(self, '_sample_data_ts_df'):
       cache_path = self._get_cache_path(self.SAMPLE_DATA_TS_CACHE_NAME)
-      util.log.info("Using sample_data timestamp cache at %s" % cache_path)
-      self.__sample_data_ts_df = pd.read_parquet(cache_path)
-    return self.__sample_data_ts_df
+      util.log.info("Using sample_data timestamp cache at %s ..." % cache_path)
+      self._sample_data_ts_df = pd.read_parquet(cache_path)
+      # import pyarrow.parquet as pq
+      # dataset = pq.ParquetDataset(cache_path)
+      # self._sample_data_ts_df_cached = dataset.read(use_threads=False).to_pandas()
+      util.log.info("... read %s ." % cache_path)
+    return self._sample_data_ts_df
 
   def get_nearest_sample_data(self, scene_name, timestamp_ns, channel=None):
     """Get the nearest `sample_data` record and return the record as well
     as the time diff (in nanoseconds)"""
-    df = self._sample_data_ts_df
+    df = self.sample_data_ts_df
     # First narrow down to the relevant scene / car and (maybe) sensor
     df = df[df['scene_name'] == scene_name]
     if channel:
@@ -194,12 +216,12 @@ class AUNuScenes(NuScenes):
   
   def get_row(self, scene_name, timestamp_ns, channel):
     """Get the record that exactly matches the given timestamp and channel"""
-    df = self._sample_data_ts_df
+    df = self.sample_data_ts_df
     # First narrow down to the relevant scene / car and (maybe) sensor
     df = df[df['scene_name'] == scene_name]
     df = df[df['channel'] == channel]
     df = df[df['timestamp_ns'] == timestamp_ns]
-    if not df:
+    if not len(df):
       raise KeyError(
               "Can't find record for %s %s %s" % (
                 scene_name, timestamp_ns, channel))
@@ -207,10 +229,10 @@ class AUNuScenes(NuScenes):
       raise ValueError("Multiple results for %s %s %s %s" % (
                 scene_name, timestamp_ns, channel, df))
     else:
-      return df.iloc[0].to_dict(orient='records')[0]
+      return df.iloc[0].to_dict()
 
   def get_rows_for_scene(self, scene_name):
-    df = self._sample_data_ts_df
+    df = self.sample_data_ts_df
     df = df[df['scene_name'] == scene_name]
     return df.to_dict(orient='records')
 
@@ -562,11 +584,25 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
   @classmethod
   def _create_datum_rdds(cls, spark):
+
+    PARTITIONS_PER_SEGMENT = 4 * os.cpu_count()
+    PARTITIONS_PER_TASK = 2#int(os.cpu_count()/2)
+
+    datum_rdds = []
     for segment_id in cls.get_segment_ids():
-      uris = cls.get_uris_for_segment(segment_id)
-      print('uris', segment_id, len(uris))
-      import pdb; pdb.set_trace()
-    return []
+      for partitions in util.ichunked(range(PARTITIONS_PER_SEGMENT), PARTITIONS_PER_TASK):
+        task_rdd = spark.sparkContext.parallelize(
+          [(segment_id, partition) for partition in partitions])
+
+        def gen_partition_datums(task):
+          segment_id, partition = task
+          for i, uri in enumerate(cls.iter_uris_for_segment(segment_id)):
+            if (i % PARTITIONS_PER_SEGMENT) == partition:
+              yield cls.create_stamped_datum(uri)
+        
+        datum_rdd = task_rdd.flatMap(gen_partition_datums)
+        datum_rdds.append(datum_rdd)
+    return datum_rdds
 
   @classmethod
   def get_segment_ids(cls):
@@ -574,17 +610,13 @@ class StampedDatumTable(av.StampedDatumTableBase):
     return sorted(s['name'] for s in nusc.scene)
 
   @classmethod
-  def get_uris_for_segment(cls, segment_id):
+  def iter_uris_for_segment(cls, segment_id):
     nusc = cls.get_nusc()
 
     scene_split = cls.FIXTURES.get_split_for_scene(segment_id)
 
-    # Build and return sorted URIs
-    uris = []
-
     ## Get sensor data and ego pose
     rows = nusc.get_rows_for_scene(segment_id)
-    # import pdb; pdb.set_trace()
     for row in rows:
       if cls.SENSORS_KEYFRAMES_ONLY:
         if row['sensor_modality'] and not row['is_key_frame']:
@@ -595,14 +627,14 @@ class StampedDatumTable(av.StampedDatumTableBase):
       else:
         extra = {'nuscenes.sample_data_token': row['token']}
 
-      uris.append(av.URI(
-                    dataset='nuscenes', # use fixtures ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                    split=scene_split,
-                    segment_id=segment_id,
-                    timestamp=to_nanostamp(row['timestamp']),
-                    topic=row['channel'],
-                    extra=extra))
-      
+      yield av.URI(
+              dataset='nuscenes', # use fixtures ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              split=scene_split,
+              segment_id=segment_id,
+              timestamp=to_nanostamp(row['timestamp']),
+              topic=row['channel'],
+              extra=extra)
+
     ## Get labels
     if cls.LABELS_KEYFRAMES_ONLY:
 
@@ -617,15 +649,15 @@ class StampedDatumTable(av.StampedDatumTableBase):
       ]
 
       for sample in scene_samples:
-        uris.append(av.URI(
-                      dataset='nuscenes',
-                      split=scene_split,
-                      segment_id=segment_id,
-                      timestamp=to_nanostamp(sample['timestamp']),
-                      topic='labels.cuboids',
-                      extra={
-                        'nuscenes.sample_token': sample['token'],
-                      }))
+        yield av.URI(
+                dataset='nuscenes',
+                split=scene_split,
+                segment_id=segment_id,
+                timestamp=to_nanostamp(sample['timestamp']),
+                topic='labels.cuboids',
+                extra={
+                  'nuscenes.sample_token': sample['token'],
+                })
     
     else:
 
@@ -634,17 +666,15 @@ class StampedDatumTable(av.StampedDatumTableBase):
         if row['channel'] == 'ego_pose':
           continue
 
-      uris.append(av.URI(
-                      dataset='nuscenes',
-                      split=scene_split,
-                      segment_id=segment_id,
-                      timestamp=to_nanostamp(row['timestamp']),
-                      topic='labels.cuboids',
-                      extra={
-                        'nuscenes.sample_data_token': row['token'],
-                      }))
-
-    return sorted(uris)
+        yield av.URI(
+                dataset='nuscenes',
+                split=scene_split,
+                segment_id=segment_id,
+                timestamp=to_nanostamp(row['timestamp']),
+                topic='labels.cuboids',
+                extra={
+                  'nuscenes.sample_data_token': row['token'],
+                })
 
   @classmethod
   def create_stamped_datum(cls, uri):
@@ -851,10 +881,12 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
   @classmethod
   def __create_ego_pose(cls, uri, pose_record):
+    nusc = cls.get_nusc()
+    pose_record = nusc.get('ego_pose', pose_record['token'])
     ego_pose = transform_from_record(
                       pose_record,
                       dest_frame='ego',
-                      src_frame='city')    
+                      src_frame='city')
     return av.StampedDatum.from_uri(uri, transform=ego_pose)
 
   @classmethod
