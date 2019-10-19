@@ -200,41 +200,69 @@ class AUNuScenes(NuScenes):
   def get_nearest_sample_data(self, scene_name, timestamp_ns, channel=None):
     """Get the nearest `sample_data` record and return the record as well
     as the time diff (in nanoseconds)"""
-    df = self.sample_data_ts_df
-    # First narrow down to the relevant scene / car and (maybe) sensor
-    df = df[df['scene_name'] == scene_name]
-    if channel:
-      df = df[df['channel'] == channel]
-    
-    nearest = df.iloc[  
-      (df['timestamp_ns'] - timestamp_ns).abs().argsort()[:1]  ]
-    if len(nearest) > 0:
-      row = nearest.to_dict(orient='records')[0]
-      return row, row['timestamp_ns'] - timestamp_ns
-    else:
-      return None, 0
-  
-  def get_row(self, scene_name, timestamp_ns, channel):
-    """Get the record that exactly matches the given timestamp and channel"""
-    df = self.sample_data_ts_df
-    # First narrow down to the relevant scene / car and (maybe) sensor
-    df = df[df['scene_name'] == scene_name]
-    df = df[df['channel'] == channel]
-    df = df[df['timestamp_ns'] == timestamp_ns]
-    if not len(df):
-      raise KeyError(
-              "Can't find record for %s %s %s" % (
-                scene_name, timestamp_ns, channel))
-    elif len(df) != 1:
-      raise ValueError("Multiple results for %s %s %s %s" % (
-                scene_name, timestamp_ns, channel, df))
-    else:
-      return df.iloc[0].to_dict()
+    import time
+    s = time.time()
+    print('doing slow linear find nearest')
 
-  def get_rows_for_scene(self, scene_name):
-    df = self.sample_data_ts_df
-    df = df[df['scene_name'] == scene_name]
-    return df.to_dict(orient='records')
+    sample_to_scene = {}
+    for sample in self.sample:
+      scene = self.get('scene', sample['scene_token'])
+      sample_to_scene[sample['token']] = scene['token']
+
+    diff, best_sd = min(
+      (sd['timestamp_ns'] - timestamp_ns, sd)
+      for sd in self.sample_data
+      if (
+        self.get('scene', sample_to_scene[sd['sample_token']])['name'] == scene_name
+        and (not channel or sd['channel'] == channel)))
+    print('done %s' % (time.time() - s))
+    return best_sd, diff
+
+    # df = self.sample_data_ts_df
+    # # First narrow down to the relevant scene / car and (maybe) sensor
+    # df = df[df['scene_name'] == scene_name]
+    # if channel:
+    #   df = df[df['channel'] == channel]
+    
+    # nearest = df.iloc[  
+    #   (df['timestamp_ns'] - timestamp_ns).abs().argsort()[:1]  ]
+    # if len(nearest) > 0:
+    #   row = nearest.to_dict(orient='records')[0]
+    #   return row, row['timestamp_ns'] - timestamp_ns
+    # else:
+    #   return None, 0
+  
+    # def get_row(self, scene_name, timestamp_ns, channel):
+    #   """Get the record that exactly matches the given timestamp and channel"""
+    #   df = self.sample_data_ts_df
+    #   # First narrow down to the relevant scene / car and (maybe) sensor
+    #   df = df[df['scene_name'] == scene_name]
+    #   df = df[df['channel'] == channel]
+    #   df = df[df['timestamp_ns'] == timestamp_ns]
+    #   if not len(df):
+    #     raise KeyError(
+    #             "Can't find record for %s %s %s" % (
+    #               scene_name, timestamp_ns, channel))
+    #   elif len(df) != 1:
+    #     raise ValueError("Multiple results for %s %s %s %s" % (
+    #               scene_name, timestamp_ns, channel, df))
+    #   else:
+    #     return df.iloc[0].to_dict()
+
+  def get_sample_data_for_scene(self, scene_name):
+    print('expensive get rows')
+
+    sample_to_scene = {}
+    for sample in self.sample:
+      scene = self.get('scene', sample['scene_token'])
+      sample_to_scene[sample['token']] = scene['token']
+
+    for sd in self.sample_data:
+      if self.get('scene', sample_to_scene[sd['sample_token']])['name'] == scene_name:
+        yield sd
+    # df = self.sample_data_ts_df
+    # df = df[df['scene_name'] == scene_name]
+    # return df.to_dict(orient='records')
 
 
 
@@ -586,7 +614,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
   def _create_datum_rdds(cls, spark):
 
     PARTITIONS_PER_SEGMENT = 4 * os.cpu_count()
-    PARTITIONS_PER_TASK = 2#int(os.cpu_count()/2)
+    PARTITIONS_PER_TASK = os.cpu_count()
 
     datum_rdds = []
     for segment_id in cls.get_segment_ids():
@@ -616,26 +644,42 @@ class StampedDatumTable(av.StampedDatumTableBase):
     scene_split = cls.FIXTURES.get_split_for_scene(segment_id)
 
     ## Get sensor data and ego pose
-    rows = nusc.get_rows_for_scene(segment_id)
-    for row in rows:
-      if cls.SENSORS_KEYFRAMES_ONLY:
-        if row['sensor_modality'] and not row['is_key_frame']:
-          continue
+    for sd in nusc.get_sample_data_for_scene(segment_id):
+      # Note all poses
+      yield av.URI(
+              dataset='nuscenes', # use fixtures ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+              split=scene_split,
+              segment_id=segment_id,
+              timestamp=to_nanostamp(sd['timestamp']),
+              topic='ego_pose',
+              extra={'nuscenes-token': 'ego_pose|' + sd['ego_pose_token']})
 
-      if row['channel'] == 'ego_pose':
-        extra = {'nuscenes.ego_pose_token': row['token']}
-      else:
-        extra = {'nuscenes.sample_data_token': row['token']}
+      # Maybe skip the sensor data if we're only doing keyframes
+      if cls.SENSORS_KEYFRAMES_ONLY:
+        if sd['sensor_modality'] and not sd['is_key_frame']:
+          continue
 
       yield av.URI(
               dataset='nuscenes', # use fixtures ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
               split=scene_split,
               segment_id=segment_id,
-              timestamp=to_nanostamp(row['timestamp']),
-              topic=row['channel'],
-              extra=extra)
+              timestamp=to_nanostamp(sd['timestamp']),
+              topic=sd['sensor_modality'] + '|' + sd['channel'],
+              extra={'nuscenes-token': 'sample_data|' + sd['token']})
 
-    ## Get labels
+      # Get labels (non-keyframes; interpolated one per track)
+      if not cls.LABELS_KEYFRAMES_ONLY:
+        yield av.URI(
+                dataset='nuscenes',  # use fixtures ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                split=scene_split,
+                segment_id=segment_id,
+                timestamp=to_nanostamp(row['timestamp']),
+                topic='labels|cuboids',
+                extra={
+                  'nuscenes-token': 'sample_data|' + sd['token'],
+                })
+
+    ## Get labels (keyframes only)
     if cls.LABELS_KEYFRAMES_ONLY:
 
       # Get annos for *only* samples, which are keyframes
@@ -649,57 +693,51 @@ class StampedDatumTable(av.StampedDatumTableBase):
       ]
 
       for sample in scene_samples:
-        yield av.URI(
-                dataset='nuscenes',
-                split=scene_split,
-                segment_id=segment_id,
-                timestamp=to_nanostamp(sample['timestamp']),
-                topic='labels.cuboids',
-                extra={
-                  'nuscenes.sample_token': sample['token'],
-                })
-    
-    else:
-
-      # Get annos for all all sample_data records for this scene
-      for row in rows:
-        if row['channel'] == 'ego_pose':
-          continue
-
-        yield av.URI(
-                dataset='nuscenes',
-                split=scene_split,
-                segment_id=segment_id,
-                timestamp=to_nanostamp(row['timestamp']),
-                topic='labels.cuboids',
-                extra={
-                  'nuscenes.sample_data_token': row['token'],
-                })
+        for channel, sample_data_token in sample['data'].items():
+          sd = nusc.get('sample_data', sample_data_token)
+          yield av.URI(
+                  dataset='nuscenes',
+                  split=scene_split,
+                  segment_id=segment_id,
+                  timestamp=to_nanostamp(sd['timestamp']),
+                  topic='labels|cuboids',
+                  extra={
+                    'nuscenes-token': 'sample_data|' + sd['token'],
+                  })
 
   @classmethod
   def create_stamped_datum(cls, uri):
-    if uri.topic == 'camera':
+    if uri.topic.startswith('camera'):
       sample_data = cls.__get_row(uri)
       return cls.__create_camera_image(uri, sample_data)
-    elif uri.topic in ('lidar', 'radar'):
+    elif uri.topic.startswith('lidar') or uri.topic.startswith('radar'):
       sample_data = cls.__get_row(uri)
       return cls.__create_point_cloud(uri, sample_data)
     elif uri.topic == 'ego_pose':
       pose_record = cls.__get_row(uri)
       return cls.__create_ego_pose(uri, pose_record)
-    elif uri.topic == 'labels.cuboids':
-      nusc = cls.get_nusc()
-      best_sd, diff_ns = nusc.get_nearest_sample_data(
-                                uri.segment_id,
-                                uri.timestamp)
-      assert best_sd
-      assert diff_ns < .01 * 1e9
-      return cls.__create_cuboids_in_ego(uri, best_sd['token'])
+    elif uri.topic == 'labels|cuboids':
+      sample_data = cls.__get_row(uri)
+      # nusc = cls.get_nusc()
+      # best_sd, diff_ns = nusc.get_nearest_sample_data(
+      #                           uri.segment_id,
+      #                           uri.timestamp)
+      # assert best_sd
+      # assert diff_ns < .01 * 1e9
+      return cls.__create_cuboids_in_ego(uri, sample_data['token'])
+    else:
+      raise ValueError(uri)
 
   @classmethod
   def __get_row(cls, uri):
-    nusc = cls.get_nusc()
-    return nusc.get_row(uri.segment_id, uri.timestamp, uri.topic)
+    if 'nuscenes-token' in uri.extra:
+      record = uri.extra['nuscenes-token']
+      table, token = record.split('|')
+      nusc = cls.get_nusc()
+      return nusc.get(table, token)
+    raise ValueError
+    # nusc = cls.get_nusc()
+    # return nusc.get_row(uri.segment_id, uri.timestamp, uri.topic)
   
   @classmethod
   def __create_camera_image(cls, uri, sample_data):
@@ -801,11 +839,13 @@ class StampedDatumTable(av.StampedDatumTableBase):
                       src_frame='ego',
                       dest_frame=sample_data['channel'])
 
+    motion_corrected= (sample_data['ego_pose_token'] != target_pose_token)
+
     return av.StampedDatum.from_uri(
             uri,
             point_cloud=av.PointCloud(
               sensor_name=sample_data['channel'],
-              timestamp=to_nanostamp(pointsensor['timestamp']),
+              timestamp=to_nanostamp(sample_data['timestamp']),
               cloud=n_xyz,
               ego_to_sensor=ego_to_sensor,
               motion_corrected=motion_corrected,

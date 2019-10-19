@@ -9,7 +9,6 @@ TEST_URIS = (
 )
 
 def test_nuscenes():
-
   from au.fixtures.datasets.nuscenes import StampedDatumTable
   StampedDatumTable.setup()
   return
