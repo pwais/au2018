@@ -550,16 +550,13 @@ class StampedDatumTable(av.StampedDatumTableBase):
     # If enabled, samples only raw annotations.  If disabled, will motion-
     # correct cuboids to every sensor reading.
 
+
+  ## Subclass API
+
   @classmethod
   def table_root(cls):
     return '/outer_root/media/seagates-ext4/au_datas/nusc_sd_table'
   
-  @classmethod
-  def get_nusc(cls):
-    if not hasattr(cls, '_nusc'):
-      cls._nusc = cls.FIXTURES.get_loader(version=cls.NUSC_VERSION)
-    return cls._nusc
-
   @classmethod
   def _create_datum_rdds(cls, spark):
     for segment_id in cls.get_segment_ids():
@@ -568,6 +565,15 @@ class StampedDatumTable(av.StampedDatumTableBase):
       import pdb; pdb.set_trace()
     return []
 
+  
+  ## Public API
+
+  @classmethod
+  def get_nusc(cls):
+    if not hasattr(cls, '_nusc'):
+      cls._nusc = cls.FIXTURES.get_loader(version=cls.NUSC_VERSION)
+    return cls._nusc
+  
   @classmethod
   def get_segment_ids(cls):
     nusc = cls.get_nusc()
@@ -665,6 +671,9 @@ class StampedDatumTable(av.StampedDatumTableBase):
       assert best_sd
       assert diff_ns < .01 * 1e9
       return cls.__create_cuboids_in_ego(uri, best_sd['token'])
+
+
+  ## Support
 
   @classmethod
   def __get_row(cls, uri):
