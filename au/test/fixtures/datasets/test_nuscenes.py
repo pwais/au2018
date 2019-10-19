@@ -13,14 +13,14 @@ def test_nuscenes():
   StampedDatumTable.setup()
   return
 
-  from au.fixtures.datasets.nuscenes import FrameTable
+  # from au.fixtures.datasets.nuscenes import FrameTable
   
-  nusc = FrameTable.get_nusc()
-  nusc.print_sensor_sample_rates()
-  import pdb; pdb.set_trace()
-  FrameTable.setup()
+  # nusc = FrameTable.get_nusc()
+  # nusc.print_sensor_sample_rates()
+  # import pdb; pdb.set_trace()
+  # FrameTable.setup()
 
-  return
+  # return
   
 
   # FrameTable.NUSC_VERSION = 'v1.0-mini'
