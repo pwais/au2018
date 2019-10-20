@@ -77,6 +77,44 @@ RIDER = ["BICYCLIST", "MOTORCYCLIST"]
 class MissingPose(ValueError):
   pass
 
+def get_nanostamp_from_json_path(path):
+  nanostamp = int(path.split('_')[-1].rstrip('.json'))
+  return nanostamp
+
+def get_lidar_extrinsic_matrix(config, lidar_name='vehicle_SE3_up_lidar_'):
+  """Similar to argoverse.utils.calibration.get_camera_extrinsic_matrix()
+  except this utility reads the *lidar* extrinsics from the calibration JSON
+  file.  Argoverse does not actually provide any tool for doing this (!!!).
+
+  Since Argoverse fuses the top and bottom lidars into one cloud, in practice
+  one might want to simply use the 'up' lidar extrinsics. (From the JSON
+  values, the up lidar appears to have a unit rotation, and the down lidar
+  has slightly-off-from-unit rotation, so perhaps the down lidar is calibrated
+  to the up one).
+
+  Note that the Argoverse lidar points included with the dataset are already
+  in ego frame.
+
+  Observed valid `lidar_name` values are:
+    * vehicle_SE3_up_lidar_
+    * vehicle_SE3_down_lidar_
+
+  Returns a standard transformation matrix of lidar frame from ego frame.
+  """
+  from argoverse.utils.se3 import SE3
+  from argoverse.utils.transform import quat2rotmat
+
+  vehicle_SE3_sensor = config[lidar_name]
+  egovehicle_t_lidar = np.array(vehicle_SE3_sensor["translation"])
+  egovehicle_q_lidar = vehicle_SE3_sensor["rotation"]["coefficients"]
+  egovehicle_R_lidar = quat2rotmat(egovehicle_q_lidar)
+  egovehicle_T_lidar = SE3(
+                  rotation=egovehicle_R_lidar, translation=egovehicle_t_lidar)
+  # NB: camera extrinsics require an inverse(), and comments in argoverse code
+  # are confusing.  Manual inspection of the JSON data suggests no inverse()
+  # is needed.
+  return egovehicle_T_lidar.transform_matrix
+
 def get_image_width_height(camera):
   from argoverse.utils import camera_stats
   if camera in camera_stats.RING_CAMERA_LIST:
@@ -892,6 +930,29 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       "Creating loader for log %s with root dir %s" % (log_name, root_dir))
     super(AUTrackingLoader, self).__init__(virtual_root)
 
+  @property
+  def timestamp_to_pose_path(self):
+    if not hasattr(self, '_timestamp_to_pose'):
+      pose_paths = util.all_files_recursive(
+        os.path.join(self.root_dir, self.current_log, 'poses'))
+      timestamp_to_pose = {}
+      for path in pose_paths:
+        timestamp_to_pose[get_nanostamp_from_json_path(path)] = path
+      self._timestamp_to_pose = timestamp_to_pose
+    return self._timestamp_to_pose
+
+  def get_up_lidar_extrinsic_matrix(self):
+    if not hasattr(self, '_lidar_to_extrinsic'):
+      import json
+      config = json.load(open(self.calib_filename))
+      self._lidar_to_extrinsic = {}
+      for lidar in ('vehicle_SE3_up_lidar_', 'vehicle_SE3_down_lidar_'):
+        self._lidar_to_extrinsic[lidar] = \
+          get_lidar_extrinsic_matrix(config, lidar)
+    
+    # For now we just support getting the up lidar ...
+    return self._lidar_to_extrinsic['vehicle_SE3_up_lidar_']
+
   def get_nearest_image_path(self, camera, timestamp):
     """Return a path to the image from `camera` at `timestamp`;
     provide either an exact match or choose the closest available."""
@@ -967,6 +1028,15 @@ class AUTrackingLoader(ArgoverseTrackingLoader):
       return self.get_motion_corrected_pts(cloud, lidar_t, timestamp), True
     except MissingPose:
       return cloud, False
+
+  def get_maybe_motion_corrected_cloud_and_time(self, timestamp):
+    """Similar to `get_lidar()` but motion-corrects the entire cloud
+    to (likely camera-time) `timestamp`.  Return also the lidar timestamp."""
+    cloud, lidar_t = self.get_nearest_lidar_sweep(timestamp)
+    try:
+      return self.get_motion_corrected_pts(cloud, lidar_t, timestamp), True
+    except MissingPose:
+      return cloud, lidar_t
 
   def get_cloud_in_image(
         self,
@@ -1454,6 +1524,324 @@ class Fixtures(object):
     cls.download_all(spark=spark)
     ImageAnnoTable.setup(spark=spark)
     ImageAnnoTable.save_anno_reports(spark)
+
+
+
+###
+### StampedDatumTable Impl
+###
+
+class StampedDatumTable(av.StampedDatumTableBase):
+
+  FIXTURES = Fixtures
+
+  MERGE_AND_REPLACE_BIKES = True
+  MAX_RIDDEN_BIKE_DISTANCE_METERS = 5
+    # For each frame of labels, try to associate bikes with riders, and replace
+    # source cuboids with their associated ones.
+
+  SYNC_LIDAR_TO_CAMERA = False
+  MOTION_CORRECTED_CUBOIDS = False # TODO deleteme?  use nusc-style interp? ~~~~~~~~~~~~
+
+  ## Subclass API
+
+  @classmethod
+  def table_root(cls):
+    return '/outer_root/media/seagates-ext4/au_datas/argoverse_datum_table'
+
+  @classmethod
+  def _create_datum_rdds(cls, spark):
+
+    segment_uris = cls.get_segment_uris()
+    from collections import defaultdict
+    split_to_count = defaultdict(int)
+    for uri in segment_uris:
+      split_to_count[uri.split] += 1
+    util.log.info(
+      "Found %s segments, splits: %s" % (
+          len(segment_uris), dict(split_to_count)))
+
+
+    PARTITIONS_PER_SEGMENT = 4 * os.cpu_count()
+    PARTITIONS_PER_TASK = os.cpu_count()
+
+    datum_rdds = []
+    for segment_uri in segment_uris:
+      partition_chunks = util.ichunked(
+        range(PARTITIONS_PER_SEGMENT), PARTITIONS_PER_TASK)
+      for partitions in partition_chunks:
+        task_rdd = spark.sparkContext.parallelize(
+          [(segment_uri, partition) for partition in partitions])
+
+        def gen_partition_datums(task):
+          segment_uri, partition = task
+          for i, uri in enumerate(cls.iter_uris_for_segment(segment_uri)):
+            if (i % PARTITIONS_PER_SEGMENT) == partition:
+              yield cls.create_stamped_datum(uri)
+        
+        datum_rdd = task_rdd.flatMap(gen_partition_datums)
+        datum_rdds.append(datum_rdd)
+    return datum_rdds
+
+
+  ## Public API
+
+  @classmethod
+  def get_segment_uris(cls):
+    splits = cls.FIXTURES.TRAIN_TEST_SPLITS
+    return list(itertools.chain.from_iterable(
+      cls.FIXTURES.get_log_uris(split)
+      for split in splits))
+
+  @classmethod
+  def iter_uris_for_segment(cls, uri):
+    loader = cls.FIXTURES.get_loader(uri)
+
+    ## Poses
+    for timestamp, path in loader.timestamp_to_pose_path.items():
+      uri = copy.deepcopy(uri)
+      uri.topic = 'ego_pose'
+      uri.timestamp = timestamp
+      yield uri
+    
+    ## Lidar
+    # TODO SYNC_LIDAR_TO_CAMERA
+    for timestamp in loader.lidar_timestamp_list:
+      uri = copy.deepcopy(uri)
+      uri.topic = 'lidar|fused'
+      uri.timestamp = timestamp
+      yield uri
+    
+    ## Cameras
+    for camera in loader.timestamp_image_dict.keys():
+      for timestamp in loader.timestamp_image_dict[camera].keys():
+        uri = copy.deepcopy(uri)
+        uri.topic = 'camera|' + camera
+        uri.timestamp = timestamp
+        yield uri
+
+    ## Labels
+    # TODO MOTION_CORRECTED_CUBOIDS
+    label_paths = loader.label_list
+    for path in label_paths:
+      uri = copy.deepcopy(uri)
+      uri.topic = 'labels|cuboids'
+      uri.timestamp = get_nanostamp_from_json_path(path)
+      yield uri
+
+  @classmethod
+  def create_stamped_datum(cls, uri):
+    if uri.topic.startswith('camera'):
+      return cls.__create_camera_image(uri)
+    elif uri.topic.startswith('lidar'):
+      return cls.__create_point_cloud(uri)
+    elif uri.topic == 'ego_pose':
+      return cls.__create_ego_pose(uri)
+    elif uri.topic == 'labels|cuboids':
+      return cls.__create_cuboids_in_ego(uri)
+    else:
+      raise ValueError(uri)
+  
+
+  ## Support
+
+  @classmethod
+  def __get_ego_pose(cls, uri):
+    loader = cls.FIXTURES.get_loader(uri)
+    city_to_ego = loader.get_city_to_ego(uri.timestamp)
+    ego_pose = av.Transform(
+                  rotation=city_to_ego.rotation,
+                  translation=city_to_ego.translation,
+                  src_frame='city',
+                  dest_frame='ego')
+    return ego_pose
+
+  @classmethod
+  def __create_camera_image(cls, uri):
+    loader = cls.FIXTURES.get_loader(uri)
+
+    camera = uri.topic[len('camera|'):]
+    path = loader.timestamp_image_dict[camera][uri.timestamp]
+    calib = loader.get_calibration(camera)
+    
+    cam_from_ego = av.Transform(
+                        rotation=calib.R,
+                        translation=calib.T,
+                        src_frame='ego',
+                        dest_frame=camera)
+    ego_pose = cls.__get_ego_pose(uri)
+
+    viewport = uri.get_viewport()
+    w, h = get_image_width_height(camera)
+    if not viewport:
+      viewport = common.BBox.of_size(w, h)
+
+    K = calib.K[:3, :3]
+    ci = av.CameraImage(
+        camera_name=camera,
+        image_jpeg=bytearray(open(path, 'rb').read()),
+        height=h,
+        width=w,
+        viewport=viewport,
+        timestamp=uri.timestamp,
+        ego_pose=ego_pose,
+        cam_from_ego=cam_from_ego,
+        K=K,
+        principal_axis_in_ego=get_camera_normal(calib),
+    )
+
+    return av.StampedDatum.from_uri(uri, camera_image=ci)
+  
+  @classmethod
+  def __create_point_cloud(cls, uri):
+    loader = cls.FIXTURES.get_loader(uri)
+
+    if cls.SYNC_LIDAR_TO_CAMERA:
+      cloud, lidar_timestamp = \
+        loader.get_maybe_motion_corrected_cloud(uri.timestamp)
+    else:
+      cloud, lidar_timestamp = loader.get_nearest_lidar_sweep(uri.timestamp)
+      motion_corrected = False
+      assert lidar_timestamp == uri.timestamp
+    
+    extrinsic = loader.get_up_lidar_extrinsic_matrix()
+    ego_to_sensor = av.Transform(
+                        rotation=extrinsic[0:3, 0:3],
+                        translation=extrinsic[0:3, 3],
+                        src_frame='ego',
+                        dest_frame='lidar_fused')
+    ego_pose = cls.__get_ego_pose(uri)
+    pc = av.PointCloud(
+        sensor_name='lidar_fused',
+        timestamp=lidar_timestamp, # NB: use *real* lidar timestamp if given
+        cloud=cloud,
+        motion_corrected=motion_corrected,
+        ego_to_sensor=ego_to_sensor,
+        ego_pose=ego_pose,
+    )
+    return av.StampedDatum.from_uri(uri, point_cloud=pc)
+  
+  @classmethod
+  def __create_ego_pose(cls, uri):
+    ego_pose = cls.__get_ego_pose(uri)
+    return av.StampedDatum.from_uri(uri, transform=ego_pose)
+  
+  @classmethod
+  def __create_cuboids_in_ego(cls, uri):
+    loader = cls.FIXTURES.get_loader(uri)
+
+    olrs = loader.get_nearest_label_objects(uri.timestamp)
+    cuboids = []
+    for olr in olrs:
+      cuboid = av.Cuboid()
+
+      ## Core
+      from au.fixtures.datasets.av import ARGOVERSE_CATEGORY_TO_AU_AV_CATEGORY
+      cuboid.track_id = olr.track_id
+      cuboid.category_name = olr.label_class
+      cuboid.au_category = ARGOVERSE_CATEGORY_TO_AU_AV_CATEGORY.get(
+                                              olr.label_class, 'background')
+      cuboid.timestamp = olr.timestamp
+        # NB: this timestamp is embedded in the label itself, perhaps might
+        # not be equal to uri.timestamp
+      cuboid.extra = {
+        'argoverse_occlusion': str(olr.occlusion),
+          # In practice, the value in this field is not meaningful
+      }
+
+      ## Box
+      cuboid.box3d = olr.as_3d_bbox()
+      cuboid.motion_corrected = False
+      if cls.MOTION_CORRECTED_CUBOIDS:
+        try:
+          cuboid.box3d = loader.get_motion_corrected_pts(
+                                    cuboid.box3d,
+                                    olr.timestamp,
+                                    uri.timestamp)
+          cuboid.motion_corrected = True
+        except MissingPose:
+          # Garbage! Ignore.
+          pass
+      
+      cuboid.distance_meters = np.min(np.linalg.norm(cuboid.box3d, axis=-1))
+
+      ## Pose Etc
+      cuboid.length_meters = float(olr.length)
+      cuboid.width_meters = float(olr.width)
+      cuboid.height_meters = float(olr.height)
+
+      from argoverse.utils.transform import quat2rotmat
+      rotmat = quat2rotmat(olr.quaternion)
+        # NB: must use quat2rotmat due to Argo-specific quaternion encoding
+      
+      from scipy.spatial.transform import Rotation as R
+      cuboid.obj_from_ego = av.Transform(
+                                rotation=rotmat,
+                                translation=olr.translation,
+                                src_frame='ego',
+                                dest_frame='obj')
+      cuboid.ego_pose = cls.__get_ego_pose(uri)
+
+      cuboids.append(cuboid)
+      
+    if cls.MERGE_AND_REPLACE_BIKES:
+      cuboids = cls.__get_bikes_merged(cuboids)
+
+    return av.StampedDatum.from_uri(uri, cuboids=cuboids)
+
+  @classmethod
+  def __get_bikes_merged(cls, cuboids):
+    bikes = [c for c in cuboids if c.category_name in BIKE]
+    riders = [c for c in cuboids if c.category_name in RIDER]
+
+    if not bikes:
+      return cuboids
+    
+    cuboids_out = [c for c in cuboids if c.category_name not in (BIKE + RIDER)]
+
+    # The best pair has smallest euclidean distance between centroids
+    def l2_dist(c1, c2):
+      return np.linalg.norm(
+        c1.obj_from_ego.translation - c2.obj_from_ego.translation)
+    
+    # Each rider gets assigned the nearest bike.  Note that not all bikes may
+    # have riders.
+    tracks_kept = set(c.track_id for c in cuboids_out)
+    for rider in riders:
+      distance, best_bike = min(
+                              (l2_dist(rider, bike), bike)
+                              for bike in bikes)
+
+      if distance <= cls.MAX_RIDDEN_BIKE_DISTANCE_METERS:
+        # Merge!
+        merged_cuboid = av.Cuboid.get_merged(rider, best_bike)
+        
+        if rider.category_name == 'BICYCLIST':
+          merged_cuboid.au_category = 'bike_with_rider'
+        else: # Motorcycle, maybe moped?
+          merged_cuboid.au_category = 'motorcycle_with_rider'
+        
+        cuboids_out.append(merged_cuboid)
+        tracks_kept.add(rider.track_id)
+        tracks_kept.add(best_bike.track_id)
+
+    # Add back in any *unmerged* bikes & riders
+    for c in bikes + riders:
+      if c.track_id in tracks_kept:
+        continue
+
+      if c.category_name in ("BICYCLE",):
+        c.au_category = 'bike_no_rider'
+      elif c.category_name in ("MOPED", "MOTORCYCLE"):
+        c.au_category = 'motorcycle_no_rider'
+      elif c.category_name in RIDER:
+        c.au_category = 'ped'
+          # Don't drop unassociated riders entirely
+      
+      cuboids_out.append(c)
+    return cuboids_out
+
+    
 
 
 

@@ -615,7 +615,9 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
     datum_rdds = []
     for segment_id in cls.get_segment_ids():
-      for partitions in util.ichunked(range(PARTITIONS_PER_SEGMENT), PARTITIONS_PER_TASK):
+      partition_chunks = util.ichunked(
+        range(PARTITIONS_PER_SEGMENT), PARTITIONS_PER_TASK)
+      for partitions in partition_chunks:
         task_rdd = spark.sparkContext.parallelize(
           [(segment_id, partition) for partition in partitions])
 
@@ -845,7 +847,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
                       src_frame='ego',
                       dest_frame=sample_data['channel'])
 
-    motion_corrected= (sample_data['ego_pose_token'] != target_pose_token)
+    motion_corrected = (sample_data['ego_pose_token'] != target_pose_token)
 
     pc = av.PointCloud(
             sensor_name=sample_data['channel'],

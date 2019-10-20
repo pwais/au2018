@@ -349,7 +349,8 @@ class Spark(object):
   def save_df_thunks(df_thunks, compute_df_sizes=True, **save_opts):
     t = util.ThruputObserver(name='save_df_thunks', n_total=len(df_thunks))
     util.log.info("Going to write in %s chunks ..." % len(df_thunks))
-    for df_thunk in df_thunks:
+    while len(df_thunks):
+      df_thunk = df_thunks.pop(0)
       t.start_block()
       df = df_thunk()
       # df = df.persist()
@@ -360,9 +361,10 @@ class Spark(object):
         df = df.persist()
         num_bytes = df.rdd.map(util.get_size_of_deep).sum()
       df.write.save(mode='append', **save_opts)
+      df.unpersist()
+      
       t.stop_block(n=1, num_bytes=num_bytes)
       t.maybe_log_progress(every_n=1)
-      df.unpersist()
 
 
 

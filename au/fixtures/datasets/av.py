@@ -541,7 +541,8 @@ class PointCloud(object):
   __slots__ = (
     'sensor_name',          # type: string
     'timestamp',            # type: int (GPS or unix time)
-    'cloud',                # type: np.array of points
+    'cloud',                # type: np.array of points,
+                            #    **typically in *ego* frame**
     'motion_corrected',     # type: bool; is `cloud` corrected for ego motion?
     'ego_to_sensor',        # type: Transform
     'ego_pose',             # type: Transform (ego from world)
@@ -1234,7 +1235,7 @@ class StampedDatumTableBase(object):
 
   ## Public API
 
-  PARTITION_KEYS = ('dataset', 'split', 'segment_id', 'topic')
+  PARTITION_KEYS = ('dataset', 'split', 'segment_id')
 
   @classmethod
   def table_root(cls):

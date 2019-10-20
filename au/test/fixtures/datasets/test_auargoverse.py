@@ -94,6 +94,10 @@ FIXTURES_BASE_PATH = os.path.join(conf.AU_ROOT, 'au/test/')
 TEST_TEMPDIR = os.path.join(testconf.TEST_TEMPDIR_ROOT, 'test_argoverse')
 
 
+def test_argoverse_datums_yay():
+  from au.fixtures.datasets.auargoverse import StampedDatumTable
+  StampedDatumTable.setup()
+  return
 
 def test_ag_hacks_test(): # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   

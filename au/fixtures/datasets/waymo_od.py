@@ -53,13 +53,6 @@ def transform_from_pb(waymo_transform):
   return av.Transform(rotation=RT[:3, :3], translation=RT[:3, 3])
 
 
-
-import klepto
-
-def mymap(cls, waymo_frame):
-  # _, waymo_frame = cls_waymo_frame
-  return str(waymo_frame.context.name) + str(waymo_frame.timestamp_micros)
-
 class GetLidarCloudInEgo(object):
 
   @staticmethod
@@ -99,7 +92,6 @@ class GetLidarCloudInEgo(object):
     return [p for p in points] + [p for p in points_ri2]
   
   @classmethod
-  @klepto.lru_cache(maxsize=5, keymap=mymap)
   def get_points(cls, waymo_frame):
     # waymo_open_dataset requires eager mode :( so we need to scope its use
     # into a tensorflow py_func
@@ -135,7 +127,6 @@ class GetLidarCloudInEgo(object):
     
     cls._thruput.update_tallies(num_bytes=util.get_size_of_deep(name_to_points))
     cls._thruput.maybe_log_progress(every_n=10)
-    print(cls.get_points.info()) # klepto cache stats
     
     return name_to_points
 
@@ -668,7 +659,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
   @classmethod
   def _create_datum_rdds(cls, spark):
     
-    PARTITIONS_PER_SEGMENT = 100
+    PARTITIONS_PER_SEGMENT = 25
       # Most segments have 10Hz * 20sec = 200 frames
     TASKS_PER_DATUM_RDD = os.cpu_count()
 
