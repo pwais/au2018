@@ -781,22 +781,19 @@ class StampedDatumTable(av.StampedDatumTableBase):
                       pose_record,
                       dest_frame='ego',
                       src_frame='city')
-    
-    return av.StampedDatum.from_uri(
-            uri,
-            camera_image=av.CameraImage(
-              camera_name=sample_data['channel'],
-              image_jpeg=bytearray(open(data_path, 'rb').read()),
-              height=h,
-              width=w,
-              viewport=viewport,
-              timestamp=to_nanostamp(timestamp),
-              ego_pose=ego_pose,
-              cam_from_ego=cam_from_ego,
-              K=cam_intrinsic,
-              principal_axis_in_ego=principal_axis_in_ego,
-            )
+    ci = av.CameraImage(
+            camera_name=sample_data['channel'],
+            image_jpeg=bytearray(open(data_path, 'rb').read()),
+            height=h,
+            width=w,
+            viewport=viewport,
+            timestamp=to_nanostamp(timestamp),
+            ego_pose=ego_pose,
+            cam_from_ego=cam_from_ego,
+            K=cam_intrinsic,
+            principal_axis_in_ego=principal_axis_in_ego,
     )
+    return av.StampedDatum.from_uri(uri, camera_image=ci)
   
   @classmethod
   def __create_point_cloud(cls, uri, sample_data):
@@ -850,16 +847,15 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
     motion_corrected= (sample_data['ego_pose_token'] != target_pose_token)
 
-    return av.StampedDatum.from_uri(
-            uri,
-            point_cloud=av.PointCloud(
-              sensor_name=sample_data['channel'],
-              timestamp=to_nanostamp(sample_data['timestamp']),
-              cloud=n_xyz,
-              ego_to_sensor=ego_to_sensor,
-              motion_corrected=motion_corrected,
-            )
+    pc = av.PointCloud(
+            sensor_name=sample_data['channel'],
+            timestamp=to_nanostamp(sample_data['timestamp']),
+            cloud=n_xyz,
+            motion_corrected=motion_corrected,
+            ego_to_sensor=ego_to_sensor,
+            ego_pose=ego_pose,
     )
+    return av.StampedDatum.from_uri(uri, point_cloud=pc)
   
   @classmethod
   def __create_cuboids_in_ego(cls, uri, sample_data_token):
@@ -878,6 +874,8 @@ class StampedDatumTable(av.StampedDatumTableBase):
       box.translate(-np.array(pose_record['translation']))
       box.rotate(Quaternion(pose_record['rotation']).inverse)
 
+    ego_pose = transform_from_record(
+      pose_record, dest_frame='ego', src_frame='city')
     from au.fixtures.datasets.av import NUSCENES_CATEGORY_TO_AU_AV_CATEGORY
     cuboids = []
     for box in boxes:
@@ -924,7 +922,10 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
       cuboid.obj_from_ego = av.Transform(
           rotation=box.orientation.rotation_matrix,
-          translation=box.center.reshape((3, 1)))
+          translation=box.center,
+          src_frame='ego',
+          dest_frame='obj')
+      cuboid.ego_pose = ego_pose
       cuboids.append(cuboid)
     return av.StampedDatum.from_uri(uri, cuboids=cuboids)
 

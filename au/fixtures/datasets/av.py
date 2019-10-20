@@ -379,6 +379,7 @@ class Cuboid(object):
     # 'roll',                 # +roll towards y axis (?); usually 0
 
     'obj_from_ego',         # type: Transform from ego / robot frame to object
+    'ego_pose',             # type: Transform (ego from world)
     
     'extra',                # type: string -> string extra metadata
   )
@@ -1154,7 +1155,8 @@ CUBOID_PROTO = Cuboid(
   height_meters=2.,
   distance_meters=10.,
 
-  obj_from_ego=Transform(),
+  obj_from_ego=TRANSFORM_PROTO,
+  ego_pose=TRANSFORM_PROTO,
   extra={
     'key': 'value',
   },

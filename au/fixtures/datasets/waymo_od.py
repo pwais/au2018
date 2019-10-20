@@ -58,7 +58,9 @@ def mymap(cls, waymo_frame):
   # _, waymo_frame = cls_waymo_frame
   return str(waymo_frame.context.name) + str(waymo_frame.timestamp_micros)
 
-class GetFusedCloudInEgo(object):
+
+
+class GetLidarCloudInEgo(object):
 
   @staticmethod
   def _get_all_points(wf_str):
@@ -73,8 +75,8 @@ class GetFusedCloudInEgo(object):
     range_images, camera_projections, range_image_top_pose = (
       frame_utils.parse_range_image_and_camera_projection(wf))
 
-    # Waymo provides two returns for every lidar beam; we have to
-    # fuse them manually
+    # Waymo provides two returns for every lidar beam; user must
+    # fuse them manually.
     points, cp_points = frame_utils.convert_range_image_to_point_cloud(
         wf,
         range_images,
@@ -87,11 +89,14 @@ class GetFusedCloudInEgo(object):
         range_image_top_pose,
         ri_index=1)
 
-    # 3d points in vehicle frame.
-    points_all = np.concatenate(points, axis=0)
-    points_all_ri2 = np.concatenate(points_ri2, axis=0)
-    all_points = np.concatenate((points_all, points_all_ri2), axis=0)
-    return all_points
+    # # 3d points in vehicle frame.
+    # points_all = np.concatenate(points, axis=0)
+    # points_all_ri2 = np.concatenate(points_ri2, axis=0)
+    # all_points = np.concatenate((points_all, points_all_ri2), axis=0)
+
+    # Sadly this is how we must pack things for returning in TF Eager.
+    # These should be in the same order as `lidar_names` in the caller.
+    return [p for p in points] + [p for p in points_ri2]
   
   @classmethod
   @klepto.lru_cache(maxsize=10, keymap=mymap)
@@ -99,7 +104,7 @@ class GetFusedCloudInEgo(object):
     # waymo_open_dataset requires eager mode :( so we need to scope its use
     # into a tensorflow py_func
     if not hasattr(cls, '_thruput'):
-      cls._thruput = util.ThruputObserver(name='GetFusedCloudInEgo')
+      cls._thruput = util.ThruputObserver(name='GetLidarCloudInEgo')
 
     with cls._thruput.observe(n=1):
       os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -110,15 +115,31 @@ class GetFusedCloudInEgo(object):
       if not hasattr(cls, '_sess'):
         cls._sess = util.tf_cpu_session()
 
+      # Ordered to match how waymo_open orders points within each tensor
+      # https://github.com/waymo-research/waymo-open-dataset/blob/b38845a57aa2031dd717147aa438f2e3f2166a3b/waymo_open_dataset/utils/frame_utils.py#L103
+      lidar_ids = sorted([
+        c.name for c in waymo_frame.context.laser_calibrations])
+      lidar_names = [get_lidar_name(lid) for lid in lidar_ids]
+
       wf = tf.placeholder(dtype=tf.string)
-      pf = tfe.py_func(GetFusedCloudInEgo._get_all_points, [wf], tf.float32)
-      all_points = cls._sess.run(
+      n_lasers = len(waymo_frame.lasers)
+      rets = tuple(tf.float32 for _ in lidar_names + lidar_names)
+      pf = tfe.py_func(GetLidarCloudInEgo._get_all_points, [wf], rets)
+      result = cls._sess.run(
         pf, feed_dict={wf: waymo_frame.SerializeToString()})
+
+      # Unpack Tensorflow Eager trash BS
+      returns = lidar_names + [name + '_return_2' for name in lidar_names]
+      assert len(result) == len(returns)
+      name_to_points = dict(zip(returns, result))
     
-    cls._thruput.update_tallies(num_bytes=util.get_size_of_deep(all_points))
+    cls._thruput.update_tallies(num_bytes=util.get_size_of_deep(name_to_points))
     cls._thruput.maybe_log_progress(every_n=10)
-    print(cls.get_points.info())
-    return all_points
+    # print(cls.get_points.info()) klepto cache stats
+    
+    return name_to_points
+
+
 
 def get_category_name(class_id):
   from waymo_open_dataset import label_pb2
@@ -525,7 +546,7 @@ class FrameTable(av.FrameTableBase):
       pc = av.PointCloud(
         sensor_name='lidar_fused',
         timestamp=to_nanostamp(waymo_frame.timestamp_micros),
-        cloud=GetFusedCloudInEgo.get_points(waymo_frame),
+        cloud=GetLidarCloudInEgo.get_points(waymo_frame),
         ego_to_sensor=av.Transform(), # points are in ego frame...
         motion_corrected=False,
       )
@@ -642,85 +663,64 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
   @classmethod
   def table_root(cls):
-    return '/outer_root/media/seagates-ext4/au_datas/waymo_open_frame_table'
+    return '/outer_root/media/seagates-ext4/au_datas/waymo_open_datum_table'
 
   @classmethod
   def _create_datum_rdds(cls, spark):
     
-    PARTITIONS_PER_SEGMENT = 4 * os.cpu_count()
+    PARTITIONS_PER_SEGMENT = 8 * os.cpu_count()
     TASKS_PER_DATUM_RDD = os.cpu_count()
 
     datum_rdds = []
-    segment_uris = list(cls.iter_all_segment_uris())
-    t = util.ThruputObserver(
-      name='create_datum_rdd_tasks',
-      n_total=PARTITIONS_PER_SEGMENT * len(segment_uris))
-    for segment_uri in cls.iter_all_segment_uris():
+    segment_ids = cls.get_all_segment_ids()
+    # t = util.ThruputObserver(
+    #   name='create_datum_rdd_tasks',
+    #   n_total=PARTITIONS_PER_SEGMENT * len(segment_ids))
+    for segment in segment_ids:
       ipartition_ids = util.ichunked(
                           range(PARTITIONS_PER_SEGMENT), TASKS_PER_DATUM_RDD)
       for partition_ids in ipartition_ids:
-        with t.observe(n=len(partition_ids)):
-          tasks = [(segment_id, partition) for partition in partition_ids]
+        # with t.observe(n=len(partition_ids)):
+          tasks = [(segment, partition) for partition in partition_ids]
           segment_uri_rdd = spark.sparkContext.parallelize(tasks)
 
           def iter_datums(task):
-            print('working on %s' % task)
+            print('working on %s' % (task,))
             segment_id, partition = task
             record = cls._get_segment_id_to_record()[segment_id]
+            base_uri = av.URI(
+                          dataset='waymo-od',
+                          split=record.split,
+                          segment_id=segment_id)
+
             tf_str_list = \
               util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
             for record_idx in range(len(tf_str_list)):
               if (record_idx % PARTITIONS_PER_SEGMENT) == partition:
-
-
-                uri = av.URI(
-                          1) gen URIs ?
-                          2) load for each uri
-                                3) keep waymo frame in scope
-                )
-
-
-
-
-                wf = cls.get_waymo_frame(segment_id, record_idx)
-
-                for datum in cls.iter_datums_for_frame(segment_id, record_idx):
-                  yield datum
+                base_uri.extra = {'waymo_frame_record_idx': record_idx}
+                for sd in cls.iter_stamped_datums_for_frame(base_uri):
+                  yield sd
           
           datum_rdd = segment_uri_rdd.flatMap(iter_datums)
           datum_rdds.append(datum_rdd)
-        t.maybe_log_progress(every_n=500)
+        # t.maybe_log_progress(every_n=500)
     
-    return frame_rdds
+    return datum_rdds
+
 
   ## Public API
 
   @classmethod
-  def iter_all_segment_uris(cls):
-    for segment_id, record in cls._get_segment_id_to_record().items():
-      yield av.URI(
-              dataset='waymo-od',
-              split=record.split,
-              segment_id=segment_id)      
-  
-  @classmethod
-  def iter_all_uris(cls):
-    # Warning: Slow!
-    for base_uri in cls.iter_all_segment_uris():
-      for wf in cls._iter_waymo_frames(base_uri.segment_id):
-        uri = copy.deepcopy(base_uri)
-        uri.timestamp = to_nanostamp(wf.timestamp_micros)
-        yield uri
+  def get_all_segment_ids(cls):
+    return list(cls._get_segment_id_to_record().keys())
 
   @classmethod
-  def iter_datums_for_frame(cls, segment_id, record_idx=None, timestamp=None):
-    if record_idx is not None:
+  def get_waymo_frame(cls, uri):
+    segment_id = uri.segment_id
+    record_idx = None
+    if 'waymo_frame_record_idx' in uri.extra:
+      record_idx = int(uri.extra['waymo_frame_record_idx'])
 
-    if timestmap is not None:
-
-
-  @classmethod
-  def get_waymo_frame(cls, segment_id, timestamp=None, record_idx=None):
     # Breakcrumbs: the frame context and timestamp is embedded in the
     # serialized protobuf message, so even if we wanted to index the Waymo
     # TFRecord files, we'd have to read and decode all of them.  Thus for now
@@ -735,18 +735,280 @@ class StampedDatumTable(av.StampedDatumTableBase):
       wf.ParseFromString(bytearray(s))
       return wf
 
-    assert timestamp is not None, "Need either record_idx or timestamp"
+    assert uri.timestamp is not None, "Need either record_idx or timestamp"
     util.log.info("Doing expensive linear find ...")
     for wf in cls._iter_waymo_frames(segment_id):
       wf_timestamp = to_nanostamp(wf.timestamp_micros)
-      if wf_timestamp == timestamp:
+      if wf_timestamp == uri.timestamp:
         util.log.info("... found!")
         return wf
-    raise ValueError("Frame not found for %s" % ((segment_id, timestamp),))
+    raise ValueError("Frame not found for %s" % uri)
+
+  @classmethod
+  def iter_stamped_datums_for_frame(cls, uri, waymo_frame=None):
+    if not waymo_frame:
+      waymo_frame = cls.get_waymo_frame(uri)
+    
+    gens = itertools.chain.from_iterable((
+      cls._gen_lidar_datums(uri, waymo_frame),
+      cls._gen_camera_datums(uri, waymo_frame),
+      cls._gen_cuboid_datums(uri, waymo_frame),
+    ))
+    for sd in gens:
+      yield sd
 
 
   ## Support
   # Portions based upon https://github.com/gdlg/simple-waymo-open-dataset-reader/blob/master/examples/example.py
+
+  @classmethod
+  def _gen_lidar_datums(cls, uri, waymo_frame):
+    uri = copy.deepcopy(uri)
+    
+    ## Ego Pose
+    # It seems ego pose for lidar is only available at the frame level;
+    # cameras and everything else are synchronized to lidar.
+    pose_matrix = np.reshape(waymo_frame.pose.transform, [4, 4])
+    ego_pose = av.Transform(
+                    rotation=pose_matrix[:3, :3],
+                    translation=pose_matrix[:3, 3],
+                    src_frame='city',
+                    dest_frame='ego')
+    
+    uri.topic = 'ego_pose'
+    uri.timestamp = to_nanostamp(waymo_frame.timestamp_micros)
+    yield av.StampedDatum.from_uri(uri, transform=ego_pose)
+
+    # TODO: motion correction / rolling shutter per-camera, ...
+    name_to_points = GetLidarCloudInEgo.get_points(waymo_frame)
+    for laser in waymo_frame.lasers:
+      lidar_name = get_lidar_name(laser.name)
+      
+      ## Calibration
+      laser_calibration = None
+      for lc in waymo_frame.context.laser_calibrations:
+        if lc.name == laser.name:
+          laser_calibration = lc
+      assert lc
+
+      # "Lidar frame to vehicle frame" at time of writing
+      ego_from_lidar = np.reshape(
+        laser_calibration.extrinsic.transform, [4, 4])
+      ego_to_lidar = np.linalg.inv(ego_from_lidar)
+      ego_to_sensor = av.Transform(
+                        rotation=ego_to_lidar[:3, :3],
+                        translation=ego_to_lidar[:3, 3],
+                        src_frame='ego',
+                        dest_frame=lidar_name)
+      
+      ## First Return
+      laser_points = name_to_points[lidar_name]
+      pc = av.PointCloud(
+        sensor_name=lidar_name,
+        timestamp=to_nanostamp(waymo_frame.timestamp_micros),
+        cloud=laser_points,
+        motion_corrected=False,
+        ego_to_sensor=ego_to_sensor, 
+        ego_pose=ego_pose,
+        # TODO maybe beam calibration as extra
+      )
+      uri.topic = 'lidar|' + pc.sensor_name
+      uri.timestamp = pc.timestamp
+      yield av.StampedDatum.from_uri(uri, point_cloud=pc)
+      
+      ## Second Return
+      lidar_name_ri2 = lidar_name + '_return_2'
+      laser_points_ri2 = name_to_points[lidar_name_ri2]
+      pc = av.PointCloud(
+        sensor_name=lidar_name_ri2,
+        timestamp=to_nanostamp(waymo_frame.timestamp_micros),
+        cloud=laser_points_ri2,
+        motion_corrected=False,
+        ego_to_sensor=ego_to_sensor, 
+        ego_pose=ego_pose,
+        # TODO maybe beam calibration as extra
+      )
+      uri.topic = 'lidar|' + pc.sensor_name
+      uri.timestamp = pc.timestamp
+      yield av.StampedDatum.from_uri(uri, point_cloud=pc)
+
+  @classmethod
+  def _gen_camera_datums(cls, uri, waymo_frame):
+
+    uri = copy.deepcopy(uri)
+    for wf_camera_image in waymo_frame.images:
+      ci_timestamp = int(wf_camera_image.pose_timestamp * 1e9)
+        # NB: no idea why waymo obfuscates camera pose stamp this way...
+
+      ## Ego Pose
+      pose_matrix = np.reshape(wf_camera_image.pose.transform, [4, 4])
+      ego_pose = av.Transform(
+                      rotation=pose_matrix[:3, :3],
+                      translation=pose_matrix[:3, 3],
+                      src_frame='city',
+                      dest_frame='ego')
+      
+      uri.topic = 'ego_pose'
+      uri.timestamp = ci_timestamp
+      yield av.StampedDatum.from_uri(uri, transform=ego_pose)
+
+      ## Camera Image
+      camera_name = get_camera_name(wf_camera_image.name)
+
+      w, h = get_jpeg_size(wf_camera_image.image)
+      viewport = uri.get_viewport()
+      if not viewport:
+        from au.fixtures.datasets import common
+        viewport = common.BBox.of_size(w, h)
+      
+      camera_calibration = None
+      for cc in waymo_frame.context.camera_calibrations:
+        if cc.name == wf_camera_image.name:
+          camera_calibration = cc
+      assert camera_calibration
+
+      # NB: Waymo protobuf defs had an error; the protobufs contain
+      # the inverse of the expected transform.
+      extrinsic = np.reshape(camera_calibration.extrinsic.transform, [4, 4])
+      vehicle_to_sensor = np.linalg.inv(extrinsic) # Need inverse! Waymo lies!
+
+      # Waymo camera extrinsics keep the nominal ego frame axes: +x forward,
+      # +z up, etc.  We need to add a rotation to convert to the more
+      # canonical +z depth, +x right, etc.
+      axes_transformation = np.array([
+                              [0, -1,  0,  0],
+                              [0,  0, -1,  0],
+                              [1,  0,  0,  0],
+                              [0,  0,  0,  1]])
+      cam_from_ego_RT = axes_transformation.dot(vehicle_to_sensor)
+      cam_from_ego = av.Transform(
+                        rotation=cam_from_ego_RT[:3, :3],
+                        translation=np.reshape(cam_from_ego_RT[:3, 3], (3, 1)))
+      
+      # Waymo encodes intrinsics using a very custom layout
+      f_u = camera_calibration.intrinsic[0]
+      f_v = camera_calibration.intrinsic[1]
+      c_u = camera_calibration.intrinsic[2]
+      c_v = camera_calibration.intrinsic[3]
+      K = np.array([
+          [f_u, 0,   c_u],
+          [0,   f_v, c_v],
+          [0,   0,   1  ],
+      ])
+
+      # To get the principal axis, we can use `vehicle_to_sensor` (which
+      # neglects the rotation into the image plane) and simply rotate X_HAT
+      # into the camera frame.
+      X_HAT = np.array([1, 0, 0])
+      principal_axis_in_ego = vehicle_to_sensor[:3, :3].dot(X_HAT)
+
+      ci = av.CameraImage(
+          camera_name=camera_name,
+          image_jpeg=bytearray(wf_camera_image.image),
+          height=h,
+          width=w,
+          viewport=viewport,
+          timestamp=ci_timestamp,
+          ego_pose=ego_pose,
+          cam_from_ego=cam_from_ego,
+          K=K,
+          principal_axis_in_ego=principal_axis_in_ego,
+        )
+      uri.topic = 'camera|' + ci.camera_name
+      uri.timestamp = ci_timestamp
+      yield av.StampedDatum.from_uri(uri, camera_image=ci)
+      
+  @classmethod
+  def _gen_cuboid_datums(cls, uri, waymo_frame):
+    
+    # Cuboid ego pose is lidar ego pose
+    pose_matrix = np.reshape(waymo_frame.pose.transform, [4, 4])
+    ego_pose = av.Transform(
+                    rotation=pose_matrix[:3, :3],
+                    translation=pose_matrix[:3, 3],
+                    src_frame='city',
+                    dest_frame='ego')
+    timestamp = to_nanostamp(waymo_frame.timestamp_micros)
+
+    cuboids = []
+    for label in waymo_frame.laser_labels:
+      box = label.box
+      
+      # Coords in ego frame
+      T = np.array([
+            [box.center_x],
+            [box.center_y],
+            [box.center_z]])
+      
+      # Heading is yaw in ego frame
+      from scipy.spatial.transform import Rotation
+      R = Rotation.from_euler('z', box.heading).as_dcm()
+      
+      obj_from_ego = av.Transform(
+        rotation=R, translation=T, src_frame='ego', dest_frame='obj')
+
+      l, w, h, = box.length, box.width, box.height
+      box3d = obj_from_ego.apply(
+          # Send the corners of the box into the ego frame
+          .5 * np.array([
+                # Front face
+                [ l,  w,  h],
+                [ l, -w,  h],
+                [ l, -w, -h],
+                [ l,  w, -h],
+                
+                # Rear face
+                [-l,  w,  h],
+                [-l, -w,  h],
+                [-l, -w, -h],
+                [-l,  w, -h],
+          ])).T
+
+      category_name = get_category_name(label.type)
+      au_category = av.WAYMO_OD_CATEGORY_TO_AU_AV_CATEGORY[category_name]
+
+      extra = {
+        'waymo.detection_difficulty_level':
+          str(label.detection_difficulty_level),
+        'waymo.tracking_difficulty_level':
+          str(label.tracking_difficulty_level),
+        
+        # Frame-level context
+        'waymo.time_of_day':  waymo_frame.context.stats.time_of_day,
+        'waymo.location':     waymo_frame.context.stats.location,
+        'waymo.weather':      waymo_frame.context.stats.weather,
+      }
+      if label.metadata:
+        extra.update({
+          'waymo.speed_x': str(label.metadata.speed_x),
+          'waymo.speed_y': str(label.metadata.speed_y),
+          'waymo.accel_x': str(label.metadata.accel_x),
+          'waymo.accel_y': str(label.metadata.accel_y),
+        })
+
+      cuboid = av.Cuboid(
+        track_id=label.id,
+        category_name=category_name,
+        au_category=au_category,
+        timestamp=timestamp,
+        box3d=box3d,
+        motion_corrected=False, # TODO
+        length_meters=l,
+        width_meters=w,
+        height_meters=h,
+        distance_meters=np.linalg.norm(T),
+        obj_from_ego=obj_from_ego,
+        ego_pose=ego_pose,
+        extra=extra,
+      )
+      cuboids.append(cuboid)
+    
+    uri.topic = 'labels|cuboids'
+    uri.timestamp = timestamp
+    yield av.StampedDatum.from_uri(uri, cuboids=cuboids)
+
+
+  ## Support: Segment Access
 
   class _SegmentRecord(object):
     __slots__ = ('fw', 'split')
@@ -779,319 +1041,3 @@ class StampedDatumTable(av.StampedDatumTableBase):
       
       cls._segment_id_to_record = segment_id_to_record
     return cls._segment_id_to_record
-  
-  @classmethod
-  def _iter_waymo_frames(cls, segment_id):
-    from waymo_open_dataset import dataset_pb2
-    record = cls._get_segment_id_to_record()[segment_id]
-    tf_str_list = util.TFRecordsFileAsListOfStrings(record.fw.data_reader)
-    for s in tf_str_list:
-      wf = dataset_pb2.Frame()
-      wf.ParseFromString(bytearray(s))
-      yield wf
-  
-  
-  
-  # Filling Frames
-
-  @classmethod
-  def _fill_ego_pose(cls, f, waymo_frame):
-    f.world_to_ego = transform_from_pb(waymo_frame.pose)
-
-  @classmethod
-  def _fill_extra(cls, f, waymo_frame):
-    f.extra.update({
-      'waymo.time_of_day':  waymo_frame.context.stats.time_of_day,
-      'waymo.location':     waymo_frame.context.stats.location,
-      'waymo.weather':      waymo_frame.context.stats.weather,
-    })
-
-  @classmethod
-  def _fill_camera_images(cls, f, waymo_frame):
-    for image in waymo_frame.images:
-      ci = cls._get_camera_image(waymo_frame, image.name, viewport=f.uri.get_viewport())
-      f.camera_images.append(ci)
-
-  @classmethod
-  def _get_camera_image(cls, waymo_frame, camera_idx, viewport=None):
-    def get_for_camera(lst, idx):
-      for el in lst:
-        if el.name == idx:
-          return el
-      raise ValueError("Element with name %s not found" % idx)
-    wf_camera_image = get_for_camera(waymo_frame.images, camera_idx)
-    w, h = get_jpeg_size(wf_camera_image.image)
-    if not viewport:
-      from au.fixtures.datasets import common
-      viewport = common.BBox.of_size(w, h)
-    ci_timestamp = to_nanostamp(wf_camera_image.pose_timestamp)
-
-    # NB: Waymo protobuf defs had an error; the protobufs contain
-    # the inverse of the expected transform.
-    camera_calibration = get_for_camera(
-                            waymo_frame.context.camera_calibrations,
-                            camera_idx)
-    extrinsic = np.reshape(camera_calibration.extrinsic.transform, [4, 4])
-    vehicle_to_sensor = np.linalg.inv(extrinsic) # Need inverse! Waymo lies!
-
-    # Waymo camera extrinsics keep the nominal ego frame axes: +x forward,
-    # +z up, etc.  We need to add a rotation to convert to the more
-    # canonical +z depth, +x right, etc.
-    axes_transformation = np.array([
-                            [0, -1,  0,  0],
-                            [0,  0, -1,  0],
-                            [1,  0,  0,  0],
-                            [0,  0,  0,  1]])
-    cam_from_ego_RT = axes_transformation.dot(vehicle_to_sensor)
-    cam_from_ego = av.Transform(
-                      rotation=cam_from_ego_RT[:3, :3],
-                      translation=np.reshape(cam_from_ego_RT[:3, 3], (3, 1)))
-      
-    # Waymo encodes intrinsics using a very custom layout
-    f_u = camera_calibration.intrinsic[0]
-    f_v = camera_calibration.intrinsic[1]
-    c_u = camera_calibration.intrinsic[2]
-    c_v = camera_calibration.intrinsic[3]
-    K = np.array([
-        [f_u, 0,   c_u],
-        [0,   f_v, c_v],
-        [0,   0,   1  ],
-    ])
-
-    # To get the principal axis, we can use `vehicle_to_sensor` (which
-    # neglects the rotation into the image plane) and simply rotate X_HAT
-    # into the camera frame.
-    X_HAT = np.array([1, 0, 0])
-    principal_axis_in_ego = vehicle_to_sensor[:3, :3].dot(X_HAT)
-
-    ci = av.CameraImage(
-        camera_name=get_camera_name(wf_camera_image.name),
-        image_jpeg=bytearray(wf_camera_image.image),
-        height=h,
-        width=w,
-        viewport=viewport,
-        timestamp=ci_timestamp,
-        cam_from_ego=cam_from_ego,
-        K=K,
-        principal_axis_in_ego=principal_axis_in_ego,
-      )
-      
-    if cls.PROJECT_CLOUDS_TO_CAM:
-      # TODO: motion correction / rolling shutter per-camera, non-fused cloud, ...
-      pc = av.PointCloud(
-        sensor_name='lidar_fused',
-        timestamp=to_nanostamp(waymo_frame.timestamp_micros),
-        cloud=GetFusedCloudInEgo.get_points(waymo_frame),
-        ego_to_sensor=av.Transform(), # points are in ego frame...
-        motion_corrected=False,
-      )
-      pc.cloud = ci.project_ego_to_image(pc.cloud, omit_offscreen=True)
-      pc.sensor_name = pc.sensor_name + '_in_cam'
-      ci.clouds.append(pc)
-
-    if cls.PROJECT_CUBOIDS_TO_CAM:
-      cuboids = cls._get_cuboids_in_ego(waymo_frame)
-      for cuboid in cuboids:
-        bbox = ci.project_cuboid_to_bbox(cuboid)
-        if cls.IGNORE_INVISIBLE_CUBOIDS and not bbox.is_visible:
-          continue
-        ci.bboxes.append(bbox)
-    
-    return ci
-
-  @classmethod
-  def _get_cuboids_in_ego(cls, waymo_frame):
-    cuboids = []
-    for label in waymo_frame.laser_labels:
-      box = label.box
-      
-      # Coords in ego frame
-      T = np.array([
-            [box.center_x],
-            [box.center_y],
-            [box.center_z]])
-      
-      # Heading is yaw in ego frame
-      from scipy.spatial.transform import Rotation as R
-      rotation = R.from_euler('z', box.heading).as_dcm()
-      
-      obj_from_ego = av.Transform(
-                          rotation=rotation,
-                          translation=T)
-
-      # cosyaw = math.cos(box.heading)~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~``
-      # sinyaw = math.sin(box.heading)
-      # obj_from_ego_RT = np.array([
-      #                     [ cosyaw, -sinyaw, 0, tx],
-      #                     [ sinyaw,  cosyaw, 0, ty],
-      #                     [      0,       0, 1, tz],
-      #                     [      0,       0, 0,  1]])
-
-      l, w, h, = box.length, box.width, box.height
-      box3d = obj_from_ego.apply(
-          # Send the corners of the box into the ego frame
-          .5 * np.array([
-                # Front face
-                [ l,  w,  h],
-                [ l, -w,  h],
-                [ l, -w, -h],
-                [ l,  w, -h],
-                
-                # Rear face
-                [-l,  w,  h],
-                [-l, -w,  h],
-                [-l, -w, -h],
-                [-l,  w, -h],
-          ])).T
-
-      category_name = get_category_name(label.type)
-      au_category = av.WAYMO_OD_CATEGORY_TO_AU_AV_CATEGORY[category_name]
-
-      extra = {
-        'waymo.detection_difficulty_level':
-          str(label.detection_difficulty_level),
-        'waymo.tracking_difficulty_level':
-          str(label.tracking_difficulty_level),
-      }
-      if label.metadata:
-        extra.update({
-          'waymo.speed_x': str(label.metadata.speed_x),
-          'waymo.speed_y': str(label.metadata.speed_y),
-          'waymo.accel_x': str(label.metadata.accel_x),
-          'waymo.accel_y': str(label.metadata.accel_y),
-        })
-
-      cuboid = av.Cuboid(
-        track_id=label.id,
-        category_name=category_name,
-        au_category=au_category,
-        timestamp=to_nanostamp(waymo_frame.timestamp_micros),
-        box3d=box3d,
-        motion_corrected=False, # TODO
-        length_meters=l,
-        width_meters=w,
-        height_meters=h,
-        distance_meters=np.linalg.norm(T),
-        obj_from_ego=obj_from_ego,
-        extra=extra,
-      )
-      cuboids.append(cuboid)
-    return cuboids
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# print(points_all.shape)
-# print(points_all_ri2.shape)
-
-# # camera projection corresponding to each point.
-# cp_points_all = np.concatenate(cp_points, axis=0)
-# cp_points_all_ri2 = np.concatenate(cp_points_ri2, axis=0)
-
-
-
-# n = 0
-# camera_calibration = frame.context.camera_calibrations[n]
-# extrinsic = tf.reshape(camera_calibration.extrinsic.transform, [4, 4])
-# vehicle_to_sensor = tf.matrix_inverse(extrinsic).numpy()
-
-# f_u = camera_calibration.intrinsic[0]
-# f_v = camera_calibration.intrinsic[1]
-# c_u = camera_calibration.intrinsic[2]
-# c_v = camera_calibration.intrinsic[3]
-
-# K = np.array([
-#     [f_u, 0,   c_u],
-#     [0,   f_v, c_v],
-#     [0,   0,   1  ],
-# ])
-# print('K', K, (f_u, f_v, c_u, c_v))
-
-
-
-# p = maybe_make_homogeneous(points_all, dim=4)
-# print('p', p)
-# p_cam = vehicle_to_sensor.dot(p.T)
-# print('p_cam', p_cam)
-
-# plt.figure(figsize=(20, 12))
-# plt.scatter(p_cam[0, :], p_cam[1, :])
-
-# # plt.figure(figsize=(20, 12))
-# # plt.scatter(p_cam[0, :], p_cam[2, :])
-
-# # plt.figure(figsize=(20, 12))
-# # plt.scatter(p_cam[1, :], p_cam[2, :])
-
-
-# # p_cam[:2, :] = -p_cam[:2, :] / p_cam[2, :]
-# p_cam = p_cam[(2, 1, 0), :]
-# p_cam = p_cam[(1, 0, 2), :]
-# # p_cam[2, :] *= -1
-# p_cam[1, :] *= -1
-# p_cam[0, :] *= -1
-
-# uv = K.dot(p_cam)
-# uv[:2, :] /= uv[2, :]
-
-# # uv *= 1e-4
-
-# print('uv', uv.shape, ((uv[0, :].min(), uv[0, :].max(), uv[0, :].mean())))
-
-
-# plt.figure(figsize=(20, 12))
-# plt.scatter(uv[0, :], uv[1, :])
-
-# # images = sorted(frame.images, key=lambda i:i.name)
-# image = tf.image.decode_jpeg(frame.images[n].image)
-# h, w, c = image.numpy().shape
-# print('hwc', (h, w, c))
-
-
-# idx_ = np.where(
-#         np.logical_and.reduce((
-#           # Filter offscreen points
-#           0 <= uv[0, :], uv[0, :] < w - 1.0,
-#           0 <= uv[1, :], uv[1, :] < h - 1.0,
-#           # Filter behind-screen points
-#           uv[2, :] > 0)))
-# idx_ = idx_[0]
-# print('idx', len(idx_))
-# uv = uv[:, idx_]
-# uvd = uv.T
-
-# plot_points_on_image(uvd, images[0], rgba)
-
-  

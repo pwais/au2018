@@ -37,8 +37,9 @@ def test_get_jpeg_size():
     assert (width, height) == (expected_w, expected_h)
 
 def test_waymo_yay():
-  from au.fixtures.datasets.waymo_od import FrameTable
-  FrameTable.setup()
+  from au.fixtures.datasets.waymo_od import StampedDatumTable
+  StampedDatumTable.setup()
+  return
 
   # segs = set(uri.segment_id for uri in URIS)
   # for seg in segs:
