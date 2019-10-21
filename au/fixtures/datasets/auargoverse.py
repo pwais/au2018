@@ -1648,7 +1648,17 @@ class StampedDatumTable(av.StampedDatumTableBase):
   @classmethod
   def __get_ego_pose(cls, uri):
     loader = cls.FIXTURES.get_loader(uri)
-    city_to_ego = loader.get_city_to_ego(uri.timestamp)
+    
+    try:
+      city_to_ego = loader.get_city_to_ego(uri.timestamp)
+    except MissingPose:
+      diff, best_ts = min(
+        (abs(pose_t - uri.timestamp), pose_t)
+        for pose_t in loader.timestamp_to_pose_path.keys())
+      city_to_ego = loader.get_city_to_ego(best_ts)
+      util.log.warn(
+        "Using approx pose (stale by %s sec) for %s" % (diff * 1e-9, str(uri)))
+
     ego_pose = av.Transform(
                   rotation=city_to_ego.rotation,
                   translation=city_to_ego.translation,
