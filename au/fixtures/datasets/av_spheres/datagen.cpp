@@ -77,7 +77,7 @@ Sphere spheres[] = {//Scene: radius, position, emission, color, material
   Sphere(1e5, Vec( 1e5+1,40.8,81.6), Vec(),Vec(.75,.25,.25),DIFF),//Left 
   Sphere(1e5, Vec(-1e5+99,40.8,81.6),Vec(),Vec(.25,.25,.75),DIFF),//Rght 
   Sphere(1e5, Vec(50,40.8, 1e5),     Vec(),Vec(.75,.25,.75),DIFF),//Back 
-  //Sphere(1e5, Vec(50,40.8,-1e5+170), Vec(),Vec(),         DIFF),//Frnt 
+// Sphere(1e5, Vec(50,40.8,-1e5+170), Vec(),Vec(),         DIFF),//Frnt 
   Sphere(1e5, Vec(50, 1e5, 81.6),    Vec(),Vec(.75,.75,.75),DIFF),//Botm 
   Sphere(1e5, Vec(50,-1e5+81.6,81.6),Vec(),Vec(.75,.75,.75),DIFF),//Top 
   Sphere(16.5,Vec(27,16.5,47),       Vec(),Vec(1,1,1)*.999, SPEC),//Mirr 
@@ -526,8 +526,8 @@ struct Matrix3x3 {
 
 	static Matrix3x3 rotMatrixFromAzimuth(double phi) {
 		return {.data={
-			 cos(phi),  sin(phi),  0,
-			-sin(phi),  cos(phi),  0,
+			 cos(phi), -sin(phi),  0,
+			 sin(phi),  cos(phi),  0,
 							0,         0,  1,
 		}};
 	}
@@ -537,6 +537,14 @@ struct Matrix3x3 {
 			1,           0,          0,
 			0,  cos(theta), sin(theta),
 			0, -sin(theta), cos(theta),
+		}};
+	}
+
+	static Matrix3x3 rotMatrixFromEuler(double y, double p, double r) {
+		return {.data={
+			cos(y)*cos(p), cos(y)*sin(p)*sin(r) - sin(y)*cos(r), cos(y)*sin(p)*cos(r) + sin(y)*sin(r),
+			sin(y)*cos(p), sin(y)*sin(p)*sin(r) + cos(y)*cos(r), sin(y)*sin(p)*cos(r) - cos(y)*sin(y),
+			-sin(p),       cos(p)*sin(r),                        cos(p)*cos(r),
 		}};
 	}
 
@@ -703,62 +711,63 @@ int main(int argc, char *argv[]){
 	Ray cam(Vec(50,52,295.6), Vec(0,0,-1)); // cam pos, dir 
   Vec cx=Vec(w*.5135/h), cy=(cx%cam.d).norm()*.5135, r, *c=new Vec[w*h]; 
 
-	camera camera = {
-		.conf={.w=w, .h=h, .FoV_x=48*M_PI/180, .initial_pose=cam}};
+// 	camera camera = {
+// 		.conf={.w=w, .h=h, .FoV_x=48*M_PI/180, .initial_pose=cam}};
 
-#pragma omp parallel for schedule(dynamic, 1) private(r)       // OpenMP 
-  for (int y=0; y<h; y++){                       // Loop over image rows 
-    fprintf(stderr,"\rRendering (%d spp) %5.2f%%",samps*4,100.*y/(h-1)); 
-    for (unsigned short x=0, Xi[3]={0,0,y*y*y}; x<w; x++)   // Loop cols 
-      for (int sy=0, i=(h-y-1)*w+x; sy<2; sy++)     // 2x2 subpixel rows 
-        for (int sx=0; sx<2; sx++, r=Vec()){        // 2x2 subpixel cols 
-          for (int s=0; s<samps; s++){ 
-            double r1=2*erand48(Xi), dx=r1<1 ? sqrt(r1)-1: 1-sqrt(2-r1); 
-            double r2=2*erand48(Xi), dy=r2<1 ? sqrt(r2)-1: 1-sqrt(2-r2); 
+// #pragma omp parallel for schedule(dynamic, 1) private(r)       // OpenMP 
+//   for (int y=0; y<h; y++){                       // Loop over image rows 
+//     fprintf(stderr,"\rRendering (%d spp) %5.2f%%",samps*4,100.*y/(h-1)); 
+//     for (unsigned short x=0, Xi[3]={0,0,y*y*y}; x<w; x++)   // Loop cols 
+//       for (int sy=0, i=(h-y-1)*w+x; sy<2; sy++)     // 2x2 subpixel rows 
+//         for (int sx=0; sx<2; sx++, r=Vec()){        // 2x2 subpixel cols 
+//           for (int s=0; s<samps; s++){ 
+//             double r1=2*erand48(Xi), dx=r1<1 ? sqrt(r1)-1: 1-sqrt(2-r1); 
+//             double r2=2*erand48(Xi), dy=r2<1 ? sqrt(r2)-1: 1-sqrt(2-r2); 
 
-            // Vec d = cx*( ( (sx+.5 + dx)/2 + x)/w - .5) + 
-            //         cy*( ( (sy+.5 + dy)/2 + y)/h - .5) + cam.d; 
-            // r = r + radiance(Ray(cam.o+d*140,d.norm()),0,Xi)*(1./samps); 
-						// // Camera rays are pushed ^^^^^ forward to start in interior 
+//             // Vec d = cx*( ( (sx+.5 + dx)/2 + x)/w - .5) + 
+//             //         cy*( ( (sy+.5 + dy)/2 + y)/h - .5) + cam.d; 
+//             // r = r + radiance(Ray(cam.o+d*140,d.norm()),0,Xi)*(1./samps); 
+// 						// // Camera rays are pushed ^^^^^ forward to start in interior 
 
-						// // if (((x*w + y) % 1000) == 0) {
-						// // Vec d = cx*( ( (sx+.5 + dx)/2 + x)/w - .5) + 
-            // //         cy*( ( (sy+.5 + dy)/2 + y)/h - .5) + cam.d; 
-						// // fprintf(stderr, "dx %5.2f dy %5.2f\n", d.x, d.y);}
+// 						// // if (((x*w + y) % 1000) == 0) {
+// 						// // Vec d = cx*( ( (sx+.5 + dx)/2 + x)/w - .5) + 
+//             // //         cy*( ( (sy+.5 + dy)/2 + y)/h - .5) + cam.d; 
+// 						// // fprintf(stderr, "dx %5.2f dy %5.2f\n", d.x, d.y);}
 
-						Ray rr = camera.pixelToRay(
-												x + (sx+.5 + dx)/2,
-												y + (sy+.5 + dy)/2);
-							// ( ( (sx+.5 + dx)/2 + x)/w - .5),
-							// ( ( (sy+.5 + dy)/2 + y)/h - .5));
-						// r = r + radiance(Ray(rr.o+rr.d*140,rr.d.norm()),0,Xi)*(1./samps); 
-						r = r + radiance(rr,0,Xi)*(1./samps); 
-						// Camera rays are pushed ^^^^^ forward to start in interior 
+// 						Ray rr = camera.pixelToRay(
+// 												x + (sx+.5 + dx)/2,
+// 												y + (sy+.5 + dy)/2);
+// 							// ( ( (sx+.5 + dx)/2 + x)/w - .5),
+// 							// ( ( (sy+.5 + dy)/2 + y)/h - .5));
+// 						// r = r + radiance(Ray(rr.o+rr.d*140,rr.d.norm()),0,Xi)*(1./samps); 
+// 						r = r + radiance(rr,0,Xi)*(1./samps); 
+// 						// Camera rays are pushed ^^^^^ forward to start in interior 
 
-          } 
-          c[i] = c[i] + Vec(clamp(r.x),clamp(r.y),clamp(r.z))*.25; 
-        } 
-  }
+//           } 
+//           c[i] = c[i] + Vec(clamp(r.x),clamp(r.y),clamp(r.z))*.25; 
+//         } 
+//   }
 
 
-  char *jimg = new char[w*h*4];
+//   char *jimg = new char[w*h*4];
 
-  FILE *f = fopen("image.ppm", "w");         // Write image to PPM file.
-  fprintf(f, "P3\n%d %d\n%d\n", w, h, 255);
-  for (int i=0; i<w*h; i++) {
-    int r = toInt(c[i].x), g = toInt(c[i].y), b = toInt(c[i].z);
-    fprintf(f,"%d %d %d ", r, g, b);
-    int p=i*4; jimg[p] = r; jimg[p+1] = g; jimg[p+2] = b;
-  }
+//   FILE *f = fopen("image.ppm", "w");         // Write image to PPM file.
+//   fprintf(f, "P3\n%d %d\n%d\n", w, h, 255);
+//   for (int i=0; i<w*h; i++) {
+//     int r = toInt(c[i].x), g = toInt(c[i].y), b = toInt(c[i].z);
+//     fprintf(f,"%d %d %d ", r, g, b);
+//     int p=i*4; jimg[p] = r; jimg[p+1] = g; jimg[p+2] = b;
+//   }
 
-  jo_write_jpg("foo.jpg", jimg, w, h, 4, 90);
-  delete[] jimg;
+//   jo_write_jpg("foo.jpg", jimg, w, h, 4, 90);
+//   delete[] jimg;
 
 
 	
 
   // // Point Cloud
-  // Vec *ptc = new Vec[w*h];
+	// int n_ptc = w*h;
+  // Vec *ptc = new Vec[n_ptc];
   // for (int y=0; y<h; y+= 4){
   //   for (int x=0; x<w; x+=4) {
   //   int i = (h-y-1)*w+x; ptc[i] = Vec();
@@ -769,32 +778,53 @@ int main(int argc, char *argv[]){
   //   if (intersect(r, t, id)) {
   //     ptc[i] = r.o + r.d * t;
   //   }
+  // 	}
   // }
-  // }
+	// int lw = w; int lh = h;
   
 	// Point Cloud
 	lidar l = {.conf={
-		.inclination_min=-30*M_PI/180,
-		.inclination_max= 30*M_PI/180,
-		.n_beams=128,
+		.inclination_min=-80*M_PI/180,
+		.inclination_max= 80*M_PI/180,
+		.n_beams=64,
 		.azimuth_step=M_PI/120,
-		.initial_pose=Ray(Vec(50,52,295.6), Vec(0,0,-1)),
+		.initial_pose=Ray(Vec(50,52,295.6 -160), Vec(0,0,-1)),
 	}};
 	const int n_ptc = l.pointsPerScan();
 	Vec *ptc = new Vec[n_ptc]; {
 		int p=0;
-		for (double azimuth=0; azimuth<2*M_PI; azimuth+=l.conf.azimuth_step) {
-			for (int b=0; b<l.conf.n_beams; b++) {
-				double inclination =
-					l.conf.inclination_min + (l.conf.inclination_max - l.conf.inclination_min) * b;
-				
+		
+			const double incl_step =
+				(l.conf.inclination_max - l.conf.inclination_min) / l.conf.n_beams;
+			for (double inclination = l.conf.inclination_min;
+			         inclination < l.conf.inclination_max; inclination += incl_step) {
+
+		for (double azimuth=-M_PI; azimuth<M_PI; azimuth+=l.conf.azimuth_step) {
+				// fprintf(stderr, "az %5.2f \n", azimuth);
+
+				// auto R = Matrix3x3::rotMatrixFromEuler(azimuth, inclination, 0);
+
+			/*
+			dont forget extrinsic!
+			from math import pi
+			from scipy.spatial.transform import Rotation as R
+			axes_transformation = R.from_euler('zyx', [-pi/2, -pi/2, 0]).as_dcm()
+			xyz = axes_transformation.dot(xyz.T).T
+			*/
+
 				Matrix3x3 R = 
-					Matrix3x3::rotMatrixFromAzimuth(azimuth) * 
-					Matrix3x3::rotMatrixFromInclination(inclination);
+					Matrix3x3::rotMatrixFromAzimuth(azimuth - M_PI/2) * 
+					Matrix3x3::rotMatrixFromInclination(inclination - M_PI/2);
+					
+				// auto Raz = Matrix3x3::rotMatrixFromAzimuth(azimuth);
+				// auto Rinc = Matrix3x3::rotMatrixFromInclination(inclination);
+
+					// Matrix3x3::rotMatrixFromAzimuth(azimuth).print(stderr);
 				
 				Vec zHat = {0, 0, -1};
 
 				Ray beam(l.pose.o, (R * zHat).norm());
+				// Ray beam(l.pose.o, (Raz * Rinc * zHat).norm());
 				double t; int id;
 				if (intersect(beam, t, id)) {
 					ptc[p] = beam.o + beam.d * t;
@@ -805,10 +835,12 @@ int main(int argc, char *argv[]){
 			}
 		}
 	}
+	int lw = int(floor(2*M_PI/l.conf.azimuth_step));
+	int lh = l.conf.n_beams;
 
 { 
   FILE *f = fopen("ptc.ppm", "w");         // Write image to PPM file. 
-  fprintf(f, "P3\n%d %d\n%d\n", int(floor(2*M_PI/l.conf.azimuth_step)), l.conf.n_beams, 255); 
+  fprintf(f, "P3\n%d %d\n%d\n", lw, lh, 255); 
   for (int i=0; i<n_ptc; i++) { 
     double l = sqrt(ptc[i].x * ptc[i].x + ptc[i].y * ptc[i].y + ptc[i].z * ptc[i].z);
     fprintf(f,"%d %d %d ", int(l), int(l), int(l)); 
@@ -825,3 +857,27 @@ int main(int argc, char *argv[]){
     fprintf(f,"%5.2f %5.2f %5.2f \n", ptc[i].x, ptc[i].y, ptc[i].z);
 }
 }
+
+// import numpy as np
+// lines = open('/opt/au/au/fixtures/datasets/av_spheres/ptc.ply', 'r').readlines()
+// lines = lines[7:]
+// import numpy
+// def to_v(l):
+//   x, y, z = l.split()
+//   return float(x), float(y), float(z)
+// xyz = np.array([to_v(l) for l in lines if (to_v(l) != (0., 0., 0.))])
+
+// import plotly.graph_objects as go
+// import pandas as pd
+
+// df_tmp = pd.DataFrame(xyz, columns=["x", "y", "z"])
+// df_tmp["norm"] = np.sqrt(np.power(df_tmp[["x", "y", "z"]].values, 2).sum(axis=1))
+// scatter = go.Scatter3d(
+//             x=df_tmp["x"],
+//             y=df_tmp["y"],
+//             z=df_tmp["z"],
+//             mode="markers",
+//             marker=dict(size=1, color=df_tmp["norm"], opacity=0.8),)
+// fig = go.Figure(data=[scatter])
+// fig.update_layout(scene_aspectmode="data")
+// fig.show()
