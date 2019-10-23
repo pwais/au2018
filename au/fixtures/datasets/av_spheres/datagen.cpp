@@ -485,7 +485,7 @@ struct Matrix3x3 {
 		Matrix3x3 ret; for (int i=0; i<9; ++i) { ret[i]=data[i]*v;} return ret;
 	}
 
-	Vec row(int r) const { return Vec(data[r], data[r+1], data[r=2]); }
+	Vec row(int r) const { return Vec(data[r*3], data[r*3+1], data[r*3+2]); }
 	Vec operator*(const Vec &v) const { 
 		return Vec(row(0).dot(v), row(1).dot(v), row(2).dot(v));
 	}
@@ -531,6 +531,13 @@ struct Matrix3x3 {
 		return R;
 	}
 
+	void print(FILE *f) const {
+		fprintf(f,"\n\n");
+		fprintf(f,"%5.2f %5.2f %5.2f\n", data[0], data[1], data[2]);
+		fprintf(f,"%5.2f %5.2f %5.2f\n", data[3], data[4], data[5]);
+		fprintf(f,"%5.2f %5.2f %5.2f\n", data[6], data[7], data[8]);
+		fprintf(f,"\n\n");
+	}
 };
 
 
@@ -554,18 +561,21 @@ struct camera {
 		pose = conf.initial_pose;
 	}
 
-	Matrix3x3 R() const {
-		return Matrix3x3::rotMatrixFromVectors(pose.d-pose.o, Vec(0, 0, 1));
-	}
+	// Matrix3x3 R() const {
+	// 	return Matrix3x3::rotMatrixFromVectors(
+	// 		Vec(pose.d).norm(), Vec(pose.d).norm());
+	// }
 
 	Vec T() const { return pose.o; }
 
 	Ray pixelToRay(double x, double y) const {
 		const Vec ray_in_cam = Vec((x-cx)/fx, (y-cy)/fy, -1);
 		// fprintf(stderr, "x %5.2f y %5.2f\n", ray_in_cam.x, ray_in_cam.y);
+		static const Vec zHat = {0, 0, -1};
 		const Matrix3x3 Rinv = 
-			Matrix3x3::rotMatrixFromVectors(pose.d-pose.o, Vec(0, 0, 1));
-		return Ray(pose.o ,  Vec(ray_in_cam).norm());
+			Matrix3x3::rotMatrixFromVectors(pose.d, zHat);
+		// Rinv.print(stderr);
+		return Ray(pose.o , Vec( Rinv * ray_in_cam).norm());
 
 		/*
 
@@ -645,13 +655,11 @@ struct camera {
 int main(int argc, char *argv[]){ 
   int w=640, h=480, samps = argc==2 ? atoi(argv[1])/4 : 1; // # samples 
   // Ray cam(Vec(50,52,295.6), Vec(0,-0.042612,-1).norm()); // cam pos, dir
-	Ray cam(Vec(50,52,295.6), Vec(0,0,-1)); // cam pos, dir 
+	Ray cam(Vec(50,52,295.6), Vec(0,.5,-1)); // cam pos, dir 
   Vec cx=Vec(w*.5135/h), cy=(cx%cam.d).norm()*.5135, r, *c=new Vec[w*h]; 
 
-	fprintf(stderr, "cx %5.2f cy %5.2f\n", cx.x, cy.y);
-
 	camera camera = {
-		.config={.w=w, .h=h, .FoV_x=45.*M_PI/180, .initial_pose=cam}};
+		.config={.w=w, .h=h, .FoV_x=48*M_PI/180, .initial_pose=cam}};
 
 if (true) {
 #pragma omp parallel for schedule(dynamic, 1) private(r)       // OpenMP 
@@ -669,10 +677,10 @@ if (true) {
             // r = r + radiance(Ray(cam.o+d*140,d.norm()),0,Xi)*(1./samps); 
 						// // Camera rays are pushed ^^^^^ forward to start in interior 
 
-						// if (((x*w + y) % 1000) == 0) {
-						// Vec d = cx*( ( (sx+.5 + dx)/2 + x)/w - .5) + 
-            //         cy*( ( (sy+.5 + dy)/2 + y)/h - .5) + cam.d; 
-						// fprintf(stderr, "dx %5.2f dy %5.2f\n", d.x, d.y);}
+						// // if (((x*w + y) % 1000) == 0) {
+						// // Vec d = cx*( ( (sx+.5 + dx)/2 + x)/w - .5) + 
+            // //         cy*( ( (sy+.5 + dy)/2 + y)/h - .5) + cam.d; 
+						// // fprintf(stderr, "dx %5.2f dy %5.2f\n", d.x, d.y);}
 
 						Ray rr = camera.pixelToRay(
 												x + (sx+.5 + dx)/2,
