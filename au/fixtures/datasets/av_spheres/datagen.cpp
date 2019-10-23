@@ -486,8 +486,16 @@ struct Matrix3x3 {
 	}
 
 	Vec row(int r) const { return Vec(data[r*3], data[r*3+1], data[r*3+2]); }
+	Vec col(int c) const { return Vec(data[c], data[c+3], data[c+6]); }
 	Vec operator*(const Vec &v) const { 
 		return Vec(row(0).dot(v), row(1).dot(v), row(2).dot(v));
+	}
+	Matrix3x3 operator*(const Matrix3x3 &m) const {
+		Matrix3x3 ret;
+		for (int r=0; r<3; r++) { for (int c=0; c<3; c++) {
+				ret[r*3+c] = row(r).dot(m.col(c));
+		}}
+		return ret;
 	}
 
 	static Matrix3x3 asCross(const Vec &u) {
@@ -516,13 +524,29 @@ struct Matrix3x3 {
 		}};
 	}
 
+	static Matrix3x3 rotMatrixFromAzimuth(double phi) {
+		return {.data={
+			 cos(phi),  sin(phi),  0,
+			-sin(phi),  cos(phi),  0,
+							0,         0,  1,
+		}};
+	}
+
+	static Matrix3x3 rotMatrixFromInclination(double theta) {
+		return {.data={
+			1,           0,          0,
+			0,  cos(theta), sin(theta),
+			0, -sin(theta), cos(theta),
+		}};
+	}
+
 	static Matrix3x3 rotMatrixFromVectors(const Vec &a, const Vec &b) {
 		// First, find the rotation axis and amount (theta)
 		const Vec u = a.cross(b);
 		const double cosTheta = a.dot(b)/(a.len()*b.len());
 		const double sinTheta = u.len()/(a.len()*b.len());
 
-		// Use Rodrigues’ formula to compute the rotation matrix between
+		// Use Rodrigues' formula to compute the rotation matrix between
 		// two vectors.  Good reference: https://www2.cs.duke.edu/courses/fall13/compsci527/notes/rodrigues.pdf
 		// Let the rotation vector be r = theta u, where u is the axis of 
 		// rotation and theta is the amount.  Then the rotation matrix R is:
@@ -537,6 +561,27 @@ struct Matrix3x3 {
 		fprintf(f,"%5.2f %5.2f %5.2f\n", data[3], data[4], data[5]);
 		fprintf(f,"%5.2f %5.2f %5.2f\n", data[6], data[7], data[8]);
 		fprintf(f,"\n\n");
+	}
+};
+
+
+struct lidar {
+	struct config {
+		double inclination_min, inclination_max;
+		int n_beams;
+		double azimuth_step;
+		Ray initial_pose;
+	};
+
+	config conf;
+	Ray pose;
+
+	lidar(config c) : conf(c) {
+		pose=conf.initial_pose;
+	}
+
+	unsigned int pointsPerScan() const {
+		return conf.n_beams * floor(2*M_PI/conf.azimuth_step);
 	}
 };
 
@@ -655,13 +700,12 @@ struct camera {
 int main(int argc, char *argv[]){ 
   int w=640, h=480, samps = argc==2 ? atoi(argv[1])/4 : 1; // # samples 
   // Ray cam(Vec(50,52,295.6), Vec(0,-0.042612,-1).norm()); // cam pos, dir
-	Ray cam(Vec(50,52,295.6), Vec(0,.5,-1)); // cam pos, dir 
+	Ray cam(Vec(50,52,295.6), Vec(0,0,-1)); // cam pos, dir 
   Vec cx=Vec(w*.5135/h), cy=(cx%cam.d).norm()*.5135, r, *c=new Vec[w*h]; 
 
 	camera camera = {
-		.config={.w=w, .h=h, .FoV_x=48*M_PI/180, .initial_pose=cam}};
+		.conf={.w=w, .h=h, .FoV_x=48*M_PI/180, .initial_pose=cam}};
 
-if (true) {
 #pragma omp parallel for schedule(dynamic, 1) private(r)       // OpenMP 
   for (int y=0; y<h; y++){                       // Loop over image rows 
     fprintf(stderr,"\rRendering (%d spp) %5.2f%%",samps*4,100.*y/(h-1)); 
@@ -694,7 +738,8 @@ if (true) {
           } 
           c[i] = c[i] + Vec(clamp(r.x),clamp(r.y),clamp(r.z))*.25; 
         } 
-  } 
+  }
+
 
   char *jimg = new char[w*h*4];
 
@@ -708,39 +753,75 @@ if (true) {
 
   jo_write_jpg("foo.jpg", jimg, w, h, 4, 90);
   delete[] jimg;
-}
 
-  // Point Cloud
-  Vec *ptc = new Vec[w*h];
-  for (int y=0; y<h; y+= 4){
-    for (int x=0; x<w; x+=4) {
-    int i = (h-y-1)*w+x; ptc[i] = Vec();
-    Vec d = cx*( double(x)/w - .5) +
-            cy*( double(y)/h - .5) + cam.d;
-    double t; int id;
-    Ray r(cam.o+d*140,d.norm());
-    if (intersect(r, t, id)) {
-      ptc[i] = r.o + r.d * t;
-    }
-  }
-  }
+
+	
+
+  // // Point Cloud
+  // Vec *ptc = new Vec[w*h];
+  // for (int y=0; y<h; y+= 4){
+  //   for (int x=0; x<w; x+=4) {
+  //   int i = (h-y-1)*w+x; ptc[i] = Vec();
+  //   Vec d = cx*( double(x)/w - .5) +
+  //           cy*( double(y)/h - .5) + cam.d;
+  //   double t; int id;
+  //   Ray r(cam.o+d*140,d.norm());
+  //   if (intersect(r, t, id)) {
+  //     ptc[i] = r.o + r.d * t;
+  //   }
+  // }
+  // }
   
+	// Point Cloud
+	lidar l = {.conf={
+		.inclination_min=-30*M_PI/180,
+		.inclination_max= 30*M_PI/180,
+		.n_beams=128,
+		.azimuth_step=M_PI/120,
+		.initial_pose=Ray(Vec(50,52,295.6), Vec(0,0,-1)),
+	}};
+	const int n_ptc = l.pointsPerScan();
+	Vec *ptc = new Vec[n_ptc]; {
+		int p=0;
+		for (double azimuth=0; azimuth<2*M_PI; azimuth+=l.conf.azimuth_step) {
+			for (int b=0; b<l.conf.n_beams; b++) {
+				double inclination =
+					l.conf.inclination_min + (l.conf.inclination_max - l.conf.inclination_min) * b;
+				
+				Matrix3x3 R = 
+					Matrix3x3::rotMatrixFromAzimuth(azimuth) * 
+					Matrix3x3::rotMatrixFromInclination(inclination);
+				
+				Vec zHat = {0, 0, -1};
+
+				Ray beam(l.pose.o, (R * zHat).norm());
+				double t; int id;
+				if (intersect(beam, t, id)) {
+					ptc[p] = beam.o + beam.d * t;
+				} else {
+					ptc[p] = Vec();
+				}
+				++p;
+			}
+		}
+	}
+
 { 
   FILE *f = fopen("ptc.ppm", "w");         // Write image to PPM file. 
-  fprintf(f, "P3\n%d %d\n%d\n", w, h, 255); 
-  for (int i=0; i<w*h; i++) { 
+  fprintf(f, "P3\n%d %d\n%d\n", int(floor(2*M_PI/l.conf.azimuth_step)), l.conf.n_beams, 255); 
+  for (int i=0; i<n_ptc; i++) { 
     double l = sqrt(ptc[i].x * ptc[i].x + ptc[i].y * ptc[i].y + ptc[i].z * ptc[i].z);
     fprintf(f,"%d %d %d ", int(l), int(l), int(l)); 
   }
 }
 {
   FILE *f = fopen("ptc.ply", "w");
-  fprintf(f, "ply\nformat ascii 1.0\nelement vertex %d\n", w*h);
+  fprintf(f, "ply\nformat ascii 1.0\nelement vertex %d\n", n_ptc);
   fprintf(f, "property float32 x\n");
   fprintf(f, "property float32 y\n");
   fprintf(f, "property float32 z\n");
   fprintf(f, "end_header\n");
-  for (int i=0; i<w*h; i++)
+  for (int i=0; i<n_ptc; i++)
     fprintf(f,"%5.2f %5.2f %5.2f \n", ptc[i].x, ptc[i].y, ptc[i].z);
 }
-} 
+}
