@@ -115,7 +115,7 @@ class Spark(object):
     log.info("Using source root %s " % src_root)
 
     # Below is a programmatic way to run something like:
-    # $ cd /opt/au && python setup.py clearn bdist_egg
+    # $ cd /opt/au && python setup.py clean bdist_egg
     # Based upon https://github.com/pypa/setuptools/blob/a94ccbf404a79d56f9b171024dee361de9a948da/setuptools/tests/test_bdist_egg.py#L30
     # See also: 
     # * https://github.com/pypa/setuptools/blob/f52b3b1c976e54df7a70db42bf59ca283412b461/setuptools/dist.py
