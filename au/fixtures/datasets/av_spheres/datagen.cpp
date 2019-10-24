@@ -499,7 +499,8 @@ struct Matrix3x3 {
 	}
 
 	static Matrix3x3 asCross(const Vec &u) {
-		// u x v = [u]x * v.  Below is [u]x, the matrix form of the cross product:
+		// u x v = [u]x * v.  Below is [u]x, the matrix form of the cross product;
+		// also called the skew of `u`.
 		return {.data={
 			   0,  -u.z,   u.y,
 			 u.z,     0,  -u.x,
@@ -524,6 +525,35 @@ struct Matrix3x3 {
 		}};
 	}
 
+	// In the rendering frame, -z is forward, so this is roll
+	static Matrix3x3 rotMatrixAboutZ(double theta) {
+		return {.data={
+			cos(theta), -sin(theta),  0,
+			sin(theta),  cos(theta),  0,
+						  0,           0,  1,
+		}};
+	}
+
+	// In the rendering frame, +x is to the right, so this is pitch
+	static Matrix3x3 rotMatrixAboutX(double theta) {
+		return {.data={
+			1,          0,           0,
+			0, cos(theta), -sin(theta),
+			0, sin(theta),  cos(theta),
+		}};
+	}
+
+	// In the rendering frame, -y is up, so this is yaw
+	static Matrix3x3 rotMatrixAboutY(double theta) {
+		return {.data={
+			cos(theta), 	0, sin(theta),
+			0, 						1, 					0,
+			-sin(theta), 	0, cos(theta),
+		}};
+	}
+
+
+
 	static Matrix3x3 rotMatrixFromAzimuth(double phi) {
 		return {.data={
 			 cos(phi), -sin(phi),  0,
@@ -541,10 +571,27 @@ struct Matrix3x3 {
 	}
 
 	static Matrix3x3 rotMatrixFromEuler(double y, double p, double r) {
+		// return {.data={
+		// 	cos(y)*cos(p), cos(y)*sin(p)*sin(r) - sin(y)*cos(r), cos(y)*sin(p)*cos(r) + sin(y)*sin(r),
+		// 	sin(y)*cos(p), sin(y)*sin(p)*sin(r) + cos(y)*cos(r), sin(y)*sin(p)*cos(r) - cos(y)*sin(y),
+		// 	-sin(p),       cos(p)*sin(r),                        cos(p)*cos(r),
+		// }};
+
+		float ci ( cos(y)); 
+		float cj ( cos(p)); 
+		float ch ( cos(r)); 
+		float si ( sin(y)); 
+		float sj ( sin(p)); 
+		float sh ( sin(r)); 
+		float cc = ci * ch; 
+		float cs = ci * sh; 
+		float sc = si * ch; 
+		float ss = si * sh;
+
 		return {.data={
-			cos(y)*cos(p), cos(y)*sin(p)*sin(r) - sin(y)*cos(r), cos(y)*sin(p)*cos(r) + sin(y)*sin(r),
-			sin(y)*cos(p), sin(y)*sin(p)*sin(r) + cos(y)*cos(r), sin(y)*sin(p)*cos(r) - cos(y)*sin(y),
-			-sin(p),       cos(p)*sin(r),                        cos(p)*cos(r),
+		  cj * ch, 		sj * sc - cs, 		sj * cc + ss,
+			cj * sh, 		sj * ss + cc, 		sj * cs - sc, 
+			-sj,      	cj * si,      		cj * ci,
 		}};
 	}
 
@@ -784,9 +831,9 @@ int main(int argc, char *argv[]){
   
 	// Point Cloud
 	lidar l = {.conf={
-		.inclination_min=-80*M_PI/180,
-		.inclination_max= 80*M_PI/180,
-		.n_beams=64,
+		.inclination_min=-30*M_PI/180,
+		.inclination_max= 30*M_PI/180,
+		.n_beams=32,
 		.azimuth_step=M_PI/120,
 		.initial_pose=Ray(Vec(50,52,295.6 -160), Vec(0,0,-1)),
 	}};
@@ -802,7 +849,15 @@ int main(int argc, char *argv[]){
 		for (double azimuth=-M_PI; azimuth<M_PI; azimuth+=l.conf.azimuth_step) {
 				// fprintf(stderr, "az %5.2f \n", azimuth);
 
-				// auto R = Matrix3x3::rotMatrixFromEuler(azimuth, inclination, 0);
+				auto R = Matrix3x3::rotMatrixAboutY(azimuth) * 
+				Matrix3x3::rotMatrixAboutX(inclination) ;
+
+
+
+				// works
+				// auto R = Matrix3x3::rotMatrixFromEuler(inclination, azimuth,  0);
+
+				// auto R = Matrix3x3::rotMatrixFromEuler(azimuth, inclination, 0);  xxx
 
 			/*
 			dont forget extrinsic!
@@ -812,21 +867,30 @@ int main(int argc, char *argv[]){
 			xyz = axes_transformation.dot(xyz.T).T
 			*/
 
-				Matrix3x3 R = 
-					Matrix3x3::rotMatrixFromAzimuth(azimuth - M_PI/2) * 
-					Matrix3x3::rotMatrixFromInclination(inclination - M_PI/2);
-					
+				// Matrix3x3 R = 
+				// 	Matrix3x3::rotMatrixFromAzimuth(inclination ) * 
+				// 	Matrix3x3::rotMatrixFromInclination( azimuth);
+				
+				// Matrix3x3 extrinsic = 
+					 
+				// 	Matrix3x3::rotMatrixFromInclination(-M_PI/2) *
+				// 	Matrix3x3::rotMatrixFromAzimuth(-M_PI/2);
+				
+				Matrix3x3 extrinsic = Matrix3x3::rotMatrixFromEuler(-M_PI/2, -M_PI/2, 0);
+
 				// auto Raz = Matrix3x3::rotMatrixFromAzimuth(azimuth);
 				// auto Rinc = Matrix3x3::rotMatrixFromInclination(inclination);
 
 					// Matrix3x3::rotMatrixFromAzimuth(azimuth).print(stderr);
 				
 				Vec zHat = {0, 0, -1};
+// auto yyy = (extrinsic * zHat);
+// 				fprintf(stderr, "ex * zhat %5.2f %5.2f %5.2f \n", yyy.x, yyy.y, yyy.z);
 
-				Ray beam(l.pose.o, (R * zHat).norm());
+				Ray beam(l.pose.o, (  R * zHat).norm());
 				// Ray beam(l.pose.o, (Raz * Rinc * zHat).norm());
 				double t; int id;
-				if (intersect(beam, t, id)) {
+				if (intersect(beam, t, id) && t < 450) {
 					ptc[p] = beam.o + beam.d * t;
 				} else {
 					ptc[p] = Vec();
@@ -881,3 +945,4 @@ int main(int argc, char *argv[]){
 // fig = go.Figure(data=[scatter])
 // fig.update_layout(scene_aspectmode="data")
 // fig.show()
+
