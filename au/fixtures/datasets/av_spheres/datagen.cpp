@@ -442,7 +442,43 @@ bool jo_write_jpg(const char *filename, const void *data, int width, int height,
 
 
 
+#include <vector>
 
+struct cuboid {
+	Vec corners[8];
+
+	static cuboid fromSphere(const Sphere &s) {
+		static Vec directions[8] = {
+			// Front
+			Vec(1,  1,  1),
+			Vec(1, -1,  1),
+			Vec(1, -1, -1),
+			Vec(1,  1, -1),
+
+			// Back
+			Vec(-1,  1,  1),
+			Vec(-1, -1,  1),
+			Vec(-1, -1, -1),
+			Vec(-1,  1, -1),
+		};
+
+		cuboid c;
+		for (int i=0; i<8; i++) { c.corners[i] = directions[i] * s.rad + s.p; }
+		return c;
+	}
+
+	void print(FILE *f) const {
+		fprintf(f, "ply\nformat ascii 1.0\nelement vertex %d\n", int(8));
+		fprintf(f, "property float32 x\n");
+		fprintf(f, "property float32 y\n");
+		fprintf(f, "property float32 z\n");
+		fprintf(f, "end_header\n");
+		for (int i=0; i<8; i++) {
+			fprintf(f,"%5.2f %5.2f %5.2f \n",
+				corners[i].x, corners[i].y, corners[i].z);
+		}
+	}
+};
 
 // #include <vector>
 
@@ -570,30 +606,30 @@ struct Matrix3x3 {
 		}};
 	}
 
-	static Matrix3x3 rotMatrixFromEuler(double y, double p, double r) {
-		// return {.data={
-		// 	cos(y)*cos(p), cos(y)*sin(p)*sin(r) - sin(y)*cos(r), cos(y)*sin(p)*cos(r) + sin(y)*sin(r),
-		// 	sin(y)*cos(p), sin(y)*sin(p)*sin(r) + cos(y)*cos(r), sin(y)*sin(p)*cos(r) - cos(y)*sin(y),
-		// 	-sin(p),       cos(p)*sin(r),                        cos(p)*cos(r),
-		// }};
+	// static Matrix3x3 rotMatrixFromEuler(double y, double p, double r) {
+	// 	// return {.data={
+	// 	// 	cos(y)*cos(p), cos(y)*sin(p)*sin(r) - sin(y)*cos(r), cos(y)*sin(p)*cos(r) + sin(y)*sin(r),
+	// 	// 	sin(y)*cos(p), sin(y)*sin(p)*sin(r) + cos(y)*cos(r), sin(y)*sin(p)*cos(r) - cos(y)*sin(y),
+	// 	// 	-sin(p),       cos(p)*sin(r),                        cos(p)*cos(r),
+	// 	// }};
 
-		float ci ( cos(y)); 
-		float cj ( cos(p)); 
-		float ch ( cos(r)); 
-		float si ( sin(y)); 
-		float sj ( sin(p)); 
-		float sh ( sin(r)); 
-		float cc = ci * ch; 
-		float cs = ci * sh; 
-		float sc = si * ch; 
-		float ss = si * sh;
+	// 	float ci ( cos(y)); 
+	// 	float cj ( cos(p)); 
+	// 	float ch ( cos(r)); 
+	// 	float si ( sin(y)); 
+	// 	float sj ( sin(p)); 
+	// 	float sh ( sin(r)); 
+	// 	float cc = ci * ch; 
+	// 	float cs = ci * sh; 
+	// 	float sc = si * ch; 
+	// 	float ss = si * sh;
 
-		return {.data={
-		  cj * ch, 		sj * sc - cs, 		sj * cc + ss,
-			cj * sh, 		sj * ss + cc, 		sj * cs - sc, 
-			-sj,      	cj * si,      		cj * ci,
-		}};
-	}
+	// 	return {.data={
+	// 	  cj * ch, 		sj * sc - cs, 		sj * cc + ss,
+	// 		cj * sh, 		sj * ss + cc, 		sj * cs - sc, 
+	// 		-sj,      	cj * si,      		cj * ci,
+	// 	}};
+	// }
 
 	static Matrix3x3 rotMatrixFromVectors(const Vec &a, const Vec &b) {
 		// First, find the rotation axis and amount (theta)
@@ -758,8 +794,9 @@ int main(int argc, char *argv[]){
 	Ray cam(Vec(50,52,295.6), Vec(0,0,-1)); // cam pos, dir 
   Vec cx=Vec(w*.5135/h), cy=(cx%cam.d).norm()*.5135, r, *c=new Vec[w*h]; 
 
-// 	camera camera = {
-// 		.conf={.w=w, .h=h, .FoV_x=48*M_PI/180, .initial_pose=cam}};
+	camera camera = {
+		.conf={.w=w, .h=h, .FoV_x=48*M_PI/180, .initial_pose=cam}};
+
 
 // #pragma omp parallel for schedule(dynamic, 1) private(r)       // OpenMP 
 //   for (int y=0; y<h; y++){                       // Loop over image rows 
@@ -831,26 +868,29 @@ int main(int argc, char *argv[]){
   
 	// Point Cloud
 	lidar l = {.conf={
-		.inclination_min=-30*M_PI/180,
-		.inclination_max= 30*M_PI/180,
-		.n_beams=32,
+		.inclination_min=-40*M_PI/180,
+		.inclination_max= 40*M_PI/180,
+		.n_beams=100,
 		.azimuth_step=M_PI/120,
-		.initial_pose=Ray(Vec(50,52,295.6 -160), Vec(0,0,-1)),
+		.initial_pose=Ray(Vec(50,52,295.6 -160), Vec(0,-0.042612,-1).norm()),
 	}};
 	const int n_ptc = l.pointsPerScan();
-	Vec *ptc = new Vec[n_ptc]; {
+	std::vector<Vec> ptc; {
 		int p=0;
 		
 			const double incl_step =
 				(l.conf.inclination_max - l.conf.inclination_min) / l.conf.n_beams;
-			for (double inclination = l.conf.inclination_min;
-			         inclination < l.conf.inclination_max; inclination += incl_step) {
-
+			fprintf(stderr, "incl_step %5.2f \n", incl_step);
+			// for (double inclination = l.conf.inclination_min;
+			//          inclination < l.conf.inclination_max + 1e-3; inclination += incl_step) {
+			for (int b=0; b<l.conf.n_beams; b++) {
+				double inclination = l.conf.inclination_min + b * incl_step;
+fprintf(stderr, "inclination %5.2f \n", inclination);
 		for (double azimuth=-M_PI; azimuth<M_PI; azimuth+=l.conf.azimuth_step) {
 				// fprintf(stderr, "az %5.2f \n", azimuth);
 
 				auto R = Matrix3x3::rotMatrixAboutY(azimuth) * 
-				Matrix3x3::rotMatrixAboutX(inclination) ;
+							Matrix3x3::rotMatrixAboutX(inclination) ;
 
 
 
@@ -876,7 +916,8 @@ int main(int argc, char *argv[]){
 				// 	Matrix3x3::rotMatrixFromInclination(-M_PI/2) *
 				// 	Matrix3x3::rotMatrixFromAzimuth(-M_PI/2);
 				
-				Matrix3x3 extrinsic = Matrix3x3::rotMatrixFromEuler(-M_PI/2, -M_PI/2, 0);
+				// Matrix3x3 extrinsic = Matrix3x3::rotMatrixFromEuler(-M_PI/2, -M_PI/2, 0);
+				// extrinsic.print(stderr);
 
 				// auto Raz = Matrix3x3::rotMatrixFromAzimuth(azimuth);
 				// auto Rinc = Matrix3x3::rotMatrixFromInclination(inclination);
@@ -888,12 +929,22 @@ int main(int argc, char *argv[]){
 // 				fprintf(stderr, "ex * zhat %5.2f %5.2f %5.2f \n", yyy.x, yyy.y, yyy.z);
 
 				Ray beam(l.pose.o, (  R * zHat).norm());
+
+				const Matrix3x3 Rinv = 
+					Matrix3x3::rotMatrixFromVectors(zHat, l.pose.d  );
+		// Rinv.print(stderr);
+				beam.d = Rinv * beam.d;
+
+
+
 				// Ray beam(l.pose.o, (Raz * Rinc * zHat).norm());
 				double t; int id;
-				if (intersect(beam, t, id) && t < 450) {
-					ptc[p] = beam.o + beam.d * t;
+				if (intersect(beam, t, id)) {
+					// ptc[p] = beam.o + beam.d * t;
+					ptc.push_back(beam.o + beam.d * t);
 				} else {
-					ptc[p] = Vec();
+					ptc.push_back(Vec());
+					// ptc[p] = Vec();
 				}
 				++p;
 			}
@@ -905,21 +956,37 @@ int main(int argc, char *argv[]){
 { 
   FILE *f = fopen("ptc.ppm", "w");         // Write image to PPM file. 
   fprintf(f, "P3\n%d %d\n%d\n", lw, lh, 255); 
-  for (int i=0; i<n_ptc; i++) { 
+  for (int i=0; i<ptc.size(); i++) { 
     double l = sqrt(ptc[i].x * ptc[i].x + ptc[i].y * ptc[i].y + ptc[i].z * ptc[i].z);
     fprintf(f,"%d %d %d ", int(l), int(l), int(l)); 
   }
 }
 {
   FILE *f = fopen("ptc.ply", "w");
-  fprintf(f, "ply\nformat ascii 1.0\nelement vertex %d\n", n_ptc);
+  fprintf(f, "ply\nformat ascii 1.0\nelement vertex %d\n", int(ptc.size()));
   fprintf(f, "property float32 x\n");
   fprintf(f, "property float32 y\n");
   fprintf(f, "property float32 z\n");
   fprintf(f, "end_header\n");
-  for (int i=0; i<n_ptc; i++)
+  for (int i=0; i<ptc.size(); i++)
     fprintf(f,"%5.2f %5.2f %5.2f \n", ptc[i].x, ptc[i].y, ptc[i].z);
 }
+
+{
+	Sphere ss[2] = {spheres[5], spheres[6]};
+	for (int i=0; i<2; i++) {
+		auto c = cuboid::fromSphere(ss[i]);
+
+		char buffer [50];
+		sprintf(buffer, "cuboid_%d.ply", i);
+		FILE *f = fopen(buffer, "w");
+		c.print(f);
+	}
+
+}
+
+
+
 }
 
 // import numpy as np
