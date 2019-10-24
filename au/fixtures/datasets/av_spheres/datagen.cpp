@@ -12,7 +12,7 @@ Modifications:
  * Added Ray() default ctor
  * Added len() to Vec
  * Added const-ref cross to Vec
- * Removed front sphere from scene
+ * Made `spheres` a parameter of intersect() and radius()
  * Added data generating functions at end as noted
 
 Usage:
@@ -20,7 +20,9 @@ Usage:
 
 */
 
-
+// ============================================================================
+// smallpt.cpp Support
+//
 
 // Portions smallpt.cpp
 // LICENSE
@@ -77,7 +79,7 @@ Sphere spheres[] = {//Scene: radius, position, emission, color, material
   Sphere(1e5, Vec( 1e5+1,40.8,81.6), Vec(),Vec(.75,.25,.25),DIFF),//Left 
   Sphere(1e5, Vec(-1e5+99,40.8,81.6),Vec(),Vec(.25,.25,.75),DIFF),//Rght 
   Sphere(1e5, Vec(50,40.8, 1e5),     Vec(),Vec(.75,.25,.75),DIFF),//Back 
-// Sphere(1e5, Vec(50,40.8,-1e5+170), Vec(),Vec(),         DIFF),//Frnt 
+  Sphere(1e5, Vec(50,40.8,-1e5+170), Vec(),Vec(),           DIFF),//Frnt 
   Sphere(1e5, Vec(50, 1e5, 81.6),    Vec(),Vec(.75,.75,.75),DIFF),//Botm 
   Sphere(1e5, Vec(50,-1e5+81.6,81.6),Vec(),Vec(.75,.75,.75),DIFF),//Top 
   Sphere(16.5,Vec(27,16.5,47),       Vec(),Vec(1,1,1)*.999, SPEC),//Mirr 
@@ -86,16 +88,16 @@ Sphere spheres[] = {//Scene: radius, position, emission, color, material
 }; 
 inline double clamp(double x){ return x<0 ? 0 : x>1 ? 1 : x; } 
 inline int toInt(double x){ return int(pow(clamp(x),1/2.2)*255+.5); } 
-inline bool intersect(const Ray &r, double &t, int &id){ 
-  double n=sizeof(spheres)/sizeof(Sphere), d, inf=t=1e20; 
-  for(int i=int(n);i--;) if((d=spheres[i].intersect(r))&&d<t){t=d;id=i;} 
+inline bool intersect(const Ray &r, double &t, int &id, Sphere*ss=spheres){ 
+  double n=sizeof(ss)/sizeof(Sphere), d, inf=t=1e20; 
+  for(int i=int(n);i--;) if((d=ss[i].intersect(r))&&d<t){t=d;id=i;} 
   return t<inf; 
 } 
-Vec radiance(const Ray &r, int depth, unsigned short *Xi){ 
+Vec radiance(const Ray &r, int depth, unsigned short *Xi, Sphere*ss=spheres){ 
   double t;                               // distance to intersection 
   int id=0;                               // id of intersected object 
-  if (!intersect(r, t, id)) return Vec(); // if miss, return black 
-  const Sphere &obj = spheres[id];        // the hit object 
+  if (!intersect(r, t, id, ss=ss)) return Vec(); // if miss, return black 
+  const Sphere &obj = ss[id];             // the hit object 
   Vec x=r.o+r.d*t, n=(x-obj.p).norm(), nl=n.dot(r.d)<0?n:n*-1, f=obj.c; 
   double p = f.x>f.y && f.x>f.z ? f.x : f.y>f.z ? f.y : f.z; // max refl 
   if (++depth>5) if (erand48(Xi)<p) f=f*(1/p); else return obj.e; //R.R. 
@@ -119,6 +121,11 @@ Vec radiance(const Ray &r, int depth, unsigned short *Xi){
     radiance(reflRay,depth,Xi)*Re+radiance(Ray(x,tdir),depth,Xi)*Tr); 
 } 
 
+
+
+// ============================================================================
+// Jpeg Encoder
+//
 
 
 /* public domain Simple, Minimalistic JPEG writer - http://jonolick.com
@@ -441,6 +448,9 @@ bool jo_write_jpg(const char *filename, const void *data, int width, int height,
 
 
 
+// ============================================================================
+// Datagen: Sensors & Config
+//
 
 #include <vector>
 
@@ -662,10 +672,16 @@ struct lidar {
 		int n_beams;
 		double azimuth_step;
 		Ray initial_pose;
+		Ray extrinsic;
+
+		double render_Hz;
+		double render_offset_sec;
+		char * name;
 	};
 
 	config conf;
 	Ray pose;
+	double last_run = 0;
 
 	lidar(config c) : conf(c) {
 		pose=conf.initial_pose;
@@ -674,6 +690,81 @@ struct lidar {
 	unsigned int pointsPerScan() const {
 		return conf.n_beams * floor(2*M_PI/conf.azimuth_step);
 	}
+
+	std::vector<Vec> renderSweep(const std::vector<Sphere> &objects) const {
+		std::vector<Vec> pts; pts.reserve(pointsPerScan());
+		const double incl_step =
+			(conf.inclination_max - conf.inclination_min) / l.conf.n_beams;
+
+		// Render in beam-major order to make depth image easier to generate
+		for (int b=0; b<l.conf.n_beams; b++) {
+			double inclination = l.conf.inclination_min + b * incl_step;
+
+			for (double azimuth=-M_PI; azimuth<M_PI; azimuth+=conf.azimuth_step) {
+
+				auto R = Matrix3x3::rotMatrixAboutY(azimuth) * 
+									Matrix3x3::rotMatrixAboutX(inclination) ;
+			
+				Vec zHat = {0, 0, -1};
+				Ray beam(pose.o, (R * zHat).norm());
+
+				const Matrix3x3 Rinv = 
+					Matrix3x3::rotMatrixFromVectors(zHat, pose.d);
+				beam.d = Rinv * beam.d;
+				double t; int id;
+				if (intersect(beam, t, id, ss=&objects[0])) {
+					pts.push_back(beam.o + beam.d * t);
+				} else {
+					pts.push_back(Vec());
+				}
+			}
+		}
+		return pts;
+	}
+
+	void saveSweep(char *fname_prefix, const std::vector<Vec> &pts) const {
+		{ // Depth Image, mainly for debugging
+			char fname[255];
+			sprintf(fname, "%s.lidar_%s.depth.jpg", fname_prefix, conf.name);
+
+			const int lh = conf.n_beams;
+			const int lw = pts.size() / conf.n_beams;
+
+			std::vector<char> jimg; jimg.resize(lw*lh*4);
+			for (int i=0; i<lw*lh; i++) {
+				int r=pts[i].len(), g=r, b=r;
+				int p=i*4; jimg[p] = r; jimg[p+1] = g; jimg[p+2] = b;
+			}
+			jo_write_jpg(fname, jimg.data(), lw, lh, 4, 90);
+			printf("Saved %s", fname);
+		}
+
+		{ // Point cloud, used as raw sensor data
+			char fname[255];
+			sprintf(fname, "%s.lidar_%s.points.ply", fname_prefix, conf.name);
+			FILE *f = fopen(fname, "w");
+			fprintf(f, "ply\nformat ascii 1.0\n");
+			fprintf(f, "element vertex %d\n", int(pts.size()));
+			fprintf(f, "property float32 x\n");
+			fprintf(f, "property float32 y\n");
+			fprintf(f, "property float32 z\n");
+			fprintf(f, "end_header\n");
+			for (int i=0; i<pts.size(); i++) {
+				fprintf(f,"%5.2f %5.2f %5.2f \n", pts[i].x, pts[i].y, pts[i].z);
+			}
+			printf("Saved %s", fname);
+		}
+	}
+
+	void run(double t, const std::vector<Sphere> &objects) {
+		if (t-last_run >= 1. / conf.render_Hz) {
+			last_run = t;
+
+			char prefix[255];
+			sprintf(prefix, "%d", long(t * 1e9));
+			saveSweep(prefix, renderSweep());
+		}
+	}
 };
 
 
@@ -681,12 +772,20 @@ struct camera {
 	struct config {
 		int w, h; 							// width, height (pixels)
 		double FoV_x; 					// field of view (radians)
-		Ray initial_pose;				// initial position and orientation
+		// Ray initial_pose;				// initial position and orientation
+		Ray extrinsic;					// pose relative to robot
+		
+		double render_Hz;
+		double render_offset_sec;
+		int raytrace_n_samples;
+		char * name;
 	};
 
 	config conf;
 	double fx, fy, cx, cy;		// intrinsics
 	Ray pose;		// current pose
+	
+	double last_run = 0;
 
 	camera(config c) : conf(c) {
 		// FoV_x = 2 arctan(w / f_x) =>
@@ -713,68 +812,60 @@ struct camera {
 		// Rinv.print(stderr);
 		return Ray(pose.o , Vec( Rinv * ray_in_cam).norm());
 
-		/*
-
-     X  = (x - 1 * cx) / fx
-
-
-
-		*/
-		
-
-
-		// s = 2*s*cx; t = 2*t*cy; 
-
-		// return Ray(pose.o, Vec((s - cx - pose.o.x)/ fx, (t - cy - pose.o.y)/ fy, 1) );
-		// return Ray(pose.o, pose.d + Vec(s * cx , t * cy ));
 	}
 
-// 		cv::Point3d ray;
-//    ray.x = (uv_rect.x - cx() - Tx()) / fx();
-// 00265   ray.y = (uv_rect.y - cy() - Ty()) / fy();
-// 00266   ray.z = 1.0;
-// 		return Ray(origin, lower_left_corner + s * horizontal + t * vertical - origin); 
-// 	}
+	void run(double t, const std::vector<Sphere> &objects) {
+		if (t-last_run >= 1. / conf.render_Hz) {
+			last_run = t;
 
-// Camera(Vec3 lookfrom, Vec3 lookat, Vec3 vup, float vfov, float aspect){// vfov is top to bottom in degrees, field of view on the vertical axis
-// 			Vec3 w, u, v;
-// 			float theta = vfov * M_PI/180;	// convert to radiants
-// 			float half_height = tan(theta/2);
-// 			float half_width = aspect * half_height;
-// 			origin = lookfrom;
-// 			w = unit_vector(lookfrom - lookat);
-// 			u = unit_vector(cross(vup, w));
-// 			v = cross(w, u);
-// 			lower_left_corner = origin - u*half_width - v*half_height - w;
-// 			horizontal = 2*half_width*u;
-// 			vertical = 2*half_height*v;
-// 		}
+			char prefix[255];
+			sprintf(prefix, "%d", long(t * 1e9));
+			saveRender(prefix, render(objects));
+		}
+	}
 
+	void saveRender(char *fname_prefix, std::vector<Vec> &img) const {
+		char fname[255];
+		sprintf(fname, "%s.camera_%s.visible.jpg", fname_prefix, conf.name);
+		
+		std::vector<char> jimg; jimg.resize(conf.w*conf.h*4);
+		for (int i=0; i<conf.w*conf.h; i++) {
+			int r = toInt(img[i].x), g = toInt(img[i].y), b = toInt(img[i].z);
+			int p=i*4; jimg[p] = r; jimg[p+1] = g; jimg[p+2] = b;
+		}
+		jo_write_jpg(fname, jimg.data(), conf.w, conf.h, 4, 90);
+		printf("Saved %s", fname);
 
-	// int w=640, h=480; // width, height
-	// double FoV_x = 45. * (M_PI / 180.); // width, height, FoV
+	}
 
+	std::vector<Vec> render(const std::vector<Sphere> &objects) const {
+		std::vector<Vec> c; c.resize(conf.w*conf.h);
+		const int samps = conf.raytrace_n_samples;
+		const int w=conf.w, h=conf.h;
+		Vec r;
 
+		// Raytracing routine from smallpt.cpp
+		#pragma omp parallel for schedule(dynamic, 1) private(r)     // OpenMP 
+		for (int y=0; y<h; y++){                       // Loop over image rows 
+			fprintf(stderr,"\rRendering %s (%d spp) %5.2f%%",conf.name,samps*4,100.*y/(h-1)); 
+			for (unsigned short x=0, Xi[3]={0,0,y*y*y}; x<w; x++){  // Loop cols 
+				for (int sy=0, i=(h-y-1)*w+x; sy<2; sy++){    // 2x2 subpixel rows 
+					for (int sx=0; sx<2; sx++, r=Vec()){        // 2x2 subpixel cols 
+						for (int s=0; s<samps; s++){ 
+							double r1=2*erand48(Xi), dx=r1<1 ? sqrt(r1)-1: 1-sqrt(2-r1); 
+							double r2=2*erand48(Xi), dy=r2<1 ? sqrt(r2)-1: 1-sqrt(2-r2); 
 
-	// // FoV_x = 2 arctan(w / f_x)
-	// fov_h = 2. * math.atan(.5 * self.width / f_x)
-	// fov_h / 2 = atan(.5 * w / f_x)
-	// tan (fov_h / 2) = .5 * w / f_x
-	// f_x = w / 2 tan(fov_h / 2) 
+							Ray rr = pixelToRay(x + (sx+.5 + dx)/2, y + (sy+.5 + dy)/2);
+							r = r + radiance(rr,0,Xi,ss=objects)*(1./samps); 
+						} 
+						c[i] = c[i] + Vec(clamp(r.x),clamp(r.y),clamp(r.z))*.25; 
+					}
+				}
+			}
+		}
 
-	// double fx, fy;
-	// Ray view;
-
-	// transform extrinsic = {
-	// 	// -pi/2 yaw, -pi/2 pitch
-	// 	// from scipy.spatial.transform import Rotation as R
-	// 	// R.from_euler('zyx', [-pi/2, -pi/2, 0]).as_dcm()
-	// 	.rotation = {
-	// 		 0,  0,  -1,
-	// 		-1,  0,   0,
-	// 		 0,  1,   0,
-	// 	}
-	// };
+		return c;
+	}
 
 };
 
@@ -787,8 +878,107 @@ struct camera {
 // https://github.com/RichieSams/lantern/blob/669e6c9ccd33f455961a96c5cfe0a5bc3f2af59c/source/scene/camera.cpp#L86
 
 
+struct scene {
+	struct config {
+		// A scene is from [start, start+duration) rendered at r Hz
+		double start_sec, duration_sec, render_Hz;
 
-int main(int argc, char *argv[]){ 
+		// We'll just linearly interpolate robot pose between these poses
+		Ray start_pose, end_pose;
+
+		// Sensors
+		std::vector<camera::config> cameras;	
+		std::vector<lidar::config> lidars;
+
+		// The static scene
+		std::vector<Sphere> objects;
+		std::vector<int> labeled_idx;
+	};
+};
+
+#include <time.h>
+static scene::config scene_1 = {
+	.start_sec = time(nullptr),
+	.duration_sec = 10,
+	.render_Hz = 100,
+
+	.start_pose =  Ray(Vec(50,52,295.6), 		 	 Vec(0,-0.242612,-1)),
+	.end_pose =    Ray(Vec(50,52,295.6 - 120), Vec(0,0,-1)),
+
+	.cameras = {
+		{	.w=640, .h=480, .FoV_x=48*M_PI/180,
+		 	.extrinsic=Ray(Vec(0,-1,0), Vec(0,0,-1).norm()),
+		 	.render_Hz=25,
+		 	.render_offset_sec=0.1,
+			.raytrace_n_samples=100,
+			.name="front",
+		},
+		{	.w=640, .h=480, .FoV_x=60*M_PI/180,
+		 	.extrinsic=Ray(Vec(1,-1,0), Vec(0.25,0,-1).norm()),
+		 	.render_Hz=5,
+		 	.render_offset_sec=0.2,
+			.raytrace_n_samples=100,
+			.name="right",
+		},
+		{	.w=640, .h=480, .FoV_x=60*M_PI/180,
+		 	.extrinsic=Ray(Vec(1,-1,0), Vec(-0.25,0,-1).norm()),
+		 	.render_Hz=5,
+		 	.render_offset_sec=0.3,
+			.raytrace_n_samples=100,
+			.name="left",
+		},
+		{	.w=640, .h=480, .FoV_x=120*M_PI/180,
+		 	.extrinsic=Ray(Vec(0,-1,-1), Vec(0,0,1).norm()),
+		 	.render_Hz=5,
+		 	.render_offset_sec=0.4,
+			.raytrace_n_samples=100,
+			.name="back",
+		},
+	},
+
+	.lidars = {
+		{
+			.inclination_min=-40*M_PI/180,
+			.inclination_max= 40*M_PI/180,
+			.n_beams=64,
+			.azimuth_step=M_PI/120,
+			.extrinsic=Ray(Vec(0,-2,0), Vec(0,0,-1).norm()),
+			.render_Hz=20,
+		 	.render_offset_sec=0.0,
+			.name="top",
+		},
+		{
+			.inclination_min=-60*M_PI/180,
+			.inclination_max= 60*M_PI/180,
+			.n_beams=32,
+			.azimuth_step=M_PI/10,
+			.extrinsic=Ray(Vec(0,2,-2), Vec(0,-1,-1).norm()),
+			.render_Hz=10,
+		 	.render_offset_sec=0.0,
+			.name="front",
+		},
+	},
+
+	.objects = {//Scene: radius, position, emission, color, material 
+		Sphere(1e5, Vec( 1e5+1,40.8,81.6), Vec(),Vec(.75,.25,.25),DIFF),//Left  0
+		Sphere(1e5, Vec(-1e5+99,40.8,81.6),Vec(),Vec(.25,.25,.75),DIFF),//Rght  1
+		Sphere(1e5, Vec(50,40.8, 1e5),     Vec(),Vec(.75,.25,.75),DIFF),//Back  2
+		// Sphere(1e5, Vec(50,40.8,-1e5+170), Vec(),Vec(),        DIFF),//Frnt 
+		Sphere(1e5, Vec(50, 1e5, 81.6),    Vec(),Vec(.75,.75,.75),DIFF),//Botm  3
+		Sphere(1e5, Vec(50,-1e5+81.6,81.6),Vec(),Vec(.75,.75,.75),DIFF),//Top   4
+		
+		Sphere(16.5,Vec(27,16.5,47),       Vec(),Vec(1,1,1)*.999, SPEC),//Mirr  5
+		Sphere(16.5,Vec(73,16.5,78),       Vec(),Vec(1,1,1)*.999, REFR),//Glas  6
+		Sphere(16.5,Vec(73,16.5,500),      Vec(),Vec(1,1,1)*.999, REFR),//Glas2 7
+		
+		Sphere(600, Vec(50,681.6-.27,81.6),Vec(12,12,12),  Vec(), DIFF) //Lite  8
+	},
+	.labeled_idx = {5, 6, 7},
+};
+
+int main(int argc, char *argv[]){
+
+
   int w=640, h=480, samps = argc==2 ? atoi(argv[1])/4 : 1; // # samples 
   // Ray cam(Vec(50,52,295.6), Vec(0,-0.042612,-1).norm()); // cam pos, dir
 	Ray cam(Vec(50,52,295.6), Vec(0,0,-1)); // cam pos, dir 
