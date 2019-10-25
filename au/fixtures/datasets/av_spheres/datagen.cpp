@@ -936,6 +936,8 @@ struct scene {
 			robot_pose.o = robot_pose.o + robot_T;
 			robot_pose.d = robot_R * robot_pose.d;
 
+			// TODO save pose ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 			// Update sensor poses
 			for (auto &cam : cameras) {
 				const Matrix3x3 camR = 
