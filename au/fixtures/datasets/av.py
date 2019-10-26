@@ -302,6 +302,9 @@ class URI(object):
     assert type(other) is type(self)
     return self.as_tuple() < other.as_tuple()
 
+  def __hash__(self):
+    return hash(self.as_tuple())
+
   def update(self, **kwargs):
     for k in self.__slots__:
       if k in kwargs:

@@ -36,16 +36,16 @@ def read_K_from_path(path):
 def read_RT_from_path(path):
   with open(path, 'r') as f:
     lines = f.readlines()
-  # lines 0 and 4 are newlines
-  Rr1 = lines[1]
-  Rr2 = lines[2]
-  Rr3 = lines[3]
+  # lines 0-1 and 4-5 are newlines
+  Rr1 = lines[2]
+  Rr2 = lines[3]
+  Rr3 = lines[4]
   R = np.array([
     [float(v) for v in Rr1.split()],
     [float(v) for v in Rr2.split()],
     [float(v) for v in Rr3.split()],
   ]).reshape((3, 3))
-  T = np.array([float(v) for v in lines[5].split()]).reshape((3, 1))
+  T = np.array([float(v) for v in lines[7].split()]).reshape((3, 1))
 
 
   # TODO keep me? ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -94,14 +94,14 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
     df = cls.artifact_df()
     ts_t_df = df[['timestamp', 'topic']].drop_duplicates()
-    for row in ts_t_df.to_dict(orient='recrods').items():
+    for row in ts_t_df.to_dict(orient='recrods'):
       if any(t in row['topic'] for t in TOPICS):
         yield av.URI(
           dataset='av_spheres',
           split='train', # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
           segment_id='TODO',
           topic=row['topic'],
-          timestamp=row['timestamp')
+          timestamp=row['timestamp'])
 
   @classmethod
   def create_stamped_datum(cls, uri):
@@ -136,6 +136,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
         except Exception:
           return None
       dirpath = cls.FIXTURES.TRAIN_ROOT # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~``
+      util.log.info("Reading artifacts from %s" % dirpath)
       rows = [to_row(p) for p in util.all_files_recursive(dirpath)]
       cls._artifact_df = pd.DataFrame([r for r in rows if r is not None])
     return cls._artifact_df
@@ -186,7 +187,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
       av.URI(timestamp=uri.timestamp, topic='ego_pose'))
 
     pc_path = cls._get_path(uri, 'points')
-    cloud = read_xyz_from_ply(path)
+    cloud = read_xyz_from_ply(pc_path)
 
     pc = av.PointCloud(
         sensor_name=uri.topic,
@@ -257,8 +258,8 @@ class StampedDatumTable(av.StampedDatumTableBase):
 
       front = xyz[(0,1,2,3),:]
       back =  xyz[(4,5,6,7),:]
-      obj_normal = front.mean() - back.mean()
-      obj_normal = obj_hat / np.linalg.norm(obj_hat)
+      obj_normal = front.mean(axis=0) - back.mean(axis=0)
+      obj_normal = obj_normal / np.linalg.norm(obj_normal)
 
       import math
       from scipy.spatial.transform import Rotation
@@ -266,7 +267,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
       cos_theta = obj_normal.dot(X_HAT)
       rot_axis = np.cross(X_HAT, obj_normal)
       R = Rotation.from_rotvec(math.acos(cos_theta) * rot_axis).as_dcm()
-      T = xyz.mean()
+      T = xyz.mean(axis=0)
       obj_from_ego = av.Transform(
         rotation=R, translation=T, src_frame='ego', dest_frame='obj')
       
@@ -290,7 +291,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
       cuboids.append(cuboid)
     
     uri.topic = 'labels|cuboids'
-    yield av.StampedDatum.from_uri(uri, cuboids=cuboids)
+    return av.StampedDatum.from_uri(uri, cuboids=cuboids)
 
 
   @classmethod
