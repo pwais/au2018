@@ -176,6 +176,17 @@ def test_ds_store_is_stupid():
   assert util.is_stupid_mac_file('.DS_Store')
   assert util.is_stupid_mac_file('._.DS_Store')
 
+def test_get_jpeg_size():
+  from au import conf
+  for fname in ('1292397550_115450d9bc.jpg', '1345687_fde3a33c03.jpg'):
+    path = os.path.join(conf.AU_IMAGENET_SAMPLE_IMGS_DIR, fname)
+    jpeg_bytes = open(path, 'rb').read()
+    width, height = util.get_jpeg_size(jpeg_bytes)
+
+    import imageio
+    expected_h, expected_w, expected_c = imageio.imread(path).shape
+    assert (width, height) == (expected_w, expected_h)
+
 
 
 ### ArchiveFileFlyweight

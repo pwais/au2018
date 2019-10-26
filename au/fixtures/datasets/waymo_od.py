@@ -15,32 +15,6 @@ from au.fixtures.datasets import av
 def to_nanostamp(timestamp_micros):
   return int(timestamp_micros) * 1000
 
-def get_jpeg_size(jpeg_bytes):
-  """Get the size of a JPEG image without reading and decompressing the entire
-  file.  Based upon:  
-   * https://github.com/shibukawa/imagesize_py/blob/master/imagesize.py#L87
-  """
-  import struct
-  from io import BytesIO
-  buf = BytesIO(jpeg_bytes)
-  head = buf.read(24)
-  if not head.startswith(b'\377\330'):
-    raise ValueError("Invalid JPEG header")
-  buf.seek(0)
-  size = 2
-  ftype = 0
-  while not 0xc0 <= ftype <= 0xcf or ftype in [0xc4, 0xc8, 0xcc]:
-    buf.seek(size, 1)
-    byte = buf.read(1)
-    while ord(byte) == 0xff:
-      byte = buf.read(1)
-    ftype = ord(byte)
-    size = struct.unpack('>H', buf.read(2))[0] - 2
-  # Now we're at a SOFn block
-  buf.seek(1, 1)  # Skip `precision' byte.
-  height, width = struct.unpack('>HH', buf.read(4))
-  return width, height
-
 def maybe_make_homogeneous(pts, dim=3):
   """Convert numpy array `pts` to Homogeneous coordinates of target `dim`
   if necessary"""
@@ -476,7 +450,7 @@ class FrameTable(av.FrameTableBase):
           return el
       raise ValueError("Element with name %s not found" % idx)
     wf_camera_image = get_for_camera(waymo_frame.images, camera_idx)
-    w, h = get_jpeg_size(wf_camera_image.image)
+    w, h = au.util.get_jpeg_size(wf_camera_image.image)
     if not viewport:
       from au.fixtures.datasets import common
       viewport = common.BBox.of_size(w, h)
@@ -847,7 +821,7 @@ class StampedDatumTable(av.StampedDatumTableBase):
       ## Camera Image
       camera_name = get_camera_name(wf_camera_image.name)
 
-      w, h = get_jpeg_size(wf_camera_image.image)
+      w, h = au.util.get_jpeg_size(wf_camera_image.image)
       viewport = uri.get_viewport()
       if not viewport:
         from au.fixtures.datasets import common

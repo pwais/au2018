@@ -25,17 +25,6 @@ URIS = (
 'avframe://dataset=waymo-od&split=train&segment_id=segment-10206293520369375008_2796_800_2816_800_with_camera_labels.tfrecord&timestamp=1511659065620167936'
 )
 
-def test_get_jpeg_size():
-  from au.fixtures.datasets.waymo_od import get_jpeg_size
-  for fname in ('1292397550_115450d9bc.jpg', '1345687_fde3a33c03.jpg'):
-    path = os.path.join(conf.AU_IMAGENET_SAMPLE_IMGS_DIR, fname)
-    jpeg_bytes = open(path, 'rb').read()
-    width, height = get_jpeg_size(jpeg_bytes)
-
-    import imageio
-    expected_h, expected_w, expected_c = imageio.imread(path).shape
-    assert (width, height) == (expected_w, expected_h)
-
 def test_waymo_yay():
   from au.fixtures.datasets.waymo_od import StampedDatumTable
   StampedDatumTable.setup()

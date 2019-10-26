@@ -719,7 +719,7 @@ struct lidar {
 	void saveSweep(char *fname_prefix, const std::vector<Vec> &pts) const {
 		{ // Depth Image, mainly for debugging
 			char fname[512];
-			sprintf(fname, "%s.lidar_%s.depth.jpg", fname_prefix, conf.name);
+			sprintf(fname, "%s.%s.depth.jpg", fname_prefix, conf.name);
 
 			const int lh = conf.n_beams;
 			const int lw = pts.size() / conf.n_beams;
@@ -735,7 +735,7 @@ struct lidar {
 
 		{ // Point cloud, used as raw sensor data
 			char fname[512];
-			sprintf(fname, "%s.lidar_%s.points.ply", fname_prefix, conf.name);
+			sprintf(fname, "%s.%s.points.ply", fname_prefix, conf.name);
 			FILE *f = fopen(fname, "w");
 			fprintf(f, "ply\nformat ascii 1.0\n");
 			fprintf(f, "element vertex %d\n", int(pts.size()));
@@ -791,11 +791,10 @@ struct camera {
 	}
 
 	Matrix3x3 getK() const {
-		Matrix3x3 K; K.data = {
-			fx,  0, cx,
-			0,  fy, cy,
-			0,   0,  1,
-		};
+		Matrix3x3 K;
+			K.data[0]=fx; K.data[1]=0;  K.data[2]=cx;
+			K.data[3]=0;  K.data[4]=fy; K.data[5]=cy;
+			K.data[6]=fx; K.data[7]=0;  K.data[8]=1;
 		return K;
 	}
 
@@ -822,7 +821,7 @@ struct camera {
 
 	void saveRender(char *fname_prefix, const std::vector<Vec> &img) const {
 		char fname[512];
-		sprintf(fname, "%s.camera_%s.visible.jpg", fname_prefix, conf.name);
+		sprintf(fname, "%s.%s.visible.jpg", fname_prefix, conf.name);
 		
 		std::vector<char> jimg; jimg.resize(conf.w*conf.h*4);
 		for (int i=0; i<conf.w*conf.h; i++) {
@@ -880,6 +879,7 @@ struct scene {
 		// The static scene
 		Svec objects;
 		std::vector<int> labeled_idx;
+		double label_save_Hz;
 	};
 
 	config conf;
@@ -891,7 +891,7 @@ struct scene {
 									const char *property,
 									const Ray &pose) {
 		char fname[512];
-		sprintf(fname, "%s.%s.%s.RT", long(t * 1e9), topic, property);
+		sprintf(fname, "%ld.%s.%s.RT", long(t * 1e9), topic, property);
 
 		static const Vec zHat = {0, 0, -1};
 		const Matrix3x3 R = Matrix3x3::rotMatrixFromVectors(zHat, pose.d);
@@ -901,17 +901,35 @@ struct scene {
 		R.print(f);
 		printVec(f, T);
 		fclose(f);
+		fprintf(stderr, "Saved %s\n", fname);
+	}
+
+	void saveLabels(double t) const {
+		// Save cuboid labels
+		for (int i=0; i<conf.labeled_idx.size(); i++) {
+			auto oid = conf.labeled_idx[i];
+			auto obj = conf.objects.at(oid);
+			auto c = cuboid::fromSphere(obj);
+
+			char fname[500];
+			sprintf(fname, "%ld.cuboids.%d.ply", long(t * 1e9), i);
+			FILE *f = fopen(fname, "w");
+			c.print(f);
+			fclose(f);
+			fprintf(stderr, "Saved %s\n", fname);
+		}
 	}
 
 	void render() const {
 		// Build stuff
+		double last_label_save = 0;
 		std::vector<camera> cameras;
 		for (auto cconf : conf.cameras) {
 			auto cam = camera(cconf);
 			cameras.push_back(cam);
 			{
 				char fname[512];
-				sprintf(fname, "%s.%s.%s.K", long(0), "intrinsic", cconf.name);
+				sprintf(fname, "%ld.%s.%s.K", long(0), "intrinsic", cconf.name);
 				FILE *f = fopen(fname, "w"); cam.getK().print(f); fclose(f);
 			}
 			saveAsTransform(0, "extrinsic", cconf.name, cconf.extrinsic);
@@ -929,18 +947,6 @@ struct scene {
 			conf.start_pose.d, conf.end_pose.d) * (1. / n_steps);
 		Vec robot_T = (conf.end_pose.o - conf.start_pose.o) * (1. / n_steps);
 		
-		// Save cuboid labels
-		for (int i=0; i<conf.labeled_idx.size(); i++) {
-			auto oid = conf.labeled_idx[i];
-			auto obj = conf.objects.at(oid);
-			auto c = cuboid::fromSphere(obj);
-
-			char fname[500];
-			sprintf(fname, "%ld.cuboids.%d.ply", long(conf.start_sec * 1e9), i);
-			FILE *f = fopen(fname, "w");
-			c.print(f);
-		}
-		
 		for (double clock=0; clock<conf.duration_sec; clock+=1./conf.render_Hz) {
 			double t = conf.start_sec + clock;
 			
@@ -948,8 +954,6 @@ struct scene {
 			robot_pose.o = robot_pose.o + robot_T;
 			robot_pose.d = robot_R * robot_pose.d;
 			saveAsTransform(t, "ego_pose", "ego_pose", robot_pose);
-
-			// TODO save pose ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 			// Update sensor poses
 			for (auto &cam : cameras) {
@@ -979,6 +983,12 @@ struct scene {
 					l.run(t, conf.objects);
 				}
 			}
+
+			// Maybe save labels
+			if (t-last_label_save >= 1. / conf.label_save_Hz) {
+				last_label_save = t;
+				saveLabels(t);
+			}
 		}
 	}
 };
@@ -997,29 +1007,29 @@ static const scene::config scene_1 = {
 		 	.extrinsic=Ray(Vec(0,-1,0), Vec(0,0,-1).norm()),
 		 	.render_Hz=25,
 		 	.render_offset_sec=0.1,
-			.raytrace_n_samples=1000,
-			.name="front",
+			.raytrace_n_samples=10,
+			.name="camera_front",
 		},
 		// {	.w=640, .h=480, .FoV_x=60*M_PI/180,
 		//  	.extrinsic=Ray(Vec(1,-1,0), Vec(0.25,0,-1).norm()),
 		//  	.render_Hz=5,
 		//  	.render_offset_sec=0.2,
 		// 	.raytrace_n_samples=1000,
-		// 	.name="right",
+		// 	.name="camera_right",
 		// },
 		// {	.w=640, .h=480, .FoV_x=60*M_PI/180,
 		//  	.extrinsic=Ray(Vec(1,-1,0), Vec(-0.25,0,-1).norm()),
 		//  	.render_Hz=5,
 		//  	.render_offset_sec=0.3,
 		// 	.raytrace_n_samples=1000,
-		// 	.name="left",
+		// 	.name="camera_left",
 		// },
 		// {	.w=640, .h=480, .FoV_x=120*M_PI/180,
 		//  	.extrinsic=Ray(Vec(0,-1,-1), Vec(0,0,1).norm()),
 		//  	.render_Hz=5,
 		//  	.render_offset_sec=0.4,
 		// 	.raytrace_n_samples=1000,
-		// 	.name="back",
+		// 	.name="camera_back",
 		// },
 	},
 
@@ -1032,7 +1042,7 @@ static const scene::config scene_1 = {
 			.extrinsic=Ray(Vec(0,-2,0), Vec(0,0,-1).norm()),
 			.render_Hz=20,
 		 	.render_offset_sec=0.0,
-			.name="top",
+			.name="lidar_top",
 		},
 		{
 			.inclination_min=-60*M_PI/180,
@@ -1042,7 +1052,7 @@ static const scene::config scene_1 = {
 			.extrinsic=Ray(Vec(0,2,-2), Vec(0,-1,-1).norm()),
 			.render_Hz=10,
 		 	.render_offset_sec=0.0,
-			.name="front",
+			.name="lidar_front",
 		},
 	},
 
@@ -1061,6 +1071,7 @@ static const scene::config scene_1 = {
 		Sphere(600, Vec(50,681.6-.27,81.6),Vec(12,12,12),  Vec(), DIFF) //Lite  8
 	},
 	.labeled_idx = {5, 6, 7},
+	.label_save_Hz = 2,
 };
 
 int main(int argc, char *argv[]){
