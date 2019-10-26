@@ -492,30 +492,19 @@ struct cuboid {
 		fprintf(f, "property float32 z\n");
 		fprintf(f, "end_header\n");
 		for (int i=0; i<8; i++) {
-			fprintf(f,"%5.2f %5.2f %5.2f \n",
+			fprintf(f,"%f %f %f \n",
 				corners[i].x, corners[i].y, corners[i].z);
 		}
 	}
 };
 
-// #include <vector>
+void printVec(FILE *f, const Vec &v) {
+	fprintf(f,"%f %f %f", v.x, v.y, v.z);
+}
 
-// struct tensor {
-// 	std::vector<double> data;
-// 	std::vector<int> shape;
-// 	void printJSON(FILE * f) const {
-
-// 	}
-// };
-
-// struct transform {
-// 	double rotation[9] = {
-// 		1, 0, 0,
-// 		0, 1, 0,
-// 		0, 0, 1,
-// 	};
-// 	Vec translation;
-// };
+void printRay(FILE *f, const Ray &r) {
+	printVec(f, r.o); printVec(f, r.d);
+}
 
 struct Matrix3x3 {
 	double data[9];	// row-major
@@ -666,9 +655,9 @@ struct Matrix3x3 {
 
 	void print(FILE *f) const {
 		fprintf(f,"\n\n");
-		fprintf(f,"%5.2f %5.2f %5.2f\n", data[0], data[1], data[2]);
-		fprintf(f,"%5.2f %5.2f %5.2f\n", data[3], data[4], data[5]);
-		fprintf(f,"%5.2f %5.2f %5.2f\n", data[6], data[7], data[8]);
+		fprintf(f,"%f %f %f\n", data[0], data[1], data[2]);
+		fprintf(f,"%f %f %f\n", data[3], data[4], data[5]);
+		fprintf(f,"%f %f %f\n", data[6], data[7], data[8]);
 		fprintf(f,"\n\n");
 	}
 };
@@ -755,9 +744,10 @@ struct lidar {
 			fprintf(f, "property float32 z\n");
 			fprintf(f, "end_header\n");
 			for (int i=0; i<pts.size(); i++) {
-				fprintf(f,"%5.2f %5.2f %5.2f \n", pts[i].x, pts[i].y, pts[i].z);
+				fprintf(f,"%f %f %f \n", pts[i].x, pts[i].y, pts[i].z);
 			}
 			fprintf(stderr, "Saved %s\n", fname);
+			fclose(f);
 		}
 	}
 
@@ -800,16 +790,18 @@ struct camera {
 		cx = .5*conf.w; cy = .5*conf.h;
 	}
 
-	// Matrix3x3 R() const {
-	// 	return Matrix3x3::rotMatrixFromVectors(
-	// 		Vec(pose.d).norm(), Vec(pose.d).norm());
-	// }
-
-	// Vec T() const { return pose.o; }
+	Matrix3x3 getK() const {
+		Matrix3x3 K; K.data = {
+			fx,  0, cx,
+			0,  fy, cy,
+			0,   0,  1,
+		};
+		return K;
+	}
 
 	Ray pixelToRay(double x, double y) const {
 		const Vec ray_in_cam = Vec((x-cx)/fx, (y-cy)/fy, -1);
-		// fprintf(stderr, "x %5.2f y %5.2f\n", ray_in_cam.x, ray_in_cam.y);
+		// fprintf(stderr, "x %f y %f\n", ray_in_cam.x, ray_in_cam.y);
 		static const Vec zHat = {0, 0, -1};
 		const Matrix3x3 Rinv = 
 			Matrix3x3::rotMatrixFromVectors(pose.d, zHat);
@@ -839,7 +831,6 @@ struct camera {
 		}
 		jo_write_jpg(fname, jimg.data(), conf.w, conf.h, 4, 90);
 		fprintf(stderr, "Saved %s\n", fname);
-
 	}
 
 	std::vector<Vec> render(SvRef objects) const {
@@ -874,15 +865,6 @@ struct camera {
 
 };
 
-// struct world {
-//   Ray cam;
-//   Ray ego;
-//   Ray laser;
-// };
-
-// https://github.com/RichieSams/lantern/blob/669e6c9ccd33f455961a96c5cfe0a5bc3f2af59c/source/scene/camera.cpp#L86
-
-
 struct scene {
 	struct config {
 		// A scene is from [start, start+duration) rendered at r Hz
@@ -903,12 +885,42 @@ struct scene {
 	config conf;
 	scene(const config &c) : conf(c) { }
 
-	void render() {
+	static void saveAsTransform(
+									double t,
+									const char* topic,
+									const char *property,
+									const Ray &pose) {
+		char fname[512];
+		sprintf(fname, "%s.%s.%s.RT", long(t * 1e9), topic, property);
+
+		static const Vec zHat = {0, 0, -1};
+		const Matrix3x3 R = Matrix3x3::rotMatrixFromVectors(zHat, pose.d);
+		const Vec T = pose.o;
+
+		FILE *f = fopen(fname, "w");
+		R.print(f);
+		printVec(f, T);
+		fclose(f);
+	}
+
+	void render() const {
 		// Build stuff
 		std::vector<camera> cameras;
-		for (auto cconf : conf.cameras) { cameras.push_back(camera(cconf)); }
+		for (auto cconf : conf.cameras) {
+			auto cam = camera(cconf);
+			cameras.push_back(cam);
+			{
+				char fname[512];
+				sprintf(fname, "%s.%s.%s.K", long(0), "intrinsic", cconf.name);
+				FILE *f = fopen(fname, "w"); cam.getK().print(f); fclose(f);
+			}
+			saveAsTransform(0, "extrinsic", cconf.name, cconf.extrinsic);
+		}
 		std::vector<lidar> lidars;
-		for (auto lconf : conf.lidars) { lidars.push_back(lidar(lconf)); }
+		for (auto lconf : conf.lidars) {
+			lidars.push_back(lidar(lconf));
+			saveAsTransform(0, "extrinsic", lconf.name, lconf.extrinsic);
+		}
 
 		// Set up pose
 		const int n_steps = conf.duration_sec / conf.render_Hz;
@@ -935,6 +947,7 @@ struct scene {
 			// Update robot pose
 			robot_pose.o = robot_pose.o + robot_T;
 			robot_pose.d = robot_R * robot_pose.d;
+			saveAsTransform(t, "ego_pose", "ego_pose", robot_pose);
 
 			// TODO save pose ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
