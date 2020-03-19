@@ -12,13 +12,184 @@ import itertools
 import os
 from collections import OrderedDict
 
+import numpy as np
+
 import tensorflow as tf
 
 from au import util
 from au.fixtures import dataset
 from au.fixtures import nnmodel
 
-MNIST_INPUT_SIZE = (28, 28)
+MNIST_INPUT_SIZE = (28, 28) # height, width
+MNIST_INPUT_SIZE_HWC = (MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1)
+
+
+###
+### Data
+###
+
+class MNISTDataset(dataset.ImageTable):
+  TABLE_NAME = 'MNIST'
+  
+  ROWS_PER_FILE = 10000
+
+  SPLIT = '' # Or 'train' or 'test'
+
+  N_CLASSES = 10 # Classes are digits 0 through 9
+
+  @classmethod
+  def _datasets_iter_image_rows(cls, params=None):
+    params = params or MNIST.Params()
+    
+    log = util.create_log()
+    
+    def gen_dataset(ds, split):
+      import imageio
+      import numpy as np
+    
+      n = 0
+      log_interval = 10
+      with util.tf_data_session(ds) as (sess, iter_dataset):
+        for image, label in iter_dataset():
+          image = np.reshape(image * 255., MNIST_INPUT_SIZE_HWC).astype(np.uint8)
+          label = int(label)
+          row = dataset.ImageRow.from_np_img_labels(
+                                      image,
+                                      label,
+                                      dataset=cls.TABLE_NAME,
+                                      split=split,
+                                      uri='mnist_%s_%s' % (split, n))
+          yield row
+          
+          n += 1
+          if params.LIMIT >= 0 and n >= params.LIMIT:
+            break
+
+          if n % log_interval == 0:
+            log.info("Read %s records from tf.Dataset" % n)
+            if n >= 10 * log_interval:
+              log_interval *= 10
+    
+    from official.mnist import dataset as mnist_dataset
+    
+    # Keep our dataset ops in an isolated graph
+    g = tf.Graph()
+    with g.as_default():
+      gens = itertools.chain(
+          gen_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train'),
+          gen_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test'))
+      for row in gens:
+        yield row
+  
+  @classmethod
+  def save_datasets_as_png(cls, params=None):
+    dataset.ImageRow.write_to_pngs(
+        cls._datasets_iter_image_rows(params=params))
+  
+  @classmethod
+  def setup(cls, **kwargs):
+    if not os.path.exists(cls.table_root()):
+      rows = cls._datasets_iter_image_rows(params=kwargs.get('params'))
+      if kwargs.get('spark'):
+        spark = kwargs['spark']
+        rows = spark.sparkContext.parallelize(rows)
+      cls.save_to_image_table(rows, spark=kwargs.get('spark'))
+  
+  @classmethod
+  def as_imagerow_df(cls, spark):
+    df = super(MNISTDataset, cls).as_imagerow_df(spark)
+    if cls.SPLIT is not '':
+      df = df.filter("split = '%s'" % cls.SPLIT)
+    return df
+
+  @classmethod
+  def get_class_freq(cls, spark, raw_counts=False, df=None):
+    if df is None:
+      df = cls.as_imagerow_df(spark)
+    table = cls.__name__.lower()
+    df.createOrReplaceTempView(table)
+
+    if raw_counts:
+      query_base = """
+        SELECT
+          FIRST(split) split,
+          label, 
+          COUNT(*) num
+        FROM {table}
+        WHERE split = '{split}'
+        GROUP BY label
+        ORDER BY label, split
+      """
+    else:  
+      query_base = """
+        SELECT
+          FIRST(split) split,
+          label, 
+          COUNT(*) / 
+            (SELECT COUNT(*) FROM {table} WHERE split = '{split}') frac,
+          COUNT(*) num
+        FROM {table}
+        WHERE split = '{split}'
+        GROUP BY label
+        ORDER BY label, split
+      """
+    
+    query = """
+      SELECT * FROM ( ( {train_query} ) UNION ( {test_query} ) )
+      ORDER BY split, label
+    """.format(
+          train_query=query_base.format(table=table, split='train'),
+          test_query=query_base.format(table=table, split='test'))
+
+    res = spark.sql(query)
+    return res
+
+  @classmethod
+  def to_mnist_tf_dataset(cls, spark=None):
+    iter_image_rows = cls.create_iter_all_rows(spark=spark)
+    def iter_mnist_tuples():
+      # t = util.ThruputObserver(name='iter_mnist_tuples', log_freq=20000)
+      # t.start_block()
+      norm = MNIST.Params().make_normalize_ftor()
+      for row in iter_image_rows():
+        # TODO: a faster filter.  For mnist this is plenty fast.
+        if cls.SPLIT is not '':
+          if cls.SPLIT.lower() != row.split:
+            continue
+
+        # TODO standardize this stuff
+        row = norm(row)
+        arr = row.attrs['normalized']
+
+        # # Based upon official/mnist/dataset.py
+        # def normalize_image(image):
+        #   # # Normalize from [0, 255] to [0.0, 1.0]
+        #   # # image = tf.decode_raw(image, tf.uint8) `image` is already an array
+        #   # image = tf.cast(image, tf.float32)
+        #   # image = tf.reshape(image, [784])
+        #   image = image.astype(float) / 255.0
+        #   return np.reshape(image, (784,))
+
+        # def decode_label(label):
+        #   # NB: `label` is already an int
+        #   # label = tf.decode_raw(label, tf.uint8)  # tf.string -> [tf.uint8]
+        #   label = tf.reshape(label, [])  # label is a scalar
+        #   return tf.to_int32(label)
+        yield arr, int(row.label), row.uri
+
+    d = tf.data.Dataset.from_generator(
+              generator=iter_mnist_tuples,
+              output_types=(tf.float32, tf.int32, tf.string),
+              output_shapes=(list(MNIST_INPUT_SIZE_HWC), [], []))
+    return d
+
+class MNISTTrainDataset(MNISTDataset):
+  SPLIT = 'train'
+
+class MNISTTestDataset(MNISTDataset):
+  SPLIT = 'test'
+
+
 
 ## From mnist.py
 
@@ -79,81 +250,102 @@ def create_model(data_format='channels_last'):
           l.Dense(10)
       ])
 
-def model_fn(features, labels, mode, params):
-  """The model_fn argument for creating an Estimator.
-  
-  NB: `params` is a dict but unused; Tensorflow requires this parameter
-  (and for it to be named `params`).
-  """
-  model = create_model()#params_dict['data_format'])
-  image = features
-  if isinstance(image, dict):
-    image = features['image']
-
-  if mode == tf.estimator.ModeKeys.PREDICT:
-    logits = model(image, training=False)
-    predictions = {
-        'classes': tf.argmax(logits, axis=1),
-        'probabilities': tf.nn.softmax(logits),
-    }
-    return tf.estimator.EstimatorSpec(
-        mode=tf.estimator.ModeKeys.PREDICT,
-        predictions=predictions,
-        export_outputs={
-            'classify': tf.estimator.export.PredictOutput(predictions)
-        })
-  if mode == tf.estimator.ModeKeys.TRAIN:
-    LEARNING_RATE = 1e-4
+class model_fn(object):
+  def __init__(self, au_params):
+    self.au_params = au_params
+  def __call__(self, features, labels, mode, params):
+    """The model_fn argument for creating an Estimator.
     
-    optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
+    NB: `params` is a dict but unused; Tensorflow requires this parameter
+    (and for it to be named `params`).
+    """
+    model = create_model()#params_dict['data_format'])
+    image = features
+    if isinstance(image, dict):
+      image = features['image']
 
-    # If we are running multi-GPU, we need to wrap the optimizer.
-    #if params_dict.get('multi_gpu'):
-    #  optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
+    if mode == tf.estimator.ModeKeys.PREDICT:
+      logits = model(image, training=False)
+      predictions = {
+          'classes': tf.argmax(logits, axis=1),
+          'probabilities': tf.nn.softmax(logits),
+      }
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.PREDICT,
+          predictions=predictions,
+          export_outputs={
+              'classify': tf.estimator.export.PredictOutput(predictions)
+          })
+    if mode == tf.estimator.ModeKeys.TRAIN:
+      LEARNING_RATE = 1e-4
+      
+      optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
 
-    logits = model(image, training=True)
-    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
-    accuracy = tf.metrics.accuracy(
-        labels=labels, predictions=tf.argmax(logits, axis=1))
+      # If we are running multi-GPU, we need to wrap the optimizer.
+      #if params_dict.get('multi_gpu'):
+      #  optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
 
-    # Name tensors to be logged with LoggingTensorHook.
-    tf.identity(LEARNING_RATE, 'learning_rate')
-    tf.identity(loss, 'cross_entropy')
-    tf.identity(accuracy[1], name='train_accuracy')
+      logits = model(image, training=True)
+      loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
+      accuracy = tf.metrics.accuracy(
+          labels=labels, predictions=tf.argmax(logits, axis=1))
 
-    # Save accuracy scalar to Tensorboard output.
-    tf.summary.scalar('train_accuracy', accuracy[1])
-    
-    global_step = tf.train.get_or_create_global_step()
-    tf.summary.scalar('global_step', global_step)
+      # Name tensors to be logged with LoggingTensorHook.
+      tf.identity(LEARNING_RATE, 'learning_rate')
+      tf.identity(loss, 'cross_entropy')
+      tf.identity(accuracy[1], name='train_accuracy')
 
-    return tf.estimator.EstimatorSpec(
-        mode=tf.estimator.ModeKeys.TRAIN,
-        loss=loss,
-        train_op=optimizer.minimize(loss, global_step))
+      # Save accuracy scalar to Tensorboard output.
+      tf.summary.scalar('train_accuracy', accuracy[1])
+      
+      global_step = tf.train.get_or_create_global_step()
+      tf.summary.scalar('global_step', global_step)
 
-  elif mode == tf.estimator.ModeKeys.EVAL:
-    logits = model(image, training=False)
-    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
-    return tf.estimator.EstimatorSpec(
-        mode=tf.estimator.ModeKeys.EVAL,
-        loss=loss,
-        eval_metric_ops={
-            'accuracy':
-                tf.metrics.accuracy(
-                    labels=labels, predictions=tf.argmax(logits, axis=1)),
-        })
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.TRAIN,
+          loss=loss,
+          train_op=optimizer.minimize(loss, global_step))
 
-def test_dataset(params):
-  from official.mnist import dataset as mnist_dataset
-  test_ds = mnist_dataset.test(params.DATA_BASEDIR)
-  if params.LIMIT >= 0:
-    test_ds = test_ds.take(params.LIMIT)
-  test_ds = test_ds.batch(params.BATCH_SIZE)
-  return test_ds
+    elif mode == tf.estimator.ModeKeys.EVAL:
+      logits = model(image, training=False)
+      loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
+      
+      preds = tf.argmax(logits, axis=1)
+      classes = labels#tf.argmax(labels, axis=1)
 
-def mnist_train(params):
-  log = util.create_log()
+      eval_metric_ops = {
+        'accuracy':
+            tf.metrics.accuracy(labels=labels, predictions=preds),
+      }
+
+      # Added in au
+      for k in range(self.au_params.TEST_TABLE.N_CLASSES):
+        k_name = str(k)
+        metric_kwargs = {
+          'labels': tf.cast(tf.equal(classes, k), tf.int64),
+          'predictions': tf.cast(tf.equal(preds, k), tf.int64),
+        }
+        name_to_ftor = {
+          'accuracy': tf.metrics.accuracy,
+          'auc': tf.metrics.auc,
+          'precision': tf.metrics.precision,
+          'recall': tf.metrics.recall,
+        }
+        for name, ftor in name_to_ftor.iteritems():
+          full_name = name + '_' + k_name
+          eval_metric_ops[full_name] = ftor(name=full_name, **metric_kwargs)
+
+      return tf.estimator.EstimatorSpec(
+          mode=tf.estimator.ModeKeys.EVAL,
+          loss=loss,
+          eval_metric_ops=eval_metric_ops,
+      )
+
+def mnist_train(params, tf_config=None):
+  if tf_config is None:
+    tf_config = util.tf_create_session_config()
+
+  import tensorflow as tf
   tf.logging.set_verbosity(tf.logging.DEBUG)
   
   ## Model
@@ -161,28 +353,48 @@ def mnist_train(params):
   tf.gfile.MakeDirs(params.MODEL_BASEDIR)
   
   mnist_classifier = tf.estimator.Estimator(
-    model_fn=model_fn,
+    model_fn=model_fn(params),
     params=None,
     config=tf.estimator.RunConfig(
       model_dir=model_dir,
       save_summary_steps=10,
       save_checkpoints_secs=10,
-      session_config=util.tf_create_session_config(),
+      session_config=tf_config,
       log_step_count_steps=10))
     
+  can_spawn_spark = params.TRAIN_WORKER_CLS.PROCESS_ISOLATED
+  spark = None
+  if can_spawn_spark:
+    from au.spark import Spark
+    spark = Spark.getOrCreate()
+
   ## Data
   def train_input_fn():
-    from official.mnist import dataset as mnist_dataset
-    
-    # Load the datasets
-    train_ds = mnist_dataset.train(params.DATA_BASEDIR)
+    # Load the dataset
+    train_ds = params.TRAIN_TABLE.to_mnist_tf_dataset(spark=spark)
+
+    # This flow doesn't need uri
+    train_ds = train_ds.map(lambda arr, label, uri: (arr, label))
+
     if params.LIMIT >= 0:
       train_ds = train_ds.take(params.LIMIT)
-    train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
+    # train_ds = train_ds.shuffle(60000).batch(params.BATCH_SIZE)
+    # train_ds = train_ds.prefetch(10 * params.BATCH_SIZE)
+    train_ds = train_ds.batch(params.BATCH_SIZE)
+    train_ds = train_ds.cache(os.path.join(params.MODEL_BASEDIR, 'train_cache'))
     return train_ds
   
   def eval_input_fn():
-    test_ds = test_dataset(params)
+    test_ds = params.TEST_TABLE.to_mnist_tf_dataset(spark=spark)
+
+    # This flow doesn't need uri
+    test_ds = test_ds.map(lambda arr, label, uri: (arr, label))
+
+    if params.LIMIT >= 0:
+      test_ds = test_ds.take(params.LIMIT)
+    test_ds = test_ds.batch(params.EVAL_BATCH_SIZE)
+    test_ds = test_ds.cache(os.path.join(params.MODEL_BASEDIR, 'test_cache'))
+    
     # No idea why we return an interator thingy instead of a dataset ...
     return test_ds.make_one_shot_iterator().get_next()
 
@@ -195,10 +407,15 @@ def mnist_train(params):
       batch_size=params.BATCH_SIZE)
 
   # Train and evaluate model.
-  for _ in range(params.TRAIN_EPOCHS):
-    mnist_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
-    eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
-    log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+  for t in range(params.TRAIN_EPOCHS):
+    try:
+      mnist_classifier.train(input_fn=train_input_fn, hooks=train_hooks)
+      if t % 10 == 0 or t >= params.TRAIN_EPOCHS - 1:
+        eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
+        util.log.info('\nEvaluation results:\n\t%s\n' % eval_results)
+    except RuntimeError as e:
+      util.log.info('\nError during training, exiting training: %s ...' % (e,))
+      break
 
   # Export the model
   # TODO do we need this placeholder junk?
@@ -209,149 +426,131 @@ def mnist_train(params):
   mnist_classifier.export_savedmodel(params.MODEL_BASEDIR, input_fn)
 
 
-
 ## AU Interface
 
 class MNISTGraph(nnmodel.TFInferenceGraphFactory):
   def __init__(self, params):
     self.params = params
-    
-  def create_inference_graph(self, input_image, base_graph):
-    log = util.create_log()
-    
-    with base_graph.as_default():  
-      sess = util.tf_cpu_session()
-      with sess.as_default():
-        tf_model = create_model()
+  
+  def create_frozen_graph_def(self):
+    g = tf.Graph()
+    with g.as_default():
+      tf_model = create_model()
 
-        # Create ops and load weights
-        
-        # root = tf.train.Checkpoint(model=tf_model)
-        # root.restore(tf.train.latest_checkpoint(self.params.MODEL_BASEDIR))
-        # log.info("Read model params from %s" % self.params.MODEL_BASEDIR)
-          
-        pred = tf_model(tf.cast(input_image, tf.float32), training=False)
-        checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
-        saver = tf.train.import_meta_graph(checkpoint + '.meta', clear_devices=True)
-        self.graph = util.give_me_frozen_graph(
-                            checkpoint,
-                            nodes=self.output_names,
-                            saver=saver,
-                            base_graph=base_graph,
-                            sess=sess)
-
-    import pprint
-    log.info("Loaded graph:")
-    log.info(pprint.pformat(tf.contrib.graph_editor.get_tensors(self.graph)))
-    return self.graph 
+      input_image = tf.placeholder(
+        tf.uint8,
+        self.params.INPUT_TENSOR_SHAPE,
+        name=self.params.INPUT_TENSOR_NAME)
+      uris = tf.placeholder(
+        tf.string,
+        [None],
+        name=self.params.INPUT_URIS_NAME)
+      
+      input_image_f = tf.cast(input_image, tf.float32)
+      input_image_f = input_image_f / 255. # FIXME
+      pred = tf_model(input_image_f, training=False)
+      checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
+      saver = tf.train.import_meta_graph(
+                            checkpoint + '.meta',
+                            clear_devices=True)
+      return util.give_me_frozen_graph(
+                          checkpoint,
+                          nodes=list(self.output_names) + [input_image, uris],
+                          saver=saver,
+                          base_graph=g)
 
   @property
   def output_names(self):
     return (
+      # 'IteratorGetNext:1',
+      # 'sequential/reshape/Reshape:0',
+      # 'sequential/conv2d/BiasAdd:0',
+      # 'sequential/conv2d_1/Conv2D:0',
+      # 'sequential/max_pooling2d_1/MaxPool:0',
+      # 'sequential/flatten/Reshape:0',
+      # 'sequential/dense_1/MatMul:0',
+      # 'sequential/dropout/Identity:0',
+
       'sequential/conv2d/Relu:0',
       'sequential/conv2d_1/Relu:0',
       'sequential/dense/Relu:0',
       'sequential/dense_1/MatMul:0',
     )
 
+# Based upon official/mnist/dataset.py
+# def normalize_image(image):
+#   # # Normalize from [0, 255] to [0.0, 1.0]
+#   # image = image.astype(np.float32) / 255.0  RESTORE
+#   # FIXME activation table and ... training flow? disagree
+#   return image #np.reshape(image, (784,))
+
 class MNIST(nnmodel.INNModel):
 
   class Params(nnmodel.INNModel.ParamsBase):
-    def __init__(self):
+    def __init__(self, **overrides):
       super(MNIST.Params, self).__init__(model_name='MNIST')
       self.BATCH_SIZE = 100
-      self.LEARNING_RATE = 0.01
-      self.MOMENTUM = 0.5
+      self.EVAL_BATCH_SIZE = 100
+      self.INFERENCE_BATCH_SIZE = 1000
+      
+      # self.LEARNING_RATE = 0.01
+      # self.MOMENTUM = 0.5
       self.TRAIN_EPOCHS = 2
       self.LIMIT = -1
       self.INPUT_TENSOR_SHAPE = [
                   None, MNIST_INPUT_SIZE[0], MNIST_INPUT_SIZE[1], 1]
+      # self.NORM_FUNC = normalize_image
+
+      self.TRAIN_TABLE = MNISTTrainDataset
+      self.TEST_TABLE = MNISTTestDataset
+
+      self.update(**overrides)
 
   def __init__(self, params=None):
     super(MNIST, self).__init__(params=params)
     self.tf_graph = None
     self.tf_model = None
     self.predictor = None
+    self.igraph = MNISTGraph(self.params)
 
   @classmethod
-  def load_or_train(cls, params=None):
-    log = util.create_log()
-    
+  def load_or_train(cls, params=None):    
     params = params or MNIST.Params()
     model = MNIST(params=params)
-
-    if not os.path.exists(os.path.join(params.MODEL_BASEDIR, 'model.ckpt')):
-      log.info("Training!")
-      # subprocess allows recovery of gpu memory!  See TFSessionPool comments
-      # import multiprocessing
-      # p = multiprocessing.Process(target=mnist_train, args=(params,))
-      # p.start()
-      # p.join()
-      mnist_train(params)
-      log.info("Done training!")
-
-    model.igraph = MNISTGraph(params)
+    checkpoint_path = os.path.join(params.MODEL_BASEDIR, 'checkpoint')
+    if os.path.exists(checkpoint_path):
+      util.log.info("Using checkpoint at %s" % checkpoint_path)
+    else:
+      model.train()
     return model
+  
+  def train(self):
+    params = self.params
+    class MNISTWorker(self.params.TRAIN_WORKER_CLS):
+      # PROCESS_ISOLATED = True
+      # N_GPUS = util.GPUPool.ALL_GPUS
+      #   # def __init__(self, params):
+      #   #   self.params=params
+      def run(self):
+        # print 'self._gpu_ids', self._gpu_ids, os.getpid()
+        tf_config = util.tf_create_session_config(restrict_gpus=self._gpu_ids)
+        util.log.info("Training ...")
+        mnist_train(params, tf_config=tf_config)
+        util.log.info("... done training.")
+    w = MNISTWorker()
+    w()
+    
 
   def get_inference_graph(self):
     return self.igraph
 
 
-class MNISTDataset(dataset.ImageTable):
-  TABLE_NAME = 'MNIST'
-  
-  @classmethod
-  def datasets_iter_image_rows(cls, params=None):
-    params = params or MNIST.Params()
-    
-    log = util.create_log()
-    
-    def gen_dataset(ds, split):
-      import imageio
-      import numpy as np
-    
-      n = 0
-      with util.tf_data_session(ds) as (sess, iter_dataset):
-        for image, label in iter_dataset():
-          image = np.reshape(image * 255., (28, 28, 1)).astype(np.uint8)
-          label = int(label)
-          row = dataset.ImageRow.from_np_img_labels(
-                                      image,
-                                      label,
-                                      dataset=cls.TABLE_NAME,
-                                      split=split,
-                                      uri='mnist_%s_%s' % (split, n))
-          yield row
-          
-          if params.LIMIT >= 0 and n == params.LIMIT:
-            break
-          n += 1
-          if n % 100 == 0:
-            log.info("Read %s records from tf.Dataset" % n)
-    
-    from official.mnist import dataset as mnist_dataset
-    
-    # Keep our dataset ops in an isolated graph
-    g = tf.Graph()
-    with g.as_default():
-      gens = itertools.chain(
-          gen_dataset(mnist_dataset.train(params.DATA_BASEDIR), 'train'),
-          gen_dataset(mnist_dataset.test(params.DATA_BASEDIR), 'test'))
-      for row in gens:
-        yield row
-  
-  @classmethod
-  def save_datasets_as_png(cls, params=None):
-    dataset.ImageRow.write_to_pngs(
-        cls.datasets_iter_image_rows(params=params))
-  
-  @classmethod
-  def setup(cls, params=None):
-    cls.save_to_image_table(cls.datasets_iter_image_rows(params=params))
 
 def setup_caches():
   MNIST.load_or_train()
-  MNISTDataset.init()
+  MNISTDataset.setup()
+
+
 
 if __name__ == '__main__':
   # self-test / demo mode!

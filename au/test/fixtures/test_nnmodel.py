@@ -22,12 +22,24 @@ class Sobel(nnmodel.INNModel):
       self.INPUT_TENSOR_SHAPE = [None, 200, 300, 3]
     
   class GraphFactory(nnmodel.TFInferenceGraphFactory):
-    def create_inference_graph(self, input_image, base_graph):
-      with base_graph.as_default():
+    def create_frozen_graph_def(self):
+      g = tf.Graph()
+      with g.as_default():
+        input_image = tf.placeholder(
+          tf.uint8,
+          self.params.INPUT_TENSOR_SHAPE,
+          name=self.params.INPUT_TENSOR_NAME)
+        uris = tf.placeholder(
+          tf.string,
+          [None],
+          name=self.params.INPUT_URIS_NAME)
+          
+        input_image_f = tf.cast(input_image, tf.float32)
+
         # FMI see impl https://github.com/tensorflow/tensorflow/blob/r1.11/tensorflow/python/ops/image_ops_impl.py#L2770
-        sobel = tf.image.sobel_edges(tf.cast(input_image, tf.float32))
-        self.out = tf.identity(sobel, name='sobel')
-      return base_graph
+        sobel = tf.image.sobel_edges(input_image_f)
+        out = tf.identity(sobel, name='sobel')
+      return g.as_graph_def()
     
     @property
     def output_names(self):
@@ -75,8 +87,6 @@ def _check_rows(fixture, filled_rows):
 
     acts = row.attrs['activations']
     assert acts
-    act = acts[0]
-    assert act.model_name == igraph.model_name
     
     import imageio
     import numpy as np
@@ -84,7 +94,7 @@ def _check_rows(fixture, filled_rows):
     if '202228408_eccfe4790e' in row.uri:
     
       tensor_name = igraph.output_names[0]
-      sobel_tensor = act.tensor_to_value[tensor_name]
+      sobel_tensor = acts.get_tensor(igraph.model_name, tensor_name)
       
       sobel_y = sobel_tensor[...,0]
       sobel_x = sobel_tensor[...,1]
@@ -110,7 +120,7 @@ def _check_rows(fixture, filled_rows):
       
       assert sobel_y_bytes == open(SOBEL_Y_TEST_IMG_PATH).read()
       assert sobel_x_bytes == open(SOBEL_X_TEST_IMG_PATH).read()
-    
+
       # For debugging
       visible_path = row.to_debug()
       imageio.imwrite(visible_path + '.sobel_x.png', sobel_x)
@@ -124,7 +134,7 @@ def test_activations_sobel(monkeypatch):
   _check_rows(fixture, filled)
   
 @pytest.mark.slow
-def test_activations_sobel_spark(monkeypatch):
+def test_spark_activations_sobel(monkeypatch):
   fixture = _create_fixture(monkeypatch)
 
   with testutils.LocalSpark.sess() as spark:
@@ -147,7 +157,11 @@ def test_fill_activations_table(monkeypatch):
   with testutils.LocalSpark.sess() as spark:
     TestActivationsTable.setup(spark=spark)
 
-    df = spark.read.parquet(TestActivationsTable.table_root())
-    df.createOrReplaceTempView("sobel_activations")
-    spark.sql("SELECT * FROM sobel_activations").show()
+    df = TestActivationsTable.as_df(spark)
+    expected_num_rows = dataset.ImageTable.as_imagerow_df(spark).count()
+    assert df.count() == expected_num_rows
+    df.show()
 
+    imagerow_rdd = TestActivationsTable.to_imagerow_rdd(spark=spark)
+    rows = imagerow_rdd.collect()
+    _check_rows(fixture, rows)

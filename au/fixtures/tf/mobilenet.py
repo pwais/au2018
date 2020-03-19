@@ -56,19 +56,30 @@ class Mobilenet(nnmodel.INNModel):
   ALL_PARAMS_CLSS = (Small, Medium, Large, XLarge)
 
   class GraphFactory(nnmodel.TFInferenceGraphFactory):
-    def create_inference_graph(self, input_image, base_graph):
-      util.download(self.params.CHECKPOINT_TARBALL_URI, self.params.MODEL_BASEDIR)
+    def create_frozen_graph_def(self):
+      util.download(
+        self.params.CHECKPOINT_TARBALL_URI,
+        self.params.MODEL_BASEDIR)
       
-      self.graph = base_graph
-      with self.graph.as_default():        
-        input_image = tf.cast(input_image, tf.float32) / 128. - 1
-        input_image.set_shape(self.params.INPUT_TENSOR_SHAPE)
+      g = tf.Graph()
+      with g.as_default():
+        input_image = tf.placeholder(
+          tf.uint8,
+          self.params.INPUT_TENSOR_SHAPE,
+          name=self.params.INPUT_TENSOR_NAME)
+        uris = tf.placeholder(
+          tf.string,
+          [None],
+          name=self.params.INPUT_URIS_NAME)
 
+        input_image_norm = tf.cast(input_image, tf.float32) / 128. - 1
+        input_image_norm.set_shape(self.params.INPUT_TENSOR_SHAPE)
+        
         from nets.mobilenet import mobilenet_v2
         with tf.contrib.slim.arg_scope(mobilenet_v2.training_scope(is_training=False)):
           # See also e.g. mobilenet_v2_035
-          self.logits, self.endpoints = mobilenet_v2.mobilenet(
-                                input_image,
+          logits, endpoints = mobilenet_v2.mobilenet(
+                                input_image_norm,
                                 is_training=False,
                                 depth_multiplier=self.params.DEPTH_MULTIPLIER,
                                 finegrain_classification_mode=self.params.FINE)
@@ -82,13 +93,78 @@ class Mobilenet(nnmodel.INNModel):
       checkpoint = os.path.join(
         self.params.MODEL_BASEDIR,
         self.params.CHECKPOINT + '.ckpt')
-      nodes = list(self.output_names) + [input_image]
-      self.graph = util.give_me_frozen_graph(
+      nodes = list(self.output_names) + [input_image, uris]
+      return util.give_me_frozen_graph(
                               checkpoint,
-                              nodes=self.output_names,
-                              base_graph=self.graph,
+                              nodes=nodes,
+                              base_graph=g,
                               saver=saver)
-      return self.graph
+
+
+
+
+
+    #     sess = util.tf_cpu_session()
+    #     with sess.as_default():
+    #       tf_model = create_model()
+
+    #       input_image = tf.placeholder(
+    #         tf.uint8,
+    #         self.params.INPUT_TENSOR_SHAPE,
+    #         name=self.params.INPUT_TENSOR_NAME)
+    #       input_image_f = tf.cast(input_image, tf.float32)
+    #       uris = tf.placeholder(
+    #         tf.string,
+    #         [None],
+    #         name=self.params.INPUT_URIS_NAME)
+          
+    #       pred = tf_model(input_image_f, training=False)
+    #       checkpoint = tf.train.latest_checkpoint(self.params.MODEL_BASEDIR)
+    #       saver = tf.train.import_meta_graph(
+    #                             checkpoint + '.meta',
+    #                             clear_devices=True)
+    #       return util.give_me_frozen_graph(
+    #                           checkpoint,
+    #                           nodes=list(self.output_names) + [input_image, uris],
+    #                           saver=saver,
+    #                           base_graph=g,
+    #                           sess=sess)
+
+
+    # def create_inference_graph(self, input_image, base_graph):
+    #   util.download(self.params.CHECKPOINT_TARBALL_URI, self.params.MODEL_BASEDIR)
+      
+    #   # self.graph = base_graph
+    #   g = tf.Graph()
+    #   with g.as_default():
+    #     input_image = tf.cast(input_image, tf.float32) / 128. - 1
+    #     input_image.set_shape(self.params.INPUT_TENSOR_SHAPE)
+
+    #     from nets.mobilenet import mobilenet_v2
+    #     with tf.contrib.slim.arg_scope(mobilenet_v2.training_scope(is_training=False)):
+    #       # See also e.g. mobilenet_v2_035
+    #       self.logits, self.endpoints = mobilenet_v2.mobilenet(
+    #                             input_image,
+    #                             is_training=False,
+    #                             depth_multiplier=self.params.DEPTH_MULTIPLIER,
+    #                             finegrain_classification_mode=self.params.FINE)
+
+    #     # Per authors: Restore using exponential moving average since it produces
+    #     # (1.5-2%) higher accuracy
+    #     ema = tf.train.ExponentialMovingAverage(0.999)
+    #     vs = ema.variables_to_restore()
+        
+    #   saver = tf.train.Saver(vs)
+    #   checkpoint = os.path.join(
+    #     self.params.MODEL_BASEDIR,
+    #     self.params.CHECKPOINT + '.ckpt')
+    #   # nodes = list(self.output_names) + [input_image]
+    #   self.graph = util.give_me_frozen_graph(
+    #                           checkpoint,
+    #                           nodes=self.output_names,
+    #                           base_graph=base_graph,
+    #                           saver=saver)
+    #   return self.graph
     
     @property
     def output_names(self):

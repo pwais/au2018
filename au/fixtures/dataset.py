@@ -2,6 +2,7 @@ import io
 import os
 from collections import OrderedDict
 
+import cv2
 import imageio
 import numpy as np
 
@@ -48,7 +49,7 @@ class ImageRow(object):
     # NB: must be a list and not a tuple due to pyarrow c++ api
 
   # Old pickle API requires __{get,set}state__ for classes that define
-  # __slots__.  Some part of Spark uses this API for serializatio, so we
+  # __slots__.  Some part of Spark uses this API for serialization, so we
   # provide an impl.
   def __getstate__(self):
     return {'as_tuple': self.astuple()}
@@ -210,6 +211,14 @@ class ImageRow(object):
       f.write(self.image_bytes)
     return dest 
 
+  def resized(self, target_h, target_w):
+    """Convenience method; you probably want to use FillNormalized below
+    for performance."""
+    arr = self.as_numpy()
+    arr = cv2.resize(arr, (target_w, target_h)) # Sneaky, opencv!
+    return ImageRow.from_np_img_labels(arr, **self.to_dict())
+
+
   @staticmethod
   def rows_from_images_dir(img_dir, pattern='*', **kwargs):
     import pathlib2 as pathlib
@@ -341,8 +350,6 @@ class ImageRow(object):
 
 ## Ops & Utils
 
-import cv2
-
 def _make_have_target_chan(img, nchan):
   shape = img.shape
   if len(shape) == 2:
@@ -406,7 +413,7 @@ class FillNormalized(object):
     return row
 
 ##
-## Tables of images
+## Tables of ImageRows
 ##
 
 class ImageTable(object):
@@ -417,7 +424,7 @@ class ImageTable(object):
   ROWS_PER_FILE = 100
   
   @classmethod
-  def setup(cls, spark=None):
+  def setup(cls, **kwargs):
     """Subclasses should override to create a dataset from scratch
     (e.g. download images, create a table, etc).  The base class
     is just a bunch of images from ImageNet.
@@ -449,13 +456,13 @@ class ImageTable(object):
     return os.path.join(conf.AU_TABLE_CACHE, cls.TABLE_NAME)
   
   @classmethod
-  def save_to_image_table(cls, rows):
-    dest = os.path.join(conf.AU_TABLE_CACHE, cls.TABLE_NAME)
-    if not os.path.exists(dest):
+  def save_to_image_table(cls, rows, **kwargs):
+    if not os.path.exists(cls.table_root()):
       return ImageRow.write_to_parquet(
                         rows,
                         cls.table_root(),
-                        rows_per_file=cls.ROWS_PER_FILE)
+                        rows_per_file=cls.ROWS_PER_FILE,
+                        spark=kwargs.get('spark'))
 
   @classmethod
   def get_rows_by_uris(cls, uris):
@@ -472,18 +479,111 @@ class ImageTable(object):
     """Convenience method (mainly for testing) using Pandas"""
     import pandas as pd
     import pyarrow.parquet as pq
-    
     pa_table = pq.read_table(cls.table_root())
     df = pa_table.to_pandas()
     for row in ImageRow.from_pandas(df):
       yield row
   
   @classmethod
-  def as_imagerow_rdd(cls, spark):
+  def as_imagerow_df(cls, spark):
     df = spark.read.parquet(cls.table_root())
+    return df
+    # row_rdd = df.rdd.map(lambda row: ImageRow(**row.asDict()))
+    # return row_rdd
+
+  # @classmethod
+  # def as_imagerow_rdd_stream(cls, spark):
+  #   from au.spark import Spark
+  #   ssc, dstream = Spark.df_to_dstream(spark, cls.as_imagerow_df(spark), 'uri')
+  #   dstream = dstream.map(lambda row: ImageRow(**row.asDict()))
+  #   return ssc, dstream
+  #   # return 
+  #   # df_stream = spark.readStream.format('parquet').schema(spark.read.parquet(cls.table_root()).schema).load(cls.table_root())
+  #   # import pdb; pdb.set_trace()#, schema=)
+  #   # row_rdd_stream = df_stream.rdd.map(lambda row: ImageRow(**row.asDict()))
+  #   # return row_rdd_stream
+  
+  @classmethod
+  def as_imagerow_rdd(cls, spark):
+    df = cls.as_imagerow_df(spark)
     row_rdd = df.rdd.map(lambda row: ImageRow(**row.asDict()))
     return row_rdd
-  
+
+  @classmethod
+  def create_iter_all_rows(cls, cycle=False, spark=None):
+    def iter_image_rows():
+      _rdd = None      
+      while True:
+        if spark is None:
+          iter_rows = cls.iter_all_rows
+        else:
+          _rdd = cls.as_imagerow_rdd(spark)
+          iter_rows = _rdd.toLocalIterator
+        
+        for row in iter_rows():
+          yield row
+        
+        if not cycle:
+          break
+    return iter_image_rows
+
+
+# class TFDatasetAdapter(object):
+
+#   def __init__(self,
+#         image_table_cls=ImageTable,
+#         cycle=False,
+#         spark=None,
+#         normalize=None,
+#         numeric_labels=False):
+    
+#     self.image_table_cls = image_table_cls
+#     self.cycle = cycle
+#     self.spark = spark
+#     self.normalize = normalize
+#     self.numeric_labels = numeric_labels
+
+#   def build(self):
+    
+    
+    
+#     # Push normalization and image/label decode onto the tf.Dataset threadpool;
+#     # should help reduce memory usage
+#     def iter_inputs():
+#       t = util.ThruputObserver(
+#               name=self.image_table_cls.__name__ + '.iter_inputs',
+#               log_on_del=True)
+#       t.start_block()
+
+#       for row in iter_image_rows():
+#         if self.normalize is None:
+#           arr = row.as_numpy()
+#         else:
+#           row = self.normalize(row)
+#           arr = row.attrs['normalized']
+        
+#         res = arr
+#         t.update_tallies(num_bytes=arr.nbytes)
+#         if self.numeric_labels:
+#           res = (arr, row.label)
+        
+#         yield res
+
+#         t.update_tallies(n=1)
+#         if t.n % 1000 == 0:
+#             util.log.info("Iter Inputs Progress:\n" + str(t))
+    
+#     import tensorflow as tf
+#     output_types = [tf.uint8]
+#     if self.numeric_labels:
+#       output_types.append(tf.float64)
+
+#     d = tf.data.Dataset.from_generator(
+#                       generator=iter_inputs,
+#                       output_types=(tf.string, tf.uint8),
+#                       output_shapes=(tf.TensorShape([]), input_shape))
+#     return d
+
 
 
 

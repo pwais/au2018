@@ -80,11 +80,19 @@ RUN \
 #  mkdir -p /mnt/alluxio-ramdisk && mount -t ramfs -o size=1G ramfs /mnt/alluxio-ramdisk
 COPY docker/alluxio-site.properties /opt/alluxio/conf/alluxio-site.properties
 
-
+## Gluster
+RUN \
+  apt-get install -y software-properties-common && \
+  add-apt-repository ppa:gluster/glusterfs-3.13 && \
+  apt-get update && \
+  apt-get install -y glusterfs-client && \
+  glusterfs --version
 
 ## Dev tools
 COPY docker/.vimrc /root/.vimrc
 COPY docker/.screenrc /root/.screenrc
+COPY cluster/devbox/start_ssh.sh /opt/au/cluster/devbox/start_ssh.sh
+#COPY cluster/devbox/id_devbox_rsa.pub /opt/au/cluster/devbox/id_devbox_rsa.pub
 RUN \
   apt-get update && \
   apt-get install -y \
@@ -92,16 +100,23 @@ RUN \
     dnsutils \
     git \
     gsutil \
+    iputils-ping \
     net-tools \
     screen \
     ssh \
     sudo \
+    tree \
     vim \
     wget && \
   pip install ipdb && \
   curl -LO https://github.com/BurntSushi/ripgrep/releases/download/0.10.0/ripgrep_0.10.0_amd64.deb && \
   dpkg -i ripgrep_0.10.0_amd64.deb
 
+#ENV DOCKERVERSION 18.09.0-ce
+#RUN curl -fsSLO https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKERVERSION}.tgz \
+#  && tar xzvf docker-${DOCKERVERSION}.tgz --strip 1 \
+#                 -C /usr/local/bin docker/docker \
+#  && rm docker-${DOCKERVERSION}.tgz
 
 ## AU Python
 COPY requirements.txt /tmp/requirements.txt
@@ -123,6 +138,8 @@ RUN \
 ## TF CNN Vis
 RUN pip install scipy h5py wget Pillow six scikit-image
 
+## tsnet
+RUN apt-get install -y libblas-dev libatlas-base-dev && pip install tsne
 
 ## Kubespray
 # See docker/kubespray_requirements.txt for notes
@@ -146,6 +163,7 @@ RUN \
 
 
 ## AU
+COPY cluster/alluxio /opt/au/cluster/alluxio
 COPY aucli /opt/au/aucli
 WORKDIR /opt/au
 RUN SPARK_LOCAL_IP=127.0.0.1 SPARK_MASTER=local[4] /opt/au/aucli --test-spark 

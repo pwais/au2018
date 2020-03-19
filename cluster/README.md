@@ -58,3 +58,15 @@ We use `kubespray` and k8s for the following reasons:
 #### Useful Links
  * https://github.com/kubernetes-sigs/kubespray/blob/master/docs/getting-started.md
  * To debug ansible, try `ansible-playbook -vvv` (more verbosity)
+
+DELETEME?
+On Xenial, you may need to edit `/etc/network/interfaces`:
+```
+# cat /etc/network/interfaces
+# interfaces(5) file used by ifup(8) and ifdown(8)
+auto lo
+iface lo inet loopback
+auto enp3s0
+iface enp3s0 inet dhcp
+```
+https://stackoverflow.com/questions/52262425/kube-dns-cannot-resolve-domain-name

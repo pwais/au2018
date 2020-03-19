@@ -1,27 +1,33 @@
 import itertools
 import os
+import pickle
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
 from contextlib import contextmanager
 
+
 ### Logging
+
 _LOGS = {}
 def create_log(name='au'):
   global _LOGS
   if name not in _LOGS:
     import logging
     LOG_FORMAT = "%(asctime)s\t%(name)-4s %(process)d : %(message)s"
-    log = logging.getLogger("au")
+    log = logging.getLogger(name)
     log.setLevel(logging.INFO)
     console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     log.addHandler(console_handler)
     _LOGS[name] = log
   return _LOGS[name]
+
+# Spark workers will lazy-construct and cache logger instances
 log = create_log()
 
 
@@ -40,7 +46,47 @@ def ichunked(seq, n):
     else:
       break
 
+def as_row_of_constants(inst):
+  from collections import OrderedDict
+  row = OrderedDict()
+  
+  def is_constant_field(name):
+    return not name.startswith('_') and name.isupper()
+
+  for attr in sorted(dir(inst)):
+    if is_constant_field(attr):
+      v = getattr(inst, attr)
+      if isinstance(v, (basestring, unicode, float, int, list, dict)):
+        row[attr] = v
+      else:
+        subrow = as_row_of_constants(v)
+        if subrow:
+          if hasattr(v, '__name__'):
+            row[attr] = v.__name__
+          else:
+            row[attr] = v.__class__.__name__
+        for col, colval in subrow.iteritems():
+          row[attr + '_' + col] = colval
+  return row
+
+def fname_timestamp(random_suffix=True):
+  timestr = time.strftime("%Y-%m-%d-%H_%M_%S")
+  if random_suffix:
+    # Ideally we use a UUID but idk
+    # https://stackoverflow.com/a/2257449
+    import random
+    import string
+    NUM_CHARS = 5
+    chars = (
+      random.choice(string.ascii_uppercase + string.digits)
+      for _ in range(NUM_CHARS)
+    )
+    timestr = timestr + "." + ''.join(chars)
+  return timestr
+
 class Proxy(object):
+  """A thin wrapper around an `instance` that supports custom semantics."""
+  
   __slots__ = ('instance',)
   
   def __init__(self, instance):
@@ -56,9 +102,11 @@ class Proxy(object):
     self._on_delete()
     del self.instance
 
+
+
 class ThruputObserver(object):
   
-  def __init__(self, name='', log_on_del=False, only_stats=None):
+  def __init__(self, name='', log_on_del=False, only_stats=None, log_freq=100):
     self.n = 0
     self.num_bytes = 0
     self.ts = []
@@ -66,6 +114,7 @@ class ThruputObserver(object):
     self.log_on_del = log_on_del
     self.only_stats = only_stats or []
     self._start = None
+    self.__log_freq = log_freq
   
   @contextmanager
   def observe(self, n=0, num_bytes=0):
@@ -94,9 +143,21 @@ class ThruputObserver(object):
     end = time.time()
     self.n += n
     self.num_bytes += num_bytes
-    self.ts.append(end - self._start)
+    if self._start is not None:
+      self.ts.append(end - self._start)
     self._start = None
   
+  def maybe_log_progress(self, n=-1):
+    if n >= 0:
+      self.__log_freq = n
+    if (self.n % self.__log_freq) == 0:
+      self.stop_block()
+      log.info("Progress for " + self.name + " " + str(id(self)) + "\n" + str(self))
+      self.start_block()
+
+      if n == -1 and (n >= 1.7 * self.__log_freq):
+        self.__log_freq *= 1.7
+
   @staticmethod
   def union(thruputs):
     u = ThruputObserver()
@@ -144,8 +205,11 @@ class ThruputObserver(object):
   
   def __del__(self):
     if self.log_on_del:
+      self.stop_block()
       log = create_log()
       log.info('\n' + str(self) + '\n')
+
+
 
 @contextmanager
 def quiet():
@@ -209,7 +273,7 @@ def get_non_loopback_iface():
   # Get an iface that can connect to Google DNS ...
   s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
   s.connect(("8.8.8.8", 80))
-  ifrace = s.getsockname()[0]
+  iface = s.getsockname()[0]
   s.close()
   return iface
 
@@ -242,6 +306,9 @@ def get_sys_info():
   info['disk_free'] = safe_cmd('df -h')
   info['ifconfig'] = safe_cmd('ifconfig')
   info['memory'] = safe_cmd('free -h')
+  
+  TEST_URI = 'https://raw.githubusercontent.com/pwais/au2018/master/README.md'
+  info['have_internet'] = bool(safe_cmd('curl ' + TEST_URI))
 
   import socket
   info['hostname'] = socket.gethostname()
@@ -253,6 +320,9 @@ def get_sys_info():
   log.info("... got all system info.")
 
   return info
+
+
+
 
 ### ArchiveFileFlyweight
 
@@ -345,11 +415,12 @@ def mkdir(path):
 def rm_rf(path):
   shutil.rmtree(path)
 
-def all_files_recursive(root_dir):
-  for path in pathlib.Path(root_dir).glob('**/*'):
-    path = str(path) # pathlib uses PosixPath thingies ...
-    if os.path.isfile(path):
-      yield path
+def all_files_recursive(root_dir, pattern='**/*'):
+  return [
+    str(path) # pathlib uses PosixPath thingies ...
+    for path in pathlib.Path(root_dir).rglob(pattern)
+    if path.is_file()
+  ]
 
 def cleandir(path):
   mkdir(path)
@@ -382,9 +453,7 @@ def download(uri, dest, try_expand=True):
     import urllib2 as urllib
     HTTPError = urllib.HTTPError
     URLError = urllib.URLError
-  
-  import tempfile
-  
+    
   import patoolib
  
   if os.path.exists(dest):
@@ -440,7 +509,10 @@ def download(uri, dest, try_expand=True):
   log.info("Downloaded to %s" % dest)
 
 
-### Tensorflow
+
+### GPU Utils
+
+GPUS_UNRESTRICTED = None
 
 class GPUInfo(object):
   __slots__ = (
@@ -453,9 +525,7 @@ class GPUInfo(object):
   )
 
   def __str__(self):
-    data = ', '.join(
-      (k + '=' + str(getattr(self, k)))
-      for k in self.__slots__)
+    data = ', '.join((k + '=' + str(getattr(self, k))) for k in self.__slots__)
     return 'GPUInfo(' + data + ')'
 
   def __eq__(self, other):
@@ -514,8 +584,47 @@ class GPUInfo(object):
   def num_total_gpus():
     return len(GPUInfo.get_infos())
 
+
+
 import fasteners
-import pickle
+class SystemLock(object):
+  """Uses fasteners / flock to provide a inter-process *and*
+  inter-thread lock using a file.  Yes, we do need our own
+  thread lock :(
+    https://github.com/harlowja/fasteners/blob/master/fasteners/process_lock.py#L62
+  """
+
+  def __init__(self, name_prefix='au.SystemLock', name='', abspath=''):
+    if not name:
+      import uuid
+      name = name_prefix + '.' + str(uuid.uuid4())
+    if not abspath:
+      abspath = os.path.join(tempfile.gettempdir(), name)
+    self._flock = fasteners.InterProcessLock(abspath)
+    self._tlock = threading.Lock()
+
+  # Make pickle-able for interop with Spark
+  def __getstate__(self):
+    return {'_flock_path': self._flock.path}
+  
+  def __setstate__(self, d):
+    self._flock = fasteners.InterProcessLock(d['_flock_path'])
+    self._tlock = threading.Lock()
+  
+  @property
+  def path(self):
+    return self._flock.path
+  
+  def __enter__(self):
+    self._tlock.acquire()
+    self._flock.acquire()
+    return self
+  
+  def __exit__(self, *args):
+    self._flock.release()
+    self._tlock.release()
+
+
 class GPUPool(object):
   """
   An arbiter providing system-wide mutually exclusive handles to GPUs.  Mutual
@@ -541,51 +650,207 @@ class GPUPool(object):
     __slots__ = ('instance', '_parent')
     def _on_delete(self):
       self._parent._release(self.instance)
+    def __str__(self):
+      return 'Proxy:' + str(self.instance)
 
-  def get_free_gpu(self):
-    """Return a handle to a free GPU or None if none available"""
-    with self.lock:
+  ALL_GPUS = -1
+  def get_free_gpus(self, n=1):
+    """Return up to `n` handles to free GPU(s) or [] if none available.
+    Use `n` = -1 to retain *all* GPUs."""
+    with self._slock:
+      if n == self.ALL_GPUS:
+        n = GPUInfo.num_total_gpus()
+      handles = []
       gpus = self._get_gpus()
-      handle = None
-      if gpus:
+      n = min(n, len(gpus))
+      while gpus and len(handles) != n:
         gpu = gpus.pop(0)
-        handle = GPUPool._InfoProxy(gpu)
-        handle._parent = self
+        h = GPUPool._InfoProxy(gpu)
+        h._parent = self
+        handles.append(h)
       self._set_gpus(gpus)
-      return handle
+      return handles
 
-  # Make pickle-able for interop with Spark
-  def __getstate__(self):
-    return {'path': self.lock.path}
-  def __setstate__(self, d):
-    self.lock = fasteners.InterProcessLock(d['path'])
+  def __str__(self):
+    return "GPUPool(path='%s')" % self._slock.path
 
-  def __init__(self, path=''):
-    import tempfile
-    if not path:
-      path = os.path.join(tempfile.gettempdir(), 'au.GPUPool.' + str(id(self)))
-    self.lock = fasteners.InterProcessLock(path)
-    with self.lock:
-      gpus = GPUInfo.get_infos()
-      self._set_gpus(gpus)
+  def __init__(self, path='', name=''):
+    self._slock = SystemLock(name_prefix='au.GPUPool', name=name, abspath=path)
 
   def _set_gpus(self, lst):
-    with open(self.lock.path, 'w') as f:
+    with open(self._slock.path, 'w') as f:
       pickle.dump(lst, f, protocol=pickle.HIGHEST_PROTOCOL)
 
   def _get_gpus(self):
-    with open(self.lock.path, 'r') as f:
-      return pickle.load(f)
+    with open(self._slock.path, 'r') as f:
+      try:
+        return pickle.load(f)
+      except EOFError:
+        # No process has yet initialized state in self._slock.path
+        return GPUInfo.get_infos()
 
   def _release(self, gpu):
-    with self.lock:
+    with self._slock:
       gpus = self._get_gpus()
       gpus.append(gpu)
-      print 'release', gpu
+      log.info("Re-claimed GPU %s, free GPUs: %s" % (
+        gpu, [str(g) for g in gpus]))
       self._set_gpus(gpus)
 
 
-def tf_create_session_config(restrict_gpus=None, extra_opts=None):
+
+def _Worker_run(inst_datum_bytes):
+  import sys
+  import traceback
+
+  # Multiprocesing workers ignore System exceptions :(
+  # https://stackoverflow.com/a/23682499
+  try:
+    log.info("Running in subprocess %s ..." % os.getpid())
+    import cloudpickle
+    inst_datum = cloudpickle.loads(inst_datum_bytes)
+    inst, datum = inst_datum
+    return inst.run(*datum['args'], **datum['kwargs'])
+  
+  except:
+    cls, exc, tb = sys.exc_info()
+    msg = "Unhandled exception in worker %s (%s):\n%s" % (
+                cls.__name__, exc, traceback.format_exc())
+    raise Exception(msg)
+
+class Worker(object):
+  # Default worker requires no GPUs and runs in parent thread
+  N_GPUS = 0
+  CPU_ONLY_OK = False # Only if N_GPUS > 0, can we degrade to CPU-only mode?
+  GPU_POOL = None # E.g. use a pool associated with a specific job
+
+  SYSTEM_EXCLUSIVE = False
+  
+  PROCESS_ISOLATED = False
+  PROCESS_TIMEOUT_SEC = 1e9 # NB: Pi Billion is approx 1 century
+  
+  _SYSTEM_LOCK_PATH = os.path.join(tempfile.gettempdir(), 'au.Worker')
+  _SYSTEM_LOCK = SystemLock(abspath=_SYSTEM_LOCK_PATH)
+
+  # For non-exclusive workers
+  # https://stackoverflow.com/a/45187287
+  class _NullContextManager(object):
+    def __init__(self, x=None):
+        self.x = x
+    def __enter__(self):
+        return self.x
+    def __exit__(self, *args):
+        pass
+
+  @contextmanager
+  def __maybe_lock_gpus(self):
+    self._gpu_ids = []
+
+    if self.N_GPUS == 0:
+    
+      yield  # Don't need to block
+    
+    else:
+      gpu_pool = self.GPU_POOL or GPUPool(name_prefix='au.Worker.GPUPool')
+
+      if self.N_GPUS == GPUPool.ALL_GPUS:
+        self.N_GPUS = GPUInfo.num_total_gpus()
+      
+      handles = []
+      start = time.time()
+      while True:
+        handles.extend(gpu_pool.get_free_gpus(n=self.N_GPUS))
+        if (len(handles) == self.N_GPUS) or self.CPU_ONLY_OK:
+          log.info("Got GPUs %s from %s, waited %s sec" % (
+                      [str(h) for h in handles],
+                      gpu_pool,
+                      time.time() - start))
+          break
+        else:
+          log.info("Waiting for %s GPUs in pool %s, waited for %s sec ..." % (
+            (self.N_GPUS, gpu_pool, time.time() - start)))
+          import random
+          time.sleep(5 + random.random())
+        
+      # Expose to subclass if subclass needs them
+      self._gpu_ids = [h.index for h in handles]
+      print 'self.__gpu_ids', self._gpu_ids, os.getpid()
+      yield
+
+      # `handles` will expire and release GPUs
+
+  def __call__(self, *args, **kwargs):
+    ctx = Worker._NullContextManager()
+    if self.SYSTEM_EXCLUSIVE:
+      ctx = self._SYSTEM_LOCK
+    
+    from contextlib import nested
+    ctx = nested(ctx, self.__maybe_lock_gpus())
+
+    with ctx:
+      log.info("Starting worker %s ..." % self._name)
+      if self.PROCESS_ISOLATED:
+        import cloudpickle
+        import multiprocessing
+        pool = multiprocessing.Pool(
+                    processes=1,
+                    maxtasksperchild=1)
+                      # Prevent process re-use; e.g. we need a Tensorflow
+                      # process to exist for it to ever release GPU memory :(
+        inst_datum_bytes = cloudpickle.dumps(
+          (self, {'args': args, 'kwargs': kwargs}))
+        # We must use async so that parent processs signals get handled
+        # https://stackoverflow.com/a/23682499
+        proxy = pool.map_async(_Worker_run, [inst_datum_bytes])
+        results = proxy.get(timeout=self.PROCESS_TIMEOUT_SEC)
+        result = results[0]
+
+        # Force process to release resources
+        pool.close()
+        pool.terminate()
+      else:
+        result = self.run(*args, **kwargs)
+      log.info("... done with worker %s" % self._name)
+      return result
+
+
+  ## Subclass API
+
+  @property
+  def _name(self):
+    return self.__class__.__name__
+  
+  _gpu_ids = GPUS_UNRESTRICTED
+
+  # @property
+  # def _gpu_ids(self):
+  #   if not hasattr(self, '__gpu_ids'):
+  #     self.__gpu_ids = GPUS_UNRESTRICTED
+  #   return self.__gpu_ids
+
+  def run(self, *args, **kwargs):
+    # Base class worker does nothing
+    return None
+
+class WholeMachineWorker(Worker):
+  N_GPUS = GPUPool.ALL_GPUS
+  GPU_POOL = GPUPool() # Use a distinct pool for this program run
+  SYSTEM_EXCLUSIVE = True
+  PROCESS_ISOLATED = True
+
+class SingleGPUWorker(Worker):
+  N_GPUS = 1
+  GPU_POOL = GPUPool() # Use a distinct pool for this program run
+  SYSTEM_EXCLUSIVE = False
+  PROCESS_ISOLATED = True
+
+class AtMostOneGPUWorker(SingleGPUWorker):
+  CPU_ONLY_OK = True
+
+
+### Tensorflow
+
+def tf_create_session_config(restrict_gpus=GPUS_UNRESTRICTED, extra_opts=None):
   extra_opts = extra_opts or {}
   
   import tensorflow as tf
@@ -602,13 +867,14 @@ def tf_create_session_config(restrict_gpus=None, extra_opts=None):
     setattr(config, k, v)
   return config
 
-def tf_session_config_restrict_gpus(config, restrict_gpus=None):
-  if restrict_gpus is None:
-    config.gpu_options.allow_growth = True
+def tf_session_config_restrict_gpus(config, restrict_gpus=GPUS_UNRESTRICTED):
+  if restrict_gpus is GPUS_UNRESTRICTED:
     config.allow_soft_placement = True
   else:
     config.device_count['GPU'] = len(restrict_gpus)
-    config.gpu_options.visible_device_list = ','.join(str(g) for g in restrict_gpus)
+    config.gpu_options.visible_device_list = (
+      ','.join(str(g) for g in restrict_gpus))
+  config.gpu_options.allow_growth = True
 
 def tf_create_session(config=None):
   config = config or tf_create_session_config()
@@ -768,8 +1034,134 @@ def give_me_frozen_graph(
         graph.as_graph_def(add_shapes=True),
         [op.name for op in ops])
         # variable_names_blacklist=blacklist)
-  g = tf.Graph()
-  with g.as_default():
-    tf.import_graph_def(gdef_frozen, name='')
-  return g
+  return gdef_frozen
   
+def tf_variable_summaries(var, prefix=''):
+  """Create Tensorboard summaries showing basic stats of the
+  variable `var`."""
+  import tensorflow as tf
+
+  if prefix:
+    prefix = prefix + '/'
+  else:
+    prefix = str(var.name)
+    prefix = prefix[:prefix.find('/')] # Exclude slashes in var name
+    prefix = prefix[:prefix.find(':')] # Exclude : too
+    prefix = prefix + '/'
+    print prefix, var.name
+  
+  with tf.name_scope(prefix + 'summaries'):
+    mean = tf.reduce_mean(var)
+    tf.summary.scalar('mean', mean)
+    with tf.name_scope('stddev'):
+      stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+    tf.summary.scalar('stddev', stddev)
+    tf.summary.scalar('max', tf.reduce_max(var))
+    tf.summary.scalar('min', tf.reduce_min(var))
+    tf.summary.histogram('histogram', var)
+
+
+class TFSummaryRow(object):
+  __slots__ = (
+    'path',
+    'split',
+
+    'step',
+    'wall_time',
+    'tag',
+
+    'simple_value',
+    'image',
+    'tensor',
+  )
+
+  def __init__(self):
+    self.path = ''
+    self.split = ''
+    self.step = -1
+    self.wall_time = 0
+    self.tag = ''
+    self.simple_value = float('nan')
+    self.image = None
+    self.tensor = None
+
+  @staticmethod
+  def fill_simple_value(row, summary):
+    if summary.HasField('simple_value'):
+      row.simple_value = summary.simple_value
+  
+  @staticmethod
+  def fill_image(row, summary):
+    if summary.HasField('image'):
+      import imageio
+      row.image = imageio.imread(summary.image.encoded_image_string)
+  
+  @staticmethod
+  def fill_tensor(row, summary):
+    if summary.HasField('tensor'):
+      import tensorflow as tf
+      row.tensor = tf.make_ndarray(summary.tensor)
+  
+  def as_dict(self):
+    return dict((k, getattr(self, k)) for k in self.__slots__)
+  
+  def as_row(self, extra=None):
+    from pyspark.sql import Row
+    from au.spark import NumpyArray
+    d = self.as_dict()
+    d['image'] = NumpyArray(d['image'])
+    d['tensor'] = NumpyArray(d['tensor'])
+    d.update(**(extra or {}))
+    return Row(**d)
+    
+
+class TFSummaryReader(object):
+
+  # Subclass and use this attribute to elide / ignore some summary messages
+  FILLERS = (
+    TFSummaryRow.fill_simple_value,
+    TFSummaryRow.fill_image,
+    TFSummaryRow.fill_tensor,
+  )
+
+  def __init__(self, paths=None, glob_events_from_dir=None):
+    self._paths = paths or []
+    if glob_events_from_dir and os.path.exists(glob_events_from_dir):
+      self._paths.extend(
+        pathlib.Path(glob_events_from_dir).rglob('**/events.out*'))
+
+  def __iter__(self):
+    import tensorflow as tf
+    for path in self._paths:
+      path = str(path)
+      log.info("Reading summaries from path %s ..." % path)
+      
+      split = ''
+      # TF estimators puts eval summaries in the 'eval' subdir
+      eval_str = os.pathsep + 'eval' + os.pathsep
+      if eval_str in path:
+        split = 'eval'
+
+      def iter_events_verbose(path):
+        # When there's an error in the file, e.g. truncated record, Tensorflow
+        # doesn't print the path :(
+        try:
+          for tf_event in tf.train.summary_iterator(path):
+            yield tf_event
+        except Exception as e:
+          raise Exception(("Error reading file %s" % path, e))
+      
+      for tf_event in iter_events_verbose(path):
+        for tf_summary in tf_event.summary.value:
+          row = TFSummaryRow()
+          row.path = path
+          row.split = split
+
+          row.wall_time = tf_event.wall_time
+          row.step = tf_event.step
+          row.tag = tf_summary.tag
+
+          for filler in self.FILLERS:
+            filler(row, tf_summary)
+          
+          yield row

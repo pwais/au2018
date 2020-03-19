@@ -18,6 +18,10 @@ AU_TABLE_CACHE = os.environ.get(
                     'AU_TABLE_CACHE',
                     os.path.join(AU_CACHE, 'tables'))
 
+AU_EXPERIMENTS_DIR = os.environ.get(
+                    'AU_EXPERIMENTS_DIR',
+                    os.path.join(AU_CACHE, 'experiments'))
+
 AU_MODEL_CACHE = os.environ.get(
                     'AU_MODEL_CACHE',
                     os.path.join(AU_CACHE, 'models'))

@@ -35,8 +35,9 @@ import subprocess
 import sys
 
 AU_ROOT = os.environ.get('AU_ROOT', os.path.dirname(os.path.abspath(__file__)))
-DOCKER_IMAGE_VERSION = 'v1.3'
-DOCKER_IMAGE = os.environ.get('AU_DOCKER_IMAGE', 'au2018/env:' + DOCKER_IMAGE_VERSION)
+DOCKER_IMAGE_VERSION = 'v1.4.2'
+DOCKER_IMAGE = os.environ.get(
+  'AU_DOCKER_IMAGE', 'au2018/env:' + DOCKER_IMAGE_VERSION)
 CONTAINER_NAME = os.environ.get('AU_CONTAINER_NAME', 'au')
 
 SPARK_WORKER_IMAGE = os.environ.get(
