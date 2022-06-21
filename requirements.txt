@@ -5,7 +5,7 @@ klepto
 keras==2.2.2
 matplotlib
 opencv-python
-numpy==1.15.2
+numpy==1.22.0
 pandas
 pathlib2
 patool
